@@ -11,7 +11,11 @@
     "clear": "清除",
     "refresh": "刷新",
     "copy": "复制",
-    "copied": "已复制"
+    "copied": "已复制",
+    "proxy_tab": "代理抓包",
+    "gateway_tab": "AI Gateway",
+    "antigravity_tab": "Antigravity",
+    "settings_tab": "设置"
   },
   "titlebar": {
     "start_proxy": "启动代理",
@@ -24,7 +28,8 @@
     "enable_auto_scroll": "启用自动滚动",
     "tail": "实时",
     "clear_records": "清除记录",
-    "toggle_theme": "切换主题"
+    "toggle_theme": "切换主题",
+    "language": "中"
   },
   "bottomdock": {
     "ws_connected": "WS 已连接",
@@ -62,7 +67,15 @@
     "no_models": "无模型",
     "api_endpoints": "API 接口",
     "refresh_models": "刷新模型",
-    "proxy_hint": "设置系统代理为 127.0.0.1:{{port}} 以捕获灵码流量"
+    "proxy_hint": "设置系统代理为 127.0.0.1:{{port}} 以捕获灵码流量",
+    "gateway": "AI Gateway",
+    "gateway_port": "Gateway 端口",
+    "gateway_start": "启动网关",
+    "gateway_stop": "停止网关",
+    "gateway_running": "网关已在端口 {{port}} 运行",
+    "gateway_stopped": "网关已停止",
+    "gateway_logging": "流量记录",
+    "gateway_logging_hint": "开启后将解析并保存 AI 请求报文，可能会消耗额外性能"
   },
   "sse": {
     "no_events": "无 SSE 事件",
@@ -70,5 +83,42 @@
     "complete_tab": "完整响应",
     "no_content": "事件中无文本内容",
     "tool_calls": "工具调用"
+  },
+  "monitor": {
+    "table": {
+      "status": "状态",
+      "method": "方法",
+      "model": "模型",
+      "path": "路径",
+      "usage": "消耗",
+      "duration": "耗时",
+      "time": "时间"
+    },
+    "details": {
+      "title": "请求详情",
+      "time": "请求时间",
+      "duration": "响应耗时",
+      "tokens": "Token 消耗",
+      "model": "请求模型",
+      "request_payload": "请求报文",
+      "response_payload": "响应报文",
+      "payload_empty": "正文为空"
+    },
+    "stats": {
+      "total": "总计",
+      "ok": "成功",
+      "err": "异常"
+    },
+    "logging_status": {
+      "active": "流量记录开启",
+      "paused": "流量记录已关",
+      "btn_on": "开启记录",
+      "btn_off": "停止记录"
+    },
+    "filters": {
+      "placeholder": "搜索模型、路径...",
+      "quick_filters": "快速过滤",
+      "all": "全部"
+    }
   }
 }

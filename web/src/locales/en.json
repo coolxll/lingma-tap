@@ -11,7 +11,10 @@
     "clear": "Clear",
     "refresh": "Refresh",
     "copy": "Copy",
-    "copied": "Copied"
+    "copied": "Copied",
+    "proxy_tab": "Proxy",
+    "gateway_tab": "AI Gateway",
+    "settings_tab": "Settings"
   },
   "titlebar": {
     "start_proxy": "Start Proxy",
@@ -24,7 +27,8 @@
     "enable_auto_scroll": "Enable auto-scroll",
     "tail": "Tail",
     "clear_records": "Clear records",
-    "toggle_theme": "Toggle theme"
+    "toggle_theme": "Toggle theme",
+    "language": "EN"
   },
   "bottomdock": {
     "ws_connected": "WS Connected",
@@ -62,7 +66,15 @@
     "no_models": "No models",
     "api_endpoints": "API Endpoints",
     "refresh_models": "Refresh models",
-    "proxy_hint": "Set system proxy to 127.0.0.1:{{port}} to capture Lingma traffic"
+    "proxy_hint": "Set system proxy to 127.0.0.1:{{port}} to capture Lingma traffic",
+    "gateway": "AI Gateway",
+    "gateway_port": "Gateway Port",
+    "gateway_start": "Start Gateway",
+    "gateway_stop": "Stop Gateway",
+    "gateway_running": "Gateway is running on port {{port}}",
+    "gateway_stopped": "Gateway is stopped",
+    "gateway_logging": "Traffic Logging",
+    "gateway_logging_hint": "Parse and save AI traffic logs to SQLite (may affect performance)"
   },
   "sse": {
     "no_events": "No SSE events",
@@ -70,5 +82,42 @@
     "complete_tab": "Complete",
     "no_content": "No text content in events",
     "tool_calls": "Tool Calls"
+  },
+  "monitor": {
+    "table": {
+      "status": "Status",
+      "method": "Method",
+      "model": "Model",
+      "path": "Path",
+      "usage": "Usage",
+      "duration": "Duration",
+      "time": "Time"
+    },
+    "details": {
+      "title": "Request Details",
+      "time": "Time",
+      "duration": "Duration",
+      "tokens": "Token Usage",
+      "model": "Request Model",
+      "request_payload": "Request Payload",
+      "response_payload": "Response Payload",
+      "payload_empty": "Payload is empty"
+    },
+    "stats": {
+      "total": "Total",
+      "ok": "Success",
+      "err": "Error"
+    },
+    "logging_status": {
+      "active": "Logging Active",
+      "paused": "Logging Paused",
+      "btn_on": "Start Logging",
+      "btn_off": "Stop Logging"
+    },
+    "filters": {
+      "placeholder": "Search model, path...",
+      "quick_filters": "Quick Filters",
+      "all": "All"
+    }
   }
 }

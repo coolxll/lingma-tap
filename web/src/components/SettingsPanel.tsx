@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Copy, Check, Shield, ShieldOff } from 'lucide-react';
+import { RefreshCw, Copy, Check, Shield, ShieldOff, Server, ServerOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 // Wails window type
@@ -24,9 +24,23 @@ interface SettingsPanelProps {
   proxyRunning: boolean;
   proxyPort: number;
   onToggleProxy: () => void;
+  gatewayRunning?: boolean;
+  gatewayPort?: number;
+  onToggleGateway?: () => void;
+  gatewayLoggingEnabled?: boolean;
+  onToggleGatewayLogging?: () => void;
 }
 
-export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: SettingsPanelProps) {
+export function SettingsPanel({ 
+  proxyRunning, 
+  proxyPort, 
+  onToggleProxy,
+  gatewayRunning = false,
+  gatewayPort = 8080,
+  onToggleGateway,
+  gatewayLoggingEnabled = true,
+  onToggleGatewayLogging
+}: SettingsPanelProps) {
   const { t } = useTranslation();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -81,39 +95,107 @@ export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: Settin
     <div className="h-full overflow-y-auto bg-zinc-950 p-6">
       <div className="max-w-2xl space-y-8">
 
-        {/* Proxy Settings */}
+        {/* Network Settings */}
         <section>
-          <h2 className="text-sm font-semibold text-zinc-200 mb-4">{t('common.proxy')}</h2>
-          <div className="bg-zinc-900/50 rounded-lg p-4 border border-zinc-800">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-zinc-400">{t('common.port')}</span>
-                <span className="px-2 py-1 bg-zinc-800 rounded text-sm font-mono text-zinc-200">
-                  {proxyPort}
-                </span>
+          <h2 className="text-sm font-semibold text-zinc-200 mb-4">{t('common.settings_tab')}</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Proxy Settings */}
+            <div className="bg-zinc-900/50 rounded-lg p-4 border border-zinc-800">
+              <div className="flex items-center gap-4 mb-3">
+                <h3 className="text-sm font-medium text-zinc-300">{t('common.proxy')}</h3>
+                <div className="flex items-center gap-2 ml-auto">
+                  <div className={`w-2 h-2 rounded-full ${proxyRunning ? 'bg-green-500' : 'bg-zinc-600'}`} />
+                  <span className="text-xs text-zinc-400">{proxyRunning ? t('common.running') : t('common.stopped')}</span>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${proxyRunning ? 'bg-green-500' : 'bg-zinc-600'}`} />
-                <span className="text-xs text-zinc-400">{proxyRunning ? t('common.running') : t('common.stopped')}</span>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-zinc-400">{t('common.port')}</span>
+                  <span className="px-2 py-1 bg-zinc-800 rounded text-sm font-mono text-zinc-200">
+                    {proxyPort}
+                  </span>
+                </div>
+                <button
+                  onClick={onToggleProxy}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ml-auto ${
+                    proxyRunning
+                      ? 'bg-red-900/50 text-red-400 hover:bg-red-900/70'
+                      : 'bg-green-900/50 text-green-400 hover:bg-green-900/70'
+                  }`}
+                >
+                  {proxyRunning ? (
+                    <><ShieldOff className="w-3.5 h-3.5" /> {t('common.stop')}</>
+                  ) : (
+                    <><Shield className="w-3.5 h-3.5" /> {t('common.start')}</>
+                  )}
+                </button>
               </div>
-              <button
-                onClick={onToggleProxy}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ml-auto ${
-                  proxyRunning
-                    ? 'bg-red-900/50 text-red-400 hover:bg-red-900/70'
-                    : 'bg-green-900/50 text-green-400 hover:bg-green-900/70'
-                }`}
-              >
-                {proxyRunning ? (
-                  <><ShieldOff className="w-3.5 h-3.5" /> {t('common.stop')}</>
-                ) : (
-                  <><Shield className="w-3.5 h-3.5" /> {t('common.start')}</>
-                )}
-              </button>
+              <p className="mt-3 text-[10px] text-zinc-600">
+                {t('settings.proxy_hint', { port: proxyPort })}
+              </p>
             </div>
-            <p className="mt-3 text-[10px] text-zinc-600">
-              {t('settings.proxy_hint', { port: proxyPort })}
-            </p>
+
+            {/* Gateway Settings */}
+            <div className="bg-zinc-900/50 rounded-lg p-4 border border-zinc-800">
+              <div className="flex items-center gap-4 mb-3">
+                <h3 className="text-sm font-medium text-zinc-300">{t('settings.gateway')}</h3>
+                <div className="flex items-center gap-2 ml-auto">
+                  <div className={`w-2 h-2 rounded-full ${gatewayRunning ? 'bg-green-500' : 'bg-zinc-600'}`} />
+                  <span className="text-xs text-zinc-400">{gatewayRunning ? t('common.running') : t('common.stopped')}</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-zinc-400">{t('common.port')}</span>
+                  <span className="px-2 py-1 bg-zinc-800 rounded text-sm font-mono text-zinc-200">
+                    {gatewayPort}
+                  </span>
+                </div>
+                <button
+                  onClick={onToggleGateway}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ml-auto ${
+                    gatewayRunning
+                      ? 'bg-red-900/50 text-red-400 hover:bg-red-900/70'
+                      : 'bg-green-900/50 text-green-400 hover:bg-green-900/70'
+                  }`}
+                >
+                  {gatewayRunning ? (
+                    <><ServerOff className="w-3.5 h-3.5" /> {t('common.stop')}</>
+                  ) : (
+                    <><Server className="w-3.5 h-3.5" /> {t('common.start')}</>
+                  )}
+                </button>
+              </div>
+              <p className="mt-3 text-[10px] text-zinc-600">
+                {gatewayRunning 
+                  ? t('settings.gateway_running', { port: gatewayPort }) 
+                  : t('settings.gateway_stopped')}
+              </p>
+
+              {/* Logging Toggle */}
+              <div className="mt-4 pt-4 border-t border-zinc-800">
+                <div className="flex items-center justify-between">
+                  <div className="pr-4">
+                    <span className="block text-xs font-medium text-zinc-300">{t('settings.gateway_logging')}</span>
+                    <p className="text-[10px] text-zinc-600 mt-1">
+                      {t('settings.gateway_logging_hint')}
+                    </p>
+                  </div>
+                  <button
+                    onClick={onToggleGatewayLogging}
+                    className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${
+                      gatewayLoggingEnabled ? 'bg-blue-600' : 'bg-zinc-700'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${
+                        gatewayLoggingEnabled ? 'translate-x-5.5' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 

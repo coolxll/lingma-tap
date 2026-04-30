@@ -19,8 +19,14 @@ export function OpenExternal(arg1:string):Promise<void>;
 
 export function RecentRecords(arg1:number):Promise<Array<proto.Record>>;
 
+export function SetLogging(arg1:boolean):Promise<void>;
+
+export function StartGateway(arg1:number):Promise<void>;
+
 export function StartProxy(arg1:number):Promise<void>;
 
 export function Stats():Promise<any>;
+
+export function StopGateway():Promise<void>;
 
 export function StopProxy():Promise<void>;

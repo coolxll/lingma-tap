@@ -36,6 +36,7 @@ Thumbs.db
 # Node
 node_modules/
 web/node_modules/
+web/dist
 
 # SQLite databases (runtime data)
 *.db

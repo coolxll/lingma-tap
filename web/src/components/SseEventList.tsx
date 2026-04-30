@@ -10,30 +10,45 @@ interface SseEventListProps {
 
 type ViewMode = 'events' | 'complete';
 
-/** Extract delta.content from SSE events and merge into full text. */
+/** Extract content from SSE events and merge into full text. */
 function mergeSSEContent(events: SSEEvent[]): { text: string; toolCalls: string[] } {
   let text = '';
   const toolCalls: string[] = [];
 
   for (const evt of events) {
-    if (evt.event_type !== 'data' || !evt.body) continue;
-    if (evt.body === '[DONE]') continue;
+    // SSE event_type defaults to 'message' or 'data' if not specified
+    const isDataEvent = !evt.event_type || evt.event_type === 'data' || evt.event_type === 'message';
+    const rawContent = evt.body || evt.data;
+    
+    if (!isDataEvent || !rawContent) continue;
+    if (rawContent === '[DONE]') continue;
 
     try {
-      const parsed = JSON.parse(evt.body);
-      // OpenAI streaming: choices[0].delta.content
-      const delta = parsed?.choices?.[0]?.delta;
-      if (delta?.content) {
+      const parsed = JSON.parse(rawContent);
+      
+      // 1. OpenAI style: choices[0].delta.content
+      // 2. DashScope style: output.choices[0].delta.content
+      const delta = parsed?.choices?.[0]?.delta || parsed?.output?.choices?.[0]?.delta;
+      
+      // Use undefined check because content can be an empty string
+      if (delta?.content !== undefined && delta?.content !== null) {
         text += delta.content;
+      } else if (parsed?.output?.text !== undefined && parsed?.output?.text !== null) {
+        // 3. DashScope older style: output.text (usually contains full text so far)
+        text = parsed.output.text; 
+      } else if (parsed?.content !== undefined && parsed?.content !== null) {
+        // 4. Simple top-level content
+        text += parsed.content;
       }
-      // OpenAI streaming: choices[0].delta.tool_calls
-      if (delta?.tool_calls) {
-        for (const tc of delta.tool_calls) {
+
+      // Tool calls extraction
+      const tool_calls = delta?.tool_calls || parsed?.choices?.[0]?.message?.tool_calls;
+      if (tool_calls) {
+        for (const tc of tool_calls) {
           const fn = tc.function;
           if (fn?.name) {
             toolCalls.push(`${fn.name}(${fn.arguments || ''})`);
           } else if (fn?.arguments) {
-            // Append arguments to last tool call
             if (toolCalls.length > 0) {
               toolCalls[toolCalls.length - 1] += fn.arguments;
             }

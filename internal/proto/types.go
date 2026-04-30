@@ -10,6 +10,7 @@ type Record struct {
 	Session   string `json:"session"`
 	Index     int    `json:"index"`
 	Direction string `json:"direction"` // "C2S" or "S2C"
+	Source    string `json:"source"`    // "proxy" or "gateway"
 
 	// Request
 	Method       string            `json:"method"`

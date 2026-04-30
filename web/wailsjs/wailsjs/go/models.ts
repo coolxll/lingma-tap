@@ -53,6 +53,7 @@ export namespace proto {
 	    session: string;
 	    index: number;
 	    direction: string;
+	    source: string;
 	    method: string;
 	    url: string;
 	    host: string;
@@ -85,6 +86,7 @@ export namespace proto {
 	        this.session = source["session"];
 	        this.index = source["index"];
 	        this.direction = source["direction"];
+	        this.source = source["source"];
 	        this.method = source["method"];
 	        this.url = source["url"];
 	        this.host = source["host"];

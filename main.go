@@ -39,6 +39,7 @@ type App struct {
 	proxy  *proxy.Server
 	apiLn  net.Listener
 	bridgeHandlerField *bridge.BridgeHandler
+	gatewayLogging     bool
 }
 
 func NewApp() *App {
@@ -97,10 +98,15 @@ func (a *App) startup(ctx context.Context) {
 	}
 	go http.Serve(a.apiLn, mux)
 	log.Printf("[app] API server on %s", a.apiLn.Addr())
+	a.gatewayLogging = true
 
-	// Initialize proxy server
 	a.proxy = proxy.NewServer(a.ca, func(rec *proto.Record) {
-		if a.sink != nil {
+		rec.Source = "proxy"
+		a.mu.Lock()
+		logging := a.gatewayLogging
+		a.mu.Unlock()
+
+		if logging && a.sink != nil {
 			a.sink.SaveRecord(rec)
 		}
 		if a.hub != nil {
@@ -141,6 +147,19 @@ func (a *App) StopProxy() {
 	}
 }
 
+// StartGateway starts the AI Gateway.
+func (a *App) StartGateway(port int) error {
+	// TODO: Implement AI Gateway
+	log.Printf("[app] StartGateway called with port %d (not implemented)", port)
+	return nil
+}
+
+// StopGateway stops the AI Gateway.
+func (a *App) StopGateway() {
+	// TODO: Implement AI Gateway
+	log.Printf("[app] StopGateway called (not implemented)")
+}
+
 // GetRecords returns recent records from the database.
 func (a *App) GetRecords(limit int) []proto.Record {
 	if a.db == nil {
@@ -169,10 +188,19 @@ func (a *App) GetCACertPath() string {
 	return a.ca.CertPath()
 }
 
+// SetLogging enables or disables traffic logging to SQLite.
+func (a *App) SetLogging(enabled bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.gatewayLogging = enabled
+}
+
 // GetStatus returns the current status.
 func (a *App) GetStatus() map[string]interface{} {
 	status := map[string]interface{}{
-		"proxy_running": a.proxy != nil,
+		"proxy_running":   a.proxy != nil,
+		"gateway_running": false, // TODO: Update when gateway is implemented
+		"gateway_logging": a.gatewayLogging,
 	}
 	if a.db != nil {
 		status["stats"] = a.db.Stats()

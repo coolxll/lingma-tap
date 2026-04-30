@@ -8,6 +8,7 @@ import { DetailPanel } from '@/components/DetailPanel';
 import { ResizablePanels } from '@/components/ResizablePanels';
 import { BottomDock } from '@/components/BottomDock';
 import { SettingsPanel } from '@/components/SettingsPanel';
+import { GatewayMonitor } from '@/components/GatewayMonitor';
 
 // Wails window type
 interface WailsWindow extends Window {
@@ -16,10 +17,13 @@ interface WailsWindow extends Window {
       App?: {
         StartProxy: (port: number) => Promise<void>;
         StopProxy: () => Promise<void>;
+        StartGateway: (port: number) => Promise<void>;
+        StopGateway: () => Promise<void>;
         GetRecords: (limit: number) => Promise<TrafficRecord[]>;
         ClearRecords: () => Promise<void>;
         GetCACertPath: () => Promise<string>;
         GetStatus: () => Promise<Record<string, unknown>>;
+        SetLogging: (enabled: boolean) => Promise<void>;
         GetModels: () => Promise<ModelInfo[]>;
       };
     };
@@ -35,6 +39,7 @@ interface ModelInfo {
 
 const WS_PORT = 9090;
 const PROXY_PORT = 9528;
+const DEFAULT_GATEWAY_PORT = 8080;
 
 export default function App() {
   const {
@@ -50,15 +55,35 @@ export default function App() {
     toggleLiveTail,
   } = useRecords();
 
-  const [activeTab, setActiveTab] = useState<TabId>('monitor');
+  const [activeTab, setActiveTab] = useState<TabId>('proxy');
   const [connected, setConnected] = useState(false);
   const [proxyRunning, setProxyRunning] = useState(false);
+  const [gatewayRunning, setGatewayRunning] = useState(false);
   const [theme] = useState<'dark' | 'light'>('dark');
   const [stats, setStats] = useState<StorageStats | null>(null);
   const [caCertPath, setCaCertPath] = useState('');
+  const [gatewayLoggingEnabled, setGatewayLoggingEnabled] = useState(true);
   const liveTailRef = useRef(liveTail);
   const selectedRef = useRef(selectedRecord);
   const recordsRef = useRef(records);
+
+  // Computed records for active tab
+  const displayedRecords = useMemo(() => {
+    if (activeTab === 'proxy') {
+      // Proxy captures Lingma traffic (api only, exclude tracking and other)
+      return records.filter(r => 
+        r.endpoint_type === 'chat' || 
+        r.endpoint_type === 'embedding' || 
+        r.endpoint_type === 'finish'
+      );
+    } else if (activeTab === 'gateway') {
+      // Gateway traffic observability
+      // TODO: Filter gateway specific traffic when implemented in backend
+      // For now, it shows nothing or we could show all traffic
+      return records.filter(r => (r as any).source === 'gateway');
+    }
+    return records;
+  }, [records, activeTab]);
 
   useEffect(() => { liveTailRef.current = liveTail; }, [liveTail]);
   useEffect(() => { selectedRef.current = selectedRecord; }, [selectedRecord]);
@@ -70,13 +95,8 @@ export default function App() {
   // Find response record for the selected request
   const responseRecord = useMemo(() => {
     if (!selectedRecord || selectedRecord.direction === 'S2C') return null;
-    const idx = records.indexOf(selectedRecord);
-    if (idx < 0) return null;
-    const next = records[idx + 1];
-    if (next && next.session === selectedRecord.session && next.direction === 'S2C') {
-      return next;
-    }
-    return null;
+    // Don't assume the response is the immediate next record (interleaving possible)
+    return records.find(r => r.session === selectedRecord.session && r.direction === 'S2C') || null;
   }, [selectedRecord, records]);
 
   // Initialize: load existing records
@@ -92,6 +112,9 @@ export default function App() {
     wails.GetStatus().then((s) => {
       const st = s?.stats as StorageStats | undefined;
       if (st) setStats(st);
+      if (s?.proxy_running !== undefined) setProxyRunning(s.proxy_running as boolean);
+      if (s?.gateway_running !== undefined) setGatewayRunning(s.gateway_running as boolean);
+      if (s?.gateway_logging !== undefined) setGatewayLoggingEnabled(s.gateway_logging as boolean);
     });
   }, [wails, updateRecords, setSelectedRecord]);
 
@@ -125,6 +148,9 @@ export default function App() {
       wails?.GetStatus().then((s) => {
         const st = s?.stats as StorageStats | undefined;
         if (st) setStats(st);
+        if (s?.proxy_running !== undefined) setProxyRunning(s.proxy_running as boolean);
+        if (s?.gateway_running !== undefined) setGatewayRunning(s.gateway_running as boolean);
+        if (s?.gateway_logging !== undefined) setGatewayLoggingEnabled(s.gateway_logging as boolean);
       });
     }, 5000);
     return () => clearInterval(interval);
@@ -145,6 +171,29 @@ export default function App() {
       }
     }
   }, [wails, proxyRunning]);
+
+  const handleToggleGateway = useCallback(async () => {
+    if (!wails) return;
+    if (gatewayRunning) {
+      if (wails.StopGateway) await wails.StopGateway();
+      setGatewayRunning(false);
+    } else {
+      try {
+        if (wails.StartGateway) await wails.StartGateway(DEFAULT_GATEWAY_PORT);
+        setGatewayRunning(true);
+      } catch (err) {
+        console.error('Failed to start gateway:', err);
+      }
+    }
+  }, [wails, gatewayRunning]);
+
+  const handleToggleGatewayLogging = useCallback(async () => {
+    const newState = !gatewayLoggingEnabled;
+    setGatewayLoggingEnabled(newState);
+    if (wails?.SetLogging) {
+      await wails.SetLogging(newState);
+    }
+  }, [wails, gatewayLoggingEnabled]);
 
   const handleClear = useCallback(async () => {
     if (wails) {
@@ -170,20 +219,33 @@ export default function App() {
       />
 
       <div className="flex-1 overflow-hidden">
-        {activeTab === 'monitor' ? (
+        {activeTab === 'proxy' ? (
           <ResizablePanels defaultSizes={[35, 65]} minSizes={[250, 300]}>
             <RecordList
-              records={records}
+              records={displayedRecords}
               selectedRecord={selectedRecord}
               onSelectRecord={setSelectedRecord}
             />
             <DetailPanel request={selectedRecord} response={responseRecord} />
           </ResizablePanels>
+        ) : activeTab === 'gateway' ? (
+          <GatewayMonitor
+            records={displayedRecords}
+            allRecords={records}
+            onClear={handleClear}
+            loggingEnabled={gatewayLoggingEnabled}
+            onToggleLogging={handleToggleGatewayLogging}
+          />
         ) : (
           <SettingsPanel
             proxyRunning={proxyRunning}
             proxyPort={PROXY_PORT}
             onToggleProxy={handleToggleProxy}
+            gatewayRunning={gatewayRunning}
+            gatewayPort={DEFAULT_GATEWAY_PORT}
+            onToggleGateway={handleToggleGateway}
+            gatewayLoggingEnabled={gatewayLoggingEnabled}
+            onToggleGatewayLogging={handleToggleGatewayLogging}
           />
         )}
       </div>

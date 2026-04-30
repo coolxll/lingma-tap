@@ -34,12 +34,24 @@ export function RecentRecords(arg1) {
   return window['go']['main']['App']['RecentRecords'](arg1);
 }
 
+export function SetLogging(arg1) {
+  return window['go']['main']['App']['SetLogging'](arg1);
+}
+
+export function StartGateway(arg1) {
+  return window['go']['main']['App']['StartGateway'](arg1);
+}
+
 export function StartProxy(arg1) {
   return window['go']['main']['App']['StartProxy'](arg1);
 }
 
 export function Stats() {
   return window['go']['main']['App']['Stats']();
+}
+
+export function StopGateway() {
+  return window['go']['main']['App']['StopGateway']();
 }
 
 export function StopProxy() {
