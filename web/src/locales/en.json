@@ -86,11 +86,10 @@
   "monitor": {
     "table": {
       "status": "Status",
-      "method": "Method",
       "model": "Model",
-      "path": "Path",
+      "preview": "Preview",
       "usage": "Usage",
-      "duration": "Duration",
+      "latency": "Latency",
       "time": "Time"
     },
     "details": {

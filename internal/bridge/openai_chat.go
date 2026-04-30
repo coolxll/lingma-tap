@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/coolxll/lingma-tap/internal/proto"
 )
 
 // modelCache holds cached model data from the Lingma API.
@@ -160,14 +162,28 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 	reqID := "chatcmpl-" + newUUID()[:24]
 	created := json.Number(fmt.Sprintf("%d", currentTimeUnix()))
 
+	// Initialize Gateway Log
+	gLog := &proto.GatewayLog{
+		Ts:          time.Now().Format(time.RFC3339Nano),
+		Session:     reqID,
+		Model:       modelKey,
+		Method:      r.Method,
+		Path:        r.URL.Path,
+		RequestBody: func() string { b, _ := json.Marshal(body); return string(b) }(),
+	}
+	startTime := time.Now()
+
+	// Initial save (Request started)
+	h.recorder(gLog)
+
 	if req.Stream {
-		h.streamOpenAIChat(r.Context(), w, reqID, created, modelKey, body)
+		h.streamOpenAIChat(r.Context(), w, reqID, created, modelKey, body, gLog, startTime)
 	} else {
-		h.nonStreamOpenAIChat(r.Context(), w, reqID, created, modelKey, body)
+		h.nonStreamOpenAIChat(r.Context(), w, reqID, created, modelKey, body, gLog, startTime)
 	}
 }
 
-func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWriter, reqID string, created json.Number, modelKey string, body map[string]any) {
+func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWriter, reqID string, created json.Number, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -177,6 +193,7 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 	// Track tool call state for proper ID management
 	toolCallIDs := make(map[int]string)
+	var fullContent strings.Builder
 
 	finishSent := false
 
@@ -205,6 +222,10 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 					}
 				}
 				return nil
+			}
+
+			if event.Content != "" {
+				fullContent.WriteString(event.Content)
 			}
 
 			chunk := map[string]any{
@@ -270,6 +291,8 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 			if event.Usage != nil {
 				chunk["usage"] = event.Usage
+				gLog.InputTokens = event.Usage.PromptTokens
+				gLog.OutputTokens = event.Usage.CompletionTokens
 			}
 
 			writeSSE(w, "data: ", chunk)
@@ -297,6 +320,12 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 				flusher.Flush()
 			}
 
+			// Finalize Log
+			gLog.Status = 200
+			gLog.ResponseBody = fullContent.String()
+			gLog.Latency = time.Since(startTime).Milliseconds()
+			h.recorder(gLog)
+
 		case "done":
 			// Already handled in finish
 		}
@@ -305,6 +334,9 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 	if err != nil {
 		// Error after headers sent — log but can't change status
+		gLog.Error = err.Error()
+		gLog.Status = 500
+		h.recorder(gLog)
 		fmt.Fprintf(w, `data: {"error":{"message":"%s","type":"server_error"}}\n\n`, escapeJSON(err.Error()))
 		if canFlush {
 			flusher.Flush()
@@ -312,7 +344,7 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 	}
 }
 
-func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.ResponseWriter, reqID string, created json.Number, modelKey string, body map[string]any) {
+func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.ResponseWriter, reqID string, created json.Number, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
 	var fullContent strings.Builder
 	var finishReason string
 	var usage *Usage
@@ -352,6 +384,9 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 	})
 
 	if err != nil {
+		gLog.Error = err.Error()
+		gLog.Status = 500
+		h.recorder(gLog)
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -372,7 +407,7 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 		"finish_reason": finishReason,
 	}
 
-	if toolCalls != nil && len(toolCalls) > 0 {
+	if len(toolCalls) > 0 {
 		var tcList []map[string]any
 		for idx, tc := range toolCalls {
 			tcList = append(tcList, map[string]any{
@@ -408,6 +443,16 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 			"total_tokens":      0,
 		}
 	}
+
+	// Finalize Log
+	gLog.Status = 200
+	gLog.ResponseBody = fullContent.String()
+	if usage != nil {
+		gLog.InputTokens = usage.PromptTokens
+		gLog.OutputTokens = usage.CompletionTokens
+	}
+	gLog.Latency = time.Since(startTime).Milliseconds()
+	h.recorder(gLog)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

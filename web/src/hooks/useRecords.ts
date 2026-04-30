@@ -16,8 +16,12 @@ export function useRecords() {
 
     setRecords((prev) => {
       const key = recordKey(record);
-      const exists = prev.some((r) => recordKey(r) === key);
-      if (exists) return prev;
+      const index = prev.findIndex((r) => recordKey(r) === key);
+      if (index >= 0) {
+        const next = [...prev];
+        next[index] = record;
+        return next;
+      }
       const next = [...prev, record];
       if (next.length > MAX_RECORDS) {
         return next.slice(next.length - MAX_RECORDS);

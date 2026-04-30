@@ -14,6 +14,10 @@ export function GetCACertPath() {
   return window['go']['main']['App']['GetCACertPath']();
 }
 
+export function GetGatewayLogs(arg1) {
+  return window['go']['main']['App']['GetGatewayLogs'](arg1);
+}
+
 export function GetModels() {
   return window['go']['main']['App']['GetModels']();
 }

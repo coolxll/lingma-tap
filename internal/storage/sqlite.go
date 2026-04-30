@@ -63,6 +63,7 @@ func (d *DB) migrate() error {
 			is_sse     INTEGER DEFAULT 0,
 			sse_events_json TEXT,
 			error      TEXT,
+			source     TEXT DEFAULT 'proxy',
 			raw_json   TEXT NOT NULL,
 			UNIQUE(session, idx)
 		);
@@ -82,6 +83,27 @@ func (d *DB) migrate() error {
 			preview      TEXT
 		);
 		CREATE INDEX IF NOT EXISTS idx_sessions_last_ts ON sessions(last_ts);
+
+		CREATE TABLE IF NOT EXISTS gateway_logs (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts            TEXT NOT NULL,
+			session       TEXT NOT NULL,
+			model         TEXT,
+			method        TEXT,
+			path          TEXT,
+			request_body  TEXT,
+			response_body TEXT,
+			input_tokens  INTEGER DEFAULT 0,
+			output_tokens INTEGER DEFAULT 0,
+			status        INTEGER,
+			latency       INTEGER, -- in milliseconds
+			error         TEXT,
+			is_sse        INTEGER DEFAULT 0,
+			sse_events_json TEXT,
+			UNIQUE(session)
+		);
+		CREATE INDEX IF NOT EXISTS idx_gateway_logs_ts ON gateway_logs(ts);
+		CREATE INDEX IF NOT EXISTS idx_gateway_logs_model ON gateway_logs(model);
 	`)
 	return err
 }
@@ -107,8 +129,8 @@ func (d *DB) SaveRecord(rec *proto.Record) error {
 		INSERT INTO records (ts, session, idx, direction, method, url, host, path, is_encoded, endpoint_type,
 			req_headers_json, req_body, req_body_raw, req_mime, req_size,
 			status, status_text, resp_headers_json, resp_body, resp_mime, resp_size,
-			is_sse, sse_events_json, error, raw_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			is_sse, sse_events_json, error, source, raw_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session, idx) DO UPDATE SET
 			status = excluded.status, status_text = excluded.status_text,
 			resp_headers_json = excluded.resp_headers_json, resp_body = excluded.resp_body,
@@ -120,7 +142,7 @@ func (d *DB) SaveRecord(rec *proto.Record) error {
 		boolToInt(rec.IsEncoded), rec.EndpointType,
 		string(reqHeadersJSON), rec.ReqBody, rec.ReqBodyRaw, rec.ReqMime, rec.ReqSize,
 		rec.Status, rec.StatusText, string(respHeadersJSON), rec.RespBody, rec.RespMime, rec.RespSize,
-		boolToInt(rec.IsSSE), string(sseEventsJSON), rec.Error, string(rawJSON),
+		boolToInt(rec.IsSSE), string(sseEventsJSON), rec.Error, rec.Source, string(rawJSON),
 	)
 	if err != nil {
 		return err
@@ -276,6 +298,60 @@ func (d *DB) Ping() error {
 // MustExec executes a query, ignoring errors. For migrations.
 func (d *DB) MustExec(query string, args ...interface{}) {
 	d.db.Exec(query, args...)
+}
+
+// SaveGatewayLog persists a gateway-specific log entry.
+func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	sseEventsJSON, _ := json.Marshal(log.SSEEvents)
+
+	_, err := d.db.Exec(`
+		INSERT INTO gateway_logs (ts, session, model, method, path, request_body, response_body,
+			input_tokens, output_tokens, status, latency, error, is_sse, sse_events_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(session) DO UPDATE SET
+			response_body = excluded.response_body,
+			output_tokens = excluded.output_tokens,
+			status = excluded.status,
+			latency = excluded.latency,
+			error = excluded.error,
+			is_sse = excluded.is_sse,
+			sse_events_json = excluded.sse_events_json
+	`,
+		log.Ts, log.Session, log.Model, log.Method, log.Path, log.RequestBody, log.ResponseBody,
+		log.InputTokens, log.OutputTokens, log.Status, log.Latency, log.Error,
+		boolToInt(log.IsSSE), string(sseEventsJSON),
+	)
+	return err
+}
+
+// RecentGatewayLogs returns recent logs from the gateway_logs table.
+func (d *DB) RecentGatewayLogs(limit int) ([]proto.GatewayLog, error) {
+	rows, err := d.db.Query(`
+		SELECT id, ts, session, model, method, path, request_body, response_body,
+			input_tokens, output_tokens, status, latency, error, is_sse, sse_events_json
+		FROM gateway_logs ORDER BY id DESC LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []proto.GatewayLog
+	for rows.Next() {
+		var l proto.GatewayLog
+		var sseJSON string
+		if err := rows.Scan(&l.ID, &l.Ts, &l.Session, &l.Model, &l.Method, &l.Path,
+			&l.RequestBody, &l.ResponseBody, &l.InputTokens, &l.OutputTokens,
+			&l.Status, &l.Latency, &l.Error, &l.IsSSE, &sseJSON); err != nil {
+			continue
+		}
+		json.Unmarshal([]byte(sseJSON), &l.SSEEvents)
+		logs = append(logs, l)
+	}
+	return logs, nil
 }
 
 // Now returns the current time in RFC3339Nano format.

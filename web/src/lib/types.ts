@@ -33,6 +33,31 @@ export interface TrafficRecord {
   sse_events?: SSEEvent[];
 
   error?: string;
+  source: string;
+
+  // AI Metadata (for source === 'gateway')
+  model?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  latency?: number;
+}
+
+export interface GatewayLog {
+  id: number;
+  ts: string;
+  session: string;
+  model: string;
+  method: string;
+  path: string;
+  request_body: string;
+  response_body: string;
+  input_tokens: number;
+  output_tokens: number;
+  status: number;
+  latency: number;
+  error?: string;
+  is_sse: boolean;
+  sse_events?: SSEEvent[];
 }
 
 export interface StorageStats {

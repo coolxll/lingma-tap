@@ -87,11 +87,10 @@
   "monitor": {
     "table": {
       "status": "状态",
-      "method": "方法",
       "model": "模型",
-      "path": "路径",
+      "preview": "预览",
       "usage": "消耗",
-      "duration": "耗时",
+      "latency": "延迟",
       "time": "时间"
     },
     "details": {

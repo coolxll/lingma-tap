@@ -37,6 +37,12 @@ type Record struct {
 
 	// Error
 	Error string `json:"error,omitempty"`
+
+	// AI Metadata (for source === 'gateway')
+	Model        string `json:"model,omitempty"`
+	InputTokens  int    `json:"input_tokens,omitempty"`
+	OutputTokens int    `json:"output_tokens,omitempty"`
+	Latency      int64  `json:"latency,omitempty"`
 }
 
 // SSEEvent represents a single Server-Sent Event.
@@ -44,6 +50,25 @@ type SSEEvent struct {
 	EventType string `json:"event_type"`
 	Data      string `json:"data"`
 	Body      string `json:"body,omitempty"`
+}
+
+// GatewayLog represents a structured log entry for AI Gateway traffic.
+type GatewayLog struct {
+	ID           int64      `json:"id"`
+	Ts           string     `json:"ts"`
+	Session      string     `json:"session"`
+	Model        string     `json:"model"`
+	Method       string     `json:"method"`
+	Path         string     `json:"path"`
+	RequestBody  string     `json:"request_body"`
+	ResponseBody string     `json:"response_body"`
+	InputTokens  int        `json:"input_tokens"`
+	OutputTokens int        `json:"output_tokens"`
+	Status       int        `json:"status"`
+	Latency      int64      `json:"latency"` // ms
+	Error        string     `json:"error,omitempty"`
+	IsSSE        bool       `json:"is_sse"`
+	SSEEvents    []SSEEvent `json:"sse_events,omitempty"`
 }
 
 // Session represents an aggregated view of a request/response pair.

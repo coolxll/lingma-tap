@@ -27,8 +27,9 @@ interface SettingsPanelProps {
   gatewayRunning?: boolean;
   gatewayPort?: number;
   onToggleGateway?: () => void;
-  gatewayLoggingEnabled?: boolean;
-  onToggleGatewayLogging?: () => void;
+  onGatewayPortChange?: (port: number) => void;
+  loggingEnabled?: boolean;
+  onToggleLogging?: () => void;
 }
 
 export function SettingsPanel({ 
@@ -38,8 +39,9 @@ export function SettingsPanel({
   gatewayRunning = false,
   gatewayPort = 8080,
   onToggleGateway,
-  gatewayLoggingEnabled = true,
-  onToggleGatewayLogging
+  onGatewayPortChange,
+  loggingEnabled,
+  onToggleLogging
 }: SettingsPanelProps) {
   const { t } = useTranslation();
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -145,11 +147,17 @@ export function SettingsPanel({
                 </div>
               </div>
               <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-zinc-400">{t('common.port')}</span>
-                  <span className="px-2 py-1 bg-zinc-800 rounded text-sm font-mono text-zinc-200">
-                    {gatewayPort}
-                  </span>
+                <div className="flex items-center gap-3">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">{t('common.port')}</span>
+                    <input
+                      type="number"
+                      value={gatewayPort}
+                      onChange={(e) => onGatewayPortChange?.(parseInt(e.target.value) || 0)}
+                      disabled={gatewayRunning}
+                      className="w-20 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700 disabled:opacity-50 transition-all"
+                    />
+                  </div>
                 </div>
                 <button
                   onClick={onToggleGateway}
@@ -175,24 +183,26 @@ export function SettingsPanel({
               {/* Logging Toggle */}
               <div className="mt-4 pt-4 border-t border-zinc-800">
                 <div className="flex items-center justify-between">
-                  <div className="pr-4">
+                  <div className="flex-1">
                     <span className="block text-xs font-medium text-zinc-300">{t('settings.gateway_logging')}</span>
                     <p className="text-[10px] text-zinc-600 mt-1">
                       {t('settings.gateway_logging_hint')}
                     </p>
                   </div>
-                  <button
-                    onClick={onToggleGatewayLogging}
-                    className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${
-                      gatewayLoggingEnabled ? 'bg-blue-600' : 'bg-zinc-700'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${
-                        gatewayLoggingEnabled ? 'translate-x-5.5' : 'translate-x-1'
+                  <div className="flex items-center">
+                    <button
+                      onClick={onToggleLogging}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        loggingEnabled ? 'bg-green-600' : 'bg-zinc-700'
                       }`}
-                    />
-                  </button>
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                          loggingEnabled ? 'translate-x-4' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

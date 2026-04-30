@@ -3,17 +3,37 @@
 :root {
   --app-bg: #09090b;
   --app-surface: #18181b;
+  --app-surface-hover: #27272a;
   --app-border: #27272a;
   --app-text: #f4f4f5;
   --app-text-dim: #a1a1aa;
+  
+  --status-green-bg: rgba(20, 83, 45, 0.4);
+  --status-green-text: #4ade80;
+  --status-amber-bg: rgba(120, 53, 15, 0.4);
+  --status-amber-text: #fbbf24;
+  --status-blue-bg: rgba(30, 58, 138, 0.4);
+  --status-blue-text: #60a5fa;
+  --status-red-bg: rgba(127, 29, 29, 0.4);
+  --status-red-text: #f87171;
 }
 
 :root.light {
   --app-bg: #ffffff;
   --app-surface: #f4f4f5;
+  --app-surface-hover: #e4e4e7;
   --app-border: #e4e4e7;
   --app-text: #09090b;
   --app-text-dim: #71717a;
+
+  --status-green-bg: #dcfce7;
+  --status-green-text: #15803d;
+  --status-amber-bg: #fef3c7;
+  --status-amber-text: #b45309;
+  --status-blue-bg: #dbeafe;
+  --status-blue-text: #1d4ed8;
+  --status-red-bg: #fee2e2;
+  --status-red-text: #b91c1c;
 }
 
 /* Override dark-themed hardcoded classes when in light mode */
@@ -24,8 +44,7 @@
 
 .light .bg-zinc-950 { background-color: var(--app-bg) !important; }
 .light .bg-zinc-900 { background-color: var(--app-surface) !important; }
-.light .bg-zinc-900\/50 { background-color: rgba(244, 244, 245, 0.5) !important; }
-.light .bg-zinc-950\/50 { background-color: rgba(255, 255, 255, 0.5) !important; }
+.light .bg-zinc-800 { background-color: var(--app-surface-hover) !important; }
 
 .light .text-zinc-100 { color: var(--app-text) !important; }
 .light .text-zinc-200 { color: var(--app-text) !important; }
@@ -36,9 +55,33 @@
 .light .border-zinc-900 { border-color: var(--app-border) !important; }
 .light .border-zinc-800 { border-color: var(--app-border) !important; }
 
-/* Adjustments for better visibility in light mode */
-.light .shadow-inner { box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05) !important; }
-.light .bg-zinc-800 { background-color: #e4e4e7 !important; }
-.light .hover\:bg-zinc-800:hover { background-color: #e4e4e7 !important; }
+/* Status Button Overrides for Light Mode */
+.light .bg-green-900\/40 { background-color: var(--status-green-bg) !important; border-color: rgba(21, 128, 61, 0.1) !important; }
+.light .text-green-400 { color: var(--status-green-text) !important; }
+
+.light .bg-amber-900\/40 { background-color: var(--status-amber-bg) !important; border-color: rgba(180, 83, 9, 0.1) !important; }
+.light .text-amber-400 { color: var(--status-amber-text) !important; }
+
+.light .bg-blue-900\/40 { background-color: var(--status-blue-bg) !important; border-color: rgba(29, 78, 216, 0.1) !important; }
+.light .text-blue-400 { color: var(--status-blue-text) !important; }
+
+.light .bg-red-900\/40, .light .bg-red-900\/50 { background-color: var(--status-red-bg) !important; border-color: rgba(185, 28, 28, 0.1) !important; }
+.light .text-red-400 { color: var(--status-red-text) !important; }
+
+/* Table & List Adjustments */
+.light thead.bg-zinc-900\/90 { background-color: rgba(244, 244, 245, 0.9) !important; }
+.light .divide-zinc-900 { border-color: var(--app-border) !important; }
+.light .bg-zinc-950\/50 { background-color: rgba(255, 255, 255, 0.5) !important; }
+.light .bg-zinc-900\/50 { background-color: rgba(244, 244, 245, 0.5) !important; }
+.light .bg-zinc-900\/30 { background-color: rgba(244, 244, 245, 0.3) !important; }
+.light .bg-zinc-900\/20 { background-color: rgba(244, 244, 245, 0.2) !important; }
+
+/* Stats Adjustment */
+.light .text-zinc-500 { color: #71717a !important; }
+.light .text-zinc-200 { color: #18181b !important; }
+
+/* Selection & Focus */
+.light .hover\:bg-zinc-900\/50:hover { background-color: #f4f4f5 !important; }
+.light .bg-blue-950\/40 { background-color: #eff6ff !important; color: #1d4ed8 !important; }
 
 /* Keep some specific dark accents if needed, but mostly invert */

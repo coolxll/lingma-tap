@@ -8,6 +8,7 @@ import (
 
 	"github.com/coolxll/lingma-tap/internal/auth"
 	"github.com/coolxll/lingma-tap/internal/bridge"
+	"github.com/coolxll/lingma-tap/internal/proto"
 )
 
 func main() {
@@ -18,7 +19,7 @@ func main() {
 	fmt.Printf("Auth: user=%s uid=%s mid=%s\n", creds.Name, creds.UID, creds.MachineID)
 
 	session := auth.NewSession(creds)
-	bridgeHandler := bridge.NewBridgeHandler(session)
+	bridgeHandler := bridge.NewBridgeHandler(session, func(log *proto.GatewayLog) {})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", bridgeHandler.HandleModels)

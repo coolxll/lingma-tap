@@ -197,7 +197,7 @@ func mapAnthropicModelToLingma(model string) string {
 	}
 }
 
-func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, maxTokens int) {
+func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, _ int) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -305,7 +305,7 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	}
 }
 
-func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, maxTokens int) {
+func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, _ int) {
 	var fullContent strings.Builder
 	outputTokens := 0
 

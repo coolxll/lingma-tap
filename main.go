@@ -46,6 +46,28 @@ func NewApp() *App {
 	return &App{}
 }
 
+func convertGatewayLogToRecord(l *proto.GatewayLog) *proto.Record {
+	return &proto.Record{
+		ID:           l.ID,
+		Ts:           l.Ts,
+		Session:      l.Session,
+		Source:       "gateway",
+		Method:       l.Method,
+		Path:         l.Path,
+		EndpointType: "chat",
+		ReqBody:      l.RequestBody,
+		RespBody:     l.ResponseBody,
+		Status:       l.Status,
+		IsSSE:        l.IsSSE,
+		SSEEvents:    l.SSEEvents,
+		Error:        l.Error,
+		Model:        l.Model,
+		InputTokens:  l.InputTokens,
+		OutputTokens: l.OutputTokens,
+		Latency:      l.Latency,
+	}
+}
+
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
@@ -82,7 +104,23 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("[app] LocalAuth not available (bridge disabled): %v", err)
 	} else {
 		session := auth.NewSession(creds)
-		a.bridgeHandlerField = bridge.NewBridgeHandler(session)
+		a.bridgeHandlerField = bridge.NewBridgeHandler(session, func(log *proto.GatewayLog) {
+			a.mu.Lock()
+			logging := a.gatewayLogging
+			a.mu.Unlock()
+
+			if logging && a.sink != nil {
+				a.db.SaveGatewayLog(log) // Use direct DB call for now or update sink
+			}
+			if a.hub != nil {
+				// We need to broadcast as a general record for the UI to show it?
+				// Actually, the UI GatewayMonitor expects TrafficRecord.
+				// I'll convert it or update the UI.
+				// For now, I'll convert it to a TrafficRecord for the real-time feed.
+				rec := convertGatewayLogToRecord(log)
+				a.hub.Broadcast(rec)
+			}
+		})
 		bridgeHandler = a.bridgeHandlerField
 		log.Printf("[app] Bridge initialized for user %s", creds.Name)
 	}
@@ -160,7 +198,7 @@ func (a *App) StopGateway() {
 	log.Printf("[app] StopGateway called (not implemented)")
 }
 
-// GetRecords returns recent records from the database.
+// GetRecords returns recent proxy traffic records.
 func (a *App) GetRecords(limit int) []proto.Record {
 	if a.db == nil {
 		return nil
@@ -170,6 +208,18 @@ func (a *App) GetRecords(limit int) []proto.Record {
 	}
 	records, _ := a.db.RecentRecords(limit)
 	return records
+}
+
+// GetGatewayLogs returns recent AI Gateway logs.
+func (a *App) GetGatewayLogs(limit int) []proto.GatewayLog {
+	if a.db == nil {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	logs, _ := a.db.RecentGatewayLogs(limit)
+	return logs
 }
 
 // ClearRecords clears all traffic data.

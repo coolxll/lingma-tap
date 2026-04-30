@@ -39,7 +39,7 @@ interface ModelInfo {
 
 const WS_PORT = 9090;
 const PROXY_PORT = 9528;
-const DEFAULT_GATEWAY_PORT = 8080;
+const DEFAULT_GATEWAY_PORT = 9090;
 
 export default function App() {
   const {
@@ -59,6 +59,7 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [proxyRunning, setProxyRunning] = useState(false);
   const [gatewayRunning, setGatewayRunning] = useState(false);
+  const [gatewayPort, setGatewayPort] = useState(DEFAULT_GATEWAY_PORT);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [stats, setStats] = useState<StorageStats | null>(null);
   const [caCertPath, setCaCertPath] = useState('');
@@ -72,9 +73,11 @@ export default function App() {
     if (activeTab === 'proxy') {
       // Proxy captures Lingma traffic (api only, exclude tracking and other)
       return records.filter(r => 
-        r.endpoint_type === 'chat' || 
-        r.endpoint_type === 'embedding' || 
-        r.endpoint_type === 'finish'
+        r.source === 'proxy' && (
+          r.endpoint_type === 'chat' || 
+          r.endpoint_type === 'embedding' || 
+          r.endpoint_type === 'finish'
+        )
       );
     } else if (activeTab === 'gateway') {
       // Gateway traffic observability
@@ -93,7 +96,7 @@ export default function App() {
   const wails = (window as unknown as WailsWindow).go?.main?.App;
 
   // Find response record for the selected request
-  const responseRecord = useMemo(() => {
+   const responseRecord = useMemo(() => {
     if (!selectedRecord || selectedRecord.direction === 'S2C') return null;
     // Don't assume the response is the immediate next record (interleaving possible)
     return records.find(r => r.session === selectedRecord.session && r.direction === 'S2C') || null;
@@ -190,7 +193,7 @@ export default function App() {
       setGatewayRunning(false);
     } else {
       try {
-        if (wails.StartGateway) await wails.StartGateway(DEFAULT_GATEWAY_PORT);
+        if (wails.StartGateway) await wails.StartGateway(gatewayPort);
         setGatewayRunning(true);
       } catch (err) {
         console.error('Failed to start gateway:', err);
@@ -246,7 +249,6 @@ export default function App() {
         ) : activeTab === 'gateway' ? (
           <GatewayMonitor
             records={displayedRecords}
-            allRecords={records}
             onClear={handleClear}
             loggingEnabled={gatewayLoggingEnabled}
             onToggleLogging={handleToggleGatewayLogging}
@@ -257,10 +259,11 @@ export default function App() {
             proxyPort={PROXY_PORT}
             onToggleProxy={handleToggleProxy}
             gatewayRunning={gatewayRunning}
-            gatewayPort={DEFAULT_GATEWAY_PORT}
+            gatewayPort={gatewayPort}
             onToggleGateway={handleToggleGateway}
-            gatewayLoggingEnabled={gatewayLoggingEnabled}
-            onToggleGatewayLogging={handleToggleGatewayLogging}
+            onGatewayPortChange={setGatewayPort}
+            loggingEnabled={gatewayLoggingEnabled}
+            onToggleLogging={handleToggleGatewayLogging}
           />
         )}
       </div>

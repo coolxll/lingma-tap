@@ -3,19 +3,22 @@ package bridge
 import (
 	"context"
 	"github.com/coolxll/lingma-tap/internal/auth"
+	"github.com/coolxll/lingma-tap/internal/proto"
 )
 
 // BridgeHandler serves OpenAI-compatible and Anthropic-compatible API endpoints
 // that translate requests to the Lingma API.
 type BridgeHandler struct {
-	client  *LingmaClient
-	session *auth.Session
+	client   *LingmaClient
+	session  *auth.Session
+	recorder func(*proto.GatewayLog)
 }
 
-func NewBridgeHandler(session *auth.Session) *BridgeHandler {
+func NewBridgeHandler(session *auth.Session, recorder func(*proto.GatewayLog)) *BridgeHandler {
 	return &BridgeHandler{
-		client:  NewLingmaClient(session),
-		session: session,
+		client:   NewLingmaClient(session),
+		session:  session,
+		recorder: recorder,
 	}
 }
 

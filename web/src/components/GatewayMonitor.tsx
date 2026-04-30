@@ -7,8 +7,7 @@ import { JsonViewer } from './JsonViewer';
 import { SseEventList } from './SseEventList';
 
 interface GatewayMonitorProps {
-  records: TrafficRecord[]; // All records (will filter for C2S)
-  allRecords: TrafficRecord[]; // Full list to find responses
+  records: TrafficRecord[]; // Gateway records
   onClear: () => void;
   loggingEnabled: boolean;
   onToggleLogging: () => void;
@@ -16,7 +15,6 @@ interface GatewayMonitorProps {
 
 export function GatewayMonitor({ 
   records, 
-  allRecords, 
   onClear, 
   loggingEnabled, 
   onToggleLogging 
@@ -29,22 +27,31 @@ export function GatewayMonitor({
   // Filter for C2S records (requests) and apply search filter
   const processedRows = useMemo(() => {
     return records
-      .filter(r => r.direction === 'C2S')
-      .map(req => {
-        const resp = allRecords.find(r => r.session === req.session && r.direction === 'S2C') || null;
-        const details = parseLogDetails(req, resp);
-        return { req, resp, details };
+      .filter(r => r.source === 'gateway')
+      .map(row => {
+        // For gateway source, we often have a single record representing the whole transaction
+        // from our conversion logic in main.go
+        return { 
+          req: row, 
+          resp: row, // In converted gateway logs, the record contains both
+          details: {
+            model: row.model || 'Unknown',
+            inputTokens: row.input_tokens || 0,
+            outputTokens: row.output_tokens || 0,
+            latency: row.latency || 0
+          }
+        };
       })
       .filter(row => {
         if (!filter) return true;
         const search = filter.toLowerCase();
         return (
-          row.req.path.toLowerCase().includes(search) ||
           row.details.model.toLowerCase().includes(search) ||
-          row.req.session.toLowerCase().includes(search)
+          row.req.session.toLowerCase().includes(search) ||
+          (row.req.request_body && row.req.request_body.toLowerCase().includes(search))
         );
       });
-  }, [records, allRecords, filter]);
+  }, [records, filter]);
 
   // Statistics
   const stats = useMemo(() => {
@@ -70,10 +77,10 @@ export function GatewayMonitor({
       <div className="p-3 border-b border-zinc-900 flex items-center gap-4 bg-zinc-950/50">
         <button
           onClick={onToggleLogging}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all border ${
             loggingEnabled
-              ? 'bg-red-900/40 text-red-400 border border-red-800/50 animate-pulse'
-              : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+              ? 'bg-green-900/40 text-green-400 border-green-800/50 animate-pulse'
+              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
           }`}
         >
           <Activity className="w-3.5 h-3.5" />
@@ -91,10 +98,19 @@ export function GatewayMonitor({
           />
         </div>
 
-        <div className="flex items-center gap-4 text-[11px] font-bold uppercase tracking-wider px-2">
-          <span className="text-zinc-500">{t('monitor.stats.total')}: <span className="text-zinc-200">{stats.total}</span></span>
-          <span className="text-zinc-500">{t('monitor.stats.ok')}: <span className="text-green-500">{stats.ok}</span></span>
-          <span className="text-zinc-500">{t('monitor.stats.err')}: <span className="text-red-500">{stats.err}</span></span>
+        <div className="flex items-center gap-4 text-[10px] font-bold uppercase tracking-tight px-2">
+          <div className="flex items-center gap-1">
+            <span className="text-zinc-500">{t('monitor.stats.total')}:</span>
+            <span className="text-zinc-200">{stats.total}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-zinc-500">{t('monitor.stats.ok')}:</span>
+            <span className="text-green-500">{stats.ok}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-zinc-500">{t('monitor.stats.err')}:</span>
+            <span className="text-red-500">{stats.err}</span>
+          </div>
         </div>
 
         <div className="flex-1" />
@@ -112,38 +128,38 @@ export function GatewayMonitor({
       <div className="flex-1 overflow-auto">
         <table className="w-full border-collapse text-left text-xs">
           <thead className="sticky top-0 bg-zinc-900/90 backdrop-blur z-10 border-b border-zinc-800">
-            <tr className="text-zinc-500 font-medium uppercase tracking-wider">
+            <tr className="text-zinc-500 font-medium uppercase tracking-wider text-[10px]">
               <th className="px-4 py-3">{t('monitor.table.status')}</th>
-              <th className="px-4 py-3">{t('monitor.table.method')}</th>
               <th className="px-4 py-3">{t('monitor.table.model')}</th>
-              <th className="px-4 py-3">{t('monitor.table.path')}</th>
+              <th className="px-4 py-3">{t('monitor.table.preview')}</th>
               <th className="px-4 py-3 text-right">{t('monitor.table.usage')}</th>
-              <th className="px-4 py-3 text-right">{t('monitor.table.duration')}</th>
+              <th className="px-4 py-3 text-right">{t('monitor.table.latency')}</th>
               <th className="px-4 py-3 text-right">{t('monitor.table.time')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-900">
             {processedRows.map((row) => (
               <tr 
-                key={row.req.id} 
+                key={row.req.id || row.req.session} 
                 className="hover:bg-zinc-900/50 cursor-pointer transition-colors group"
                 onClick={() => setSelectedRow({ req: row.req, resp: row.resp })}
               >
                 <td className="px-4 py-3">
-                  {row.resp ? (
+                  {row.resp && row.resp.status ? (
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getStatusColor(row.resp.status).replace('text-', 'border-').replace('400', '500/20')} ${getStatusColor(row.resp.status)} bg-zinc-950`}>
                       {row.resp.status}
                     </span>
                   ) : (
-                    <span className="text-zinc-600 italic">...</span>
+                    <span className="text-zinc-500 animate-pulse font-mono text-[10px]">PENDING</span>
                   )}
                 </td>
-                <td className="px-4 py-3 font-mono font-bold text-zinc-400">{row.req.method}</td>
                 <td className="px-4 py-3">
-                  <span className="text-blue-400 font-medium">{row.details.model}</span>
+                  <span className="text-blue-400 font-medium text-xs">{row.details.model}</span>
                 </td>
-                <td className="px-4 py-3 text-zinc-400 truncate max-w-xs" title={row.req.path}>
-                  {row.req.path}
+                <td className="px-4 py-3 text-zinc-400 truncate max-w-md text-xs">
+                  {row.req.request_body ? (
+                    <span className="opacity-70">{JSON.parse(row.req.request_body).messages?.slice(-1)[0]?.content || '-'}</span>
+                  ) : '-'}
                 </td>
                 <td className="px-4 py-3 text-right font-mono">
                   {row.details.inputTokens > 0 || row.details.outputTokens > 0 ? (
@@ -153,10 +169,13 @@ export function GatewayMonitor({
                     </div>
                   ) : '-'}
                 </td>
-                <td className="px-4 py-3 text-right text-zinc-500 font-mono">
-                  {row.resp ? `${row.resp.status_text}` : '-'}
+                <td className="px-4 py-3 text-right">
+                   <div className="flex flex-col items-end">
+                      <span className="text-zinc-300 font-mono text-xs">{row.details.latency}ms</span>
+                      {row.details.latency > 5000 && <span className="text-[9px] text-amber-500/70 font-bold">SLOW</span>}
+                   </div>
                 </td>
-                <td className="px-4 py-3 text-right text-zinc-500 font-mono">
+                <td className="px-4 py-3 text-right text-zinc-500 font-mono text-[10px]">
                   {formatTimestamp(row.req.ts)}
                 </td>
               </tr>

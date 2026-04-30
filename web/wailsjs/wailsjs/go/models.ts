@@ -47,6 +47,64 @@ export namespace proto {
 	        this.body = source["body"];
 	    }
 	}
+	export class GatewayLog {
+	    id: number;
+	    ts: string;
+	    session: string;
+	    model: string;
+	    method: string;
+	    path: string;
+	    request_body: string;
+	    response_body: string;
+	    input_tokens: number;
+	    output_tokens: number;
+	    status: number;
+	    latency: number;
+	    error?: string;
+	    is_sse: boolean;
+	    sse_events?: SSEEvent[];
+	
+	    static createFrom(source: any = {}) {
+	        return new GatewayLog(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.ts = source["ts"];
+	        this.session = source["session"];
+	        this.model = source["model"];
+	        this.method = source["method"];
+	        this.path = source["path"];
+	        this.request_body = source["request_body"];
+	        this.response_body = source["response_body"];
+	        this.input_tokens = source["input_tokens"];
+	        this.output_tokens = source["output_tokens"];
+	        this.status = source["status"];
+	        this.latency = source["latency"];
+	        this.error = source["error"];
+	        this.is_sse = source["is_sse"];
+	        this.sse_events = this.convertValues(source["sse_events"], SSEEvent);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Record {
 	    id: number;
 	    ts: string;
@@ -74,6 +132,10 @@ export namespace proto {
 	    is_sse: boolean;
 	    sse_events?: SSEEvent[];
 	    error?: string;
+	    model?: string;
+	    input_tokens?: number;
+	    output_tokens?: number;
+	    latency?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Record(source);
@@ -107,6 +169,10 @@ export namespace proto {
 	        this.is_sse = source["is_sse"];
 	        this.sse_events = this.convertValues(source["sse_events"], SSEEvent);
 	        this.error = source["error"];
+	        this.model = source["model"];
+	        this.input_tokens = source["input_tokens"];
+	        this.output_tokens = source["output_tokens"];
+	        this.latency = source["latency"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
