@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { SSEEvent } from '@/lib/types';
 import { JsonViewer } from './JsonViewer';
+import { useTranslation } from 'react-i18next';
 
 interface SseEventListProps {
   events: SSEEvent[];
@@ -48,13 +49,14 @@ function mergeSSEContent(events: SSEEvent[]): { text: string; toolCalls: string[
 }
 
 export function SseEventList({ events }: SseEventListProps) {
+  const { t } = useTranslation();
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('events');
 
   const merged = useMemo(() => mergeSSEContent(events), [events]);
 
   if (!events || events.length === 0) {
-    return <p className="text-zinc-500 text-xs">No SSE events</p>;
+    return <p className="text-zinc-500 text-xs">{t('sse.no_events')}</p>;
   }
 
   return (
@@ -69,7 +71,7 @@ export function SseEventList({ events }: SseEventListProps) {
           }`}
           onClick={() => setViewMode('events')}
         >
-          Events
+          {t('sse.events_tab')}
         </button>
         <button
           className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
@@ -79,7 +81,7 @@ export function SseEventList({ events }: SseEventListProps) {
           }`}
           onClick={() => setViewMode('complete')}
         >
-          Complete
+          {t('sse.complete_tab')}
         </button>
       </div>
 
@@ -142,11 +144,11 @@ export function SseEventList({ events }: SseEventListProps) {
               {merged.text}
             </pre>
           ) : (
-            <p className="text-zinc-500 text-xs">No text content in events</p>
+            <p className="text-zinc-500 text-xs">{t('sse.no_content')}</p>
           )}
           {merged.toolCalls.length > 0 && (
             <div className="mt-2">
-              <h4 className="text-[10px] font-medium text-zinc-400 mb-1">Tool Calls</h4>
+              <h4 className="text-[10px] font-medium text-zinc-400 mb-1">{t('sse.tool_calls')}</h4>
               {merged.toolCalls.map((tc, i) => (
                 <pre key={i} className="p-2 bg-zinc-900 rounded text-xs font-mono text-amber-300 whitespace-pre-wrap break-all mb-1">
                   {tc}

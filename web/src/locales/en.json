@@ -1,0 +1,74 @@
+{
+  "common": {
+    "monitor": "Monitor",
+    "settings": "Settings",
+    "proxy": "Proxy",
+    "port": "Port",
+    "running": "Running",
+    "stopped": "Stopped",
+    "start": "Start",
+    "stop": "Stop",
+    "clear": "Clear",
+    "refresh": "Refresh",
+    "copy": "Copy",
+    "copied": "Copied"
+  },
+  "titlebar": {
+    "start_proxy": "Start Proxy",
+    "stop_proxy": "Stop Proxy",
+    "proxy_on": "Proxy ON",
+    "proxy_off": "Proxy OFF",
+    "resume": "Resume",
+    "pause": "Pause",
+    "disable_auto_scroll": "Disable auto-scroll",
+    "enable_auto_scroll": "Enable auto-scroll",
+    "tail": "Tail",
+    "clear_records": "Clear records",
+    "toggle_theme": "Toggle theme"
+  },
+  "bottomdock": {
+    "ws_connected": "WS Connected",
+    "ws_disconnected": "WS Disconnected",
+    "records_loaded": "records loaded",
+    "sessions": "sessions",
+    "total_in_db": "total in DB"
+  },
+  "recordlist": {
+    "filter": "Filter...",
+    "no_records": "No records",
+    "no_matches": "No matches",
+    "session": "session",
+    "requests": "requests",
+    "records_count": "records"
+  },
+  "detailpanel": {
+    "select_record": "Select a record to view details",
+    "encoded": "Encoded",
+    "session": "Session",
+    "request_headers": "Request Headers",
+    "request_body": "Request Body",
+    "request_body_decoded": "Request Body (decoded)",
+    "request_body_raw": "Request Body (raw encoded)",
+    "empty_body": "Empty body",
+    "response_headers": "Response Headers",
+    "response_body": "Response Body",
+    "response": "Response",
+    "waiting": "Waiting for response..."
+  },
+  "settings": {
+    "models": "Models",
+    "friendly_name": "Friendly Name",
+    "model_id": "Model ID",
+    "no_models": "No models",
+    "api_endpoints": "API Endpoints",
+    "refresh_models": "Refresh models",
+    "proxy_hint": "Set system proxy to 127.0.0.1:{{port}} to capture Lingma traffic"
+  },
+  "sse": {
+    "no_events": "No SSE events",
+    "events_tab": "Events",
+    "complete_tab": "Complete",
+    "no_content": "No text content in events",
+    "tool_calls": "Tool Calls"
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "common": {
+    "monitor": "监控",
+    "settings": "设置",
+    "proxy": "代理",
+    "port": "端口",
+    "running": "运行中",
+    "stopped": "已停止",
+    "start": "启动",
+    "stop": "停止",
+    "clear": "清除",
+    "refresh": "刷新",
+    "copy": "复制",
+    "copied": "已复制"
+  },
+  "titlebar": {
+    "start_proxy": "启动代理",
+    "stop_proxy": "停止代理",
+    "proxy_on": "代理开启",
+    "proxy_off": "代理关闭",
+    "resume": "恢复",
+    "pause": "暂停",
+    "disable_auto_scroll": "禁用自动滚动",
+    "enable_auto_scroll": "启用自动滚动",
+    "tail": "实时",
+    "clear_records": "清除记录",
+    "toggle_theme": "切换主题"
+  },
+  "bottomdock": {
+    "ws_connected": "WS 已连接",
+    "ws_disconnected": "WS 已断开",
+    "records_loaded": "条记录已加载",
+    "sessions": "个会话",
+    "total_in_db": "数据库中共计"
+  },
+  "recordlist": {
+    "filter": "过滤...",
+    "no_records": "无记录",
+    "no_matches": "无匹配",
+    "session": "会话",
+    "requests": "个请求",
+    "records_count": "条记录"
+  },
+  "detailpanel": {
+    "select_record": "选择记录以查看详情",
+    "encoded": "已加密",
+    "session": "会话",
+    "request_headers": "请求头",
+    "request_body": "请求体",
+    "request_body_decoded": "请求体 (已解密)",
+    "request_body_raw": "请求体 (原始加密)",
+    "empty_body": "空正文",
+    "response_headers": "响应头",
+    "response_body": "响应体",
+    "response": "响应",
+    "waiting": "等待响应..."
+  },
+  "settings": {
+    "models": "模型",
+    "friendly_name": "友好名称",
+    "model_id": "模型 ID",
+    "no_models": "无模型",
+    "api_endpoints": "API 接口",
+    "refresh_models": "刷新模型",
+    "proxy_hint": "设置系统代理为 127.0.0.1:{{port}} 以捕获灵码流量"
+  },
+  "sse": {
+    "no_events": "无 SSE 事件",
+    "events_tab": "事件列表",
+    "complete_tab": "完整响应",
+    "no_content": "事件中无文本内容",
+    "tool_calls": "工具调用"
+  }
+}

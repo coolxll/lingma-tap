@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, Copy, Check, Shield, ShieldOff } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 // Wails window type
 interface WailsWindow extends Window {
@@ -25,18 +26,19 @@ interface SettingsPanelProps {
   onToggleProxy: () => void;
 }
 
-const ENDPOINTS = [
-  { method: 'GET', path: '/v1/models', desc: 'Model list' },
-  { method: 'POST', path: '/v1/chat/completions', desc: 'OpenAI Chat' },
-  { method: 'POST', path: '/v1/responses', desc: 'OpenAI Responses' },
-  { method: 'POST', path: '/v1/messages', desc: 'Anthropic Messages' },
-];
-
 export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: SettingsPanelProps) {
+  const { t } = useTranslation();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState('');
   const [copied, setCopied] = useState<string | null>(null);
+
+  const ENDPOINTS = [
+    { method: 'GET', path: '/v1/models', desc: t('settings.models') },
+    { method: 'POST', path: '/v1/chat/completions', desc: 'OpenAI Chat' },
+    { method: 'POST', path: '/v1/responses', desc: 'OpenAI Responses' },
+    { method: 'POST', path: '/v1/messages', desc: 'Anthropic Messages' },
+  ];
 
   const fetchModels = useCallback(async () => {
     setModelsLoading(true);
@@ -81,18 +83,18 @@ export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: Settin
 
         {/* Proxy Settings */}
         <section>
-          <h2 className="text-sm font-semibold text-zinc-200 mb-4">Proxy</h2>
+          <h2 className="text-sm font-semibold text-zinc-200 mb-4">{t('common.proxy')}</h2>
           <div className="bg-zinc-900/50 rounded-lg p-4 border border-zinc-800">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <span className="text-xs text-zinc-400">Port</span>
+                <span className="text-xs text-zinc-400">{t('common.port')}</span>
                 <span className="px-2 py-1 bg-zinc-800 rounded text-sm font-mono text-zinc-200">
                   {proxyPort}
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <div className={`w-2 h-2 rounded-full ${proxyRunning ? 'bg-green-500' : 'bg-zinc-600'}`} />
-                <span className="text-xs text-zinc-400">{proxyRunning ? 'Running' : 'Stopped'}</span>
+                <span className="text-xs text-zinc-400">{proxyRunning ? t('common.running') : t('common.stopped')}</span>
               </div>
               <button
                 onClick={onToggleProxy}
@@ -103,14 +105,14 @@ export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: Settin
                 }`}
               >
                 {proxyRunning ? (
-                  <><ShieldOff className="w-3.5 h-3.5" /> Stop</>
+                  <><ShieldOff className="w-3.5 h-3.5" /> {t('common.stop')}</>
                 ) : (
-                  <><Shield className="w-3.5 h-3.5" /> Start</>
+                  <><Shield className="w-3.5 h-3.5" /> {t('common.start')}</>
                 )}
               </button>
             </div>
             <p className="mt-3 text-[10px] text-zinc-600">
-              Set system proxy to 127.0.0.1:{proxyPort} to capture Lingma traffic
+              {t('settings.proxy_hint', { port: proxyPort })}
             </p>
           </div>
         </section>
@@ -118,12 +120,12 @@ export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: Settin
         {/* Models */}
         <section>
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-zinc-200">Models</h2>
+            <h2 className="text-sm font-semibold text-zinc-200">{t('settings.models')}</h2>
             <button
               onClick={fetchModels}
               disabled={modelsLoading}
               className="p-1.5 rounded text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors disabled:opacity-50"
-              title="Refresh models"
+              title={t('settings.refresh_models')}
             >
               <RefreshCw className={`w-3.5 h-3.5 ${modelsLoading ? 'animate-spin' : ''}`} />
             </button>
@@ -137,8 +139,8 @@ export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: Settin
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-zinc-800">
-                  <th className="text-left px-4 py-2 text-zinc-400 font-medium">Friendly Name</th>
-                  <th className="text-left px-4 py-2 text-zinc-400 font-medium">Model ID</th>
+                  <th className="text-left px-4 py-2 text-zinc-400 font-medium">{t('settings.friendly_name')}</th>
+                  <th className="text-left px-4 py-2 text-zinc-400 font-medium">{t('settings.model_id')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -150,7 +152,7 @@ export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: Settin
                 ))}
                 {models.length === 0 && !modelsLoading && (
                   <tr>
-                    <td colSpan={2} className="px-4 py-3 text-zinc-600 text-center">No models</td>
+                    <td colSpan={2} className="px-4 py-3 text-zinc-600 text-center">{t('settings.no_models')}</td>
                   </tr>
                 )}
               </tbody>
@@ -160,7 +162,7 @@ export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: Settin
 
         {/* API Endpoints */}
         <section>
-          <h2 className="text-sm font-semibold text-zinc-200 mb-4">API Endpoints</h2>
+          <h2 className="text-sm font-semibold text-zinc-200 mb-4">{t('settings.api_endpoints')}</h2>
           <div className="space-y-2">
             {ENDPOINTS.map((ep) => {
               const url = `http://127.0.0.1:9090${ep.path}`;
@@ -179,7 +181,7 @@ export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: Settin
                   <button
                     onClick={() => copyToClipboard(url)}
                     className="p-1 rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
-                    title="Copy URL"
+                    title={t('common.copy')}
                   >
                     {copied === url ? (
                       <Check className="w-3 h-3 text-green-400" />

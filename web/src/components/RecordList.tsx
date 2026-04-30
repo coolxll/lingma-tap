@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect, memo, useCallback } from 'react';
 import { TrafficRecord, recordKey, formatTimestamp, getEndpointLabel, getStatusColor } from '@/lib/types';
 import { Search, Lock, ChevronRight, ChevronDown } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface RecordListProps {
   records: TrafficRecord[];
@@ -54,6 +55,7 @@ export const RecordList = memo(function RecordList({
   selectedRecord,
   onSelectRecord,
 }: RecordListProps) {
+  const { t } = useTranslation();
   const [localSearch, setLocalSearch] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -114,7 +116,7 @@ export const RecordList = memo(function RecordList({
             type="text"
             value={localSearch}
             onChange={(e) => setLocalSearch(e.target.value)}
-            placeholder="Filter..."
+            placeholder={t('recordlist.filter')}
             className="w-full pl-7 pr-2 py-1 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
           />
         </div>
@@ -124,7 +126,7 @@ export const RecordList = memo(function RecordList({
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         {groups.length === 0 ? (
           <div className="flex items-center justify-center h-full text-zinc-600 text-xs">
-            {records.length === 0 ? 'No records' : 'No matches'}
+            {records.length === 0 ? t('recordlist.no_records') : t('recordlist.no_matches')}
           </div>
         ) : (
           groups.map((group) => {
@@ -150,9 +152,9 @@ export const RecordList = memo(function RecordList({
                       ) : (
                         <ChevronDown className="w-3 h-3 shrink-0" />
                       )}
-                      <span className="text-zinc-600">session</span>
+                      <span className="text-zinc-600">{t('recordlist.session')}</span>
                       <span className="text-zinc-500 font-mono">{group.session.slice(0, 8)}</span>
-                      <span className="text-zinc-600 ml-auto">{group.pairs.length} requests</span>
+                      <span className="text-zinc-600 ml-auto">{group.pairs.length} {t('recordlist.requests')}</span>
                     </div>
                   </button>
                 )}
@@ -236,7 +238,7 @@ export const RecordList = memo(function RecordList({
 
       {/* Count */}
       <div className="px-2 py-1 border-t border-zinc-800 text-[10px] text-zinc-600 shrink-0">
-        {filteredRecords.length} / {records.length} records
+        {filteredRecords.length} / {records.length} {t('recordlist.records_count')}
       </div>
     </div>
   );

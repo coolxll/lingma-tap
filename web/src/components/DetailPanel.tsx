@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { TrafficRecord, formatTimestamp, getEndpointLabel } from '@/lib/types';
 import { JsonViewer } from './JsonViewer';
 import { SseEventList } from './SseEventList';
+import { useTranslation } from 'react-i18next';
 
 interface DetailPanelProps {
   request: TrafficRecord | null;
@@ -9,10 +10,12 @@ interface DetailPanelProps {
 }
 
 export const DetailPanel = memo(function DetailPanel({ request, response }: DetailPanelProps) {
+  const { t } = useTranslation();
+
   if (!request) {
     return (
       <div className="h-full flex items-center justify-center text-zinc-600 text-sm">
-        Select a record to view details
+        {t('detailpanel.select_record')}
       </div>
     );
   }
@@ -35,7 +38,7 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
           {request.is_encoded && (
             <>
               <span className="text-zinc-600">|</span>
-              <span className="text-amber-400">Encoded</span>
+              <span className="text-amber-400">{t('detailpanel.encoded')}</span>
             </>
           )}
           {response && response.status > 0 && (
@@ -47,29 +50,29 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
             </>
           )}
           <span className="text-zinc-600">|</span>
-          <span>Session: {request.session}</span>
+          <span>{t('detailpanel.session')}: {request.session}</span>
         </div>
       </div>
 
       {/* Request Headers */}
       {request.request_headers && Object.keys(request.request_headers).length > 0 && (
-        <Section title="Request Headers">
+        <Section title={t('detailpanel.request_headers')}>
           <HeadersTable headers={request.request_headers} />
         </Section>
       )}
 
       {/* Request Body */}
-      <Section title={`Request Body${request.is_encoded ? ' (decoded)' : ''}`}>
+      <Section title={`${t('detailpanel.request_body')}${request.is_encoded ? ` (${t('detailpanel.request_body_decoded')})` : ''}`}>
         {request.request_body ? (
           <JsonViewer data={request.request_body} maxHeight="500px" />
         ) : (
-          <p className="text-zinc-600 text-xs">Empty body</p>
+          <p className="text-zinc-600 text-xs">{t('detailpanel.empty_body')}</p>
         )}
       </Section>
 
       {/* Raw encoded body (if different from decoded) */}
       {request.is_encoded && request.request_body_raw && request.request_body_raw !== request.request_body && (
-        <Section title="Request Body (raw encoded)">
+        <Section title={t('detailpanel.request_body_raw')}>
           <pre className="p-3 bg-zinc-900 rounded text-xs font-mono text-zinc-400 whitespace-pre-wrap break-all max-h-[200px] overflow-y-auto">
             {request.request_body_raw.slice(0, 2000)}
             {request.request_body_raw.length > 2000 ? '...' : ''}
@@ -82,25 +85,25 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
         <>
           {/* Response Headers */}
           {response.response_headers && Object.keys(response.response_headers).length > 0 && (
-            <Section title="Response Headers">
+            <Section title={t('detailpanel.response_headers')}>
               <HeadersTable headers={response.response_headers} />
             </Section>
           )}
 
           {/* Response Body */}
-          <Section title="Response Body">
+          <Section title={t('detailpanel.response_body')}>
             {response.is_sse && response.sse_events && response.sse_events.length > 0 ? (
               <SseEventList events={response.sse_events} />
             ) : response.response_body ? (
               <JsonViewer data={response.response_body} maxHeight="500px" />
             ) : (
-              <p className="text-zinc-600 text-xs">Empty body</p>
+              <p className="text-zinc-600 text-xs">{t('detailpanel.empty_body')}</p>
             )}
           </Section>
         </>
       ) : (
-        <Section title="Response">
-          <p className="text-zinc-600 text-xs">Waiting for response...</p>
+        <Section title={t('detailpanel.response')}>
+          <p className="text-zinc-600 text-xs">{t('detailpanel.waiting')}</p>
         </Section>
       )}
     </div>

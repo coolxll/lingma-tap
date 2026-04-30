@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Copy, Check } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface JsonViewerProps {
   data: string;
@@ -7,6 +8,7 @@ interface JsonViewerProps {
 }
 
 export function JsonViewer({ data, maxHeight = '400px' }: JsonViewerProps) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   const formatted = useMemo(() => {
@@ -41,7 +43,7 @@ export function JsonViewer({ data, maxHeight = '400px' }: JsonViewerProps) {
       <button
         className="absolute top-2 right-2 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity z-10 hover:bg-zinc-700"
         onClick={handleCopy}
-        title="Copy"
+        title={t('common.copy')}
       >
         {copied ? (
           <Check className="w-3.5 h-3.5 text-green-400" />

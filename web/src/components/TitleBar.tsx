@@ -1,4 +1,5 @@
 import { Shield, ShieldOff, Pause, Play, Trash2, Sun, Moon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 export type TabId = 'monitor' | 'settings';
 
@@ -29,6 +30,8 @@ export function TitleBar({
   onClear,
   onToggleTheme,
 }: TitleBarProps) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex items-center px-3 pt-7 pb-1 gap-1 border-b border-zinc-800 shrink-0 bg-zinc-950">
       {/* Spacer for macOS traffic lights */}
@@ -49,7 +52,7 @@ export function TitleBar({
               : 'text-zinc-500 border-transparent hover:text-zinc-300'
           }`}
         >
-          Monitor
+          {t('common.monitor')}
         </button>
         <button
           onClick={() => onTabChange('settings')}
@@ -59,7 +62,7 @@ export function TitleBar({
               : 'text-zinc-500 border-transparent hover:text-zinc-300'
           }`}
         >
-          Settings
+          {t('common.settings')}
         </button>
       </div>
 
@@ -73,10 +76,10 @@ export function TitleBar({
             ? 'bg-green-900/50 text-green-400 hover:bg-green-900/70'
             : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
         }`}
-        title={proxyRunning ? 'Stop Proxy' : 'Start Proxy'}
+        title={proxyRunning ? t('titlebar.stop_proxy') : t('titlebar.start_proxy')}
       >
         {proxyRunning ? <Shield className="w-3.5 h-3.5" /> : <ShieldOff className="w-3.5 h-3.5" />}
-        {proxyRunning ? 'Proxy ON' : 'Proxy OFF'}
+        {proxyRunning ? t('titlebar.proxy_on') : t('titlebar.proxy_off')}
       </button>
 
       <div className="w-px h-5 bg-zinc-800 mx-1" />
@@ -87,7 +90,7 @@ export function TitleBar({
         className={`p-1.5 rounded transition-colors ${
           isPaused ? 'bg-yellow-900/50 text-yellow-400' : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
         }`}
-        title={isPaused ? 'Resume' : 'Pause'}
+        title={isPaused ? t('titlebar.resume') : t('titlebar.pause')}
       >
         {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
       </button>
@@ -98,16 +101,16 @@ export function TitleBar({
         className={`px-2 py-1 rounded text-xs transition-colors ${
           liveTail ? 'bg-blue-900/50 text-blue-400' : 'text-zinc-500 hover:bg-zinc-800'
         }`}
-        title={liveTail ? 'Disable auto-scroll' : 'Enable auto-scroll'}
+        title={liveTail ? t('titlebar.disable_auto_scroll') : t('titlebar.enable_auto_scroll')}
       >
-        Tail
+        {t('titlebar.tail')}
       </button>
 
       {/* Clear */}
       <button
         onClick={onClear}
         className="p-1.5 rounded text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
-        title="Clear records"
+        title={t('titlebar.clear_records')}
       >
         <Trash2 className="w-3.5 h-3.5" />
       </button>
@@ -118,7 +121,7 @@ export function TitleBar({
       <button
         onClick={onToggleTheme}
         className="p-1.5 rounded text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
-        title="Toggle theme"
+        title={t('titlebar.toggle_theme')}
       >
         {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
       </button>
