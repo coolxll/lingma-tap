@@ -39,7 +39,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
@@ -53,21 +53,16 @@ jobs:
       - name: Build Wails App
         shell: bash
         run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            wails build -platform ${{ matrix.platform }} -clean
-          else
-            # For macOS, we might want to skip code signing if no certificates are provided
-            # but for a basic build, this should work.
-            wails build -platform ${{ matrix.platform }} -clean
-          fi
+          wails build -platform ${{ matrix.platform }} -clean
 
       - name: Package Windows
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           cd build/bin
-          if (Test-Path "Lingma Tap.exe") {
-            Rename-Item "Lingma Tap.exe" "lingma-tap-windows-x64.exe"
+          $exeFile = Get-ChildItem -Filter "*.exe" | Select-Object -First 1
+          if ($exeFile) {
+            Rename-Item $exeFile.Name "lingma-tap-windows-x64.exe"
             Compress-Archive -Path "lingma-tap-windows-x64.exe" -DestinationPath "../../lingma-tap-windows-x64.zip"
           } else {
             Write-Error "Binary not found"
@@ -81,18 +76,20 @@ jobs:
           # 安装 create-dmg 工具
           brew install create-dmg
           cd build/bin
-          if [ -d "Lingma Tap.app" ]; then
+          # 查找生成的 .app 目录
+          APP_BUNDLE=$(ls -d *.app | head -n 1)
+          if [ -n "$APP_BUNDLE" ]; then
             # 创建 dmg
             create-dmg \
               --volname "Lingma Tap" \
               --window-pos 200 120 \
               --window-size 600 400 \
               --icon-size 100 \
-              --icon "Lingma Tap.app" 175 190 \
-              --hide-extension "Lingma Tap.app" \
+              --icon "$APP_BUNDLE" 175 190 \
+              --hide-extension "$APP_BUNDLE" \
               --app-drop-link 425 190 \
               "../../lingma-tap-${{ matrix.name }}.dmg" \
-              "Lingma Tap.app"
+              "$APP_BUNDLE"
           else
             echo "App bundle not found"
             exit 1
