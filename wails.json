@@ -1,0 +1,18 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "lingma-tap",
+  "outputfilename": "Lingma Tap",
+  "frontend:dir": "web",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:install": "npm install",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "http://localhost:5173",
+  "wailsjsdir": "web/wailsjs",
+  "assetdir": "web/dist",
+  "info": {
+    "companyName": "lingma-tap",
+    "productName": "Lingma Tap",
+    "productVersion": "0.1.0"
+  }
+}

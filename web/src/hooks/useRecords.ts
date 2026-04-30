@@ -1,0 +1,63 @@
+import { useState, useCallback, useRef } from 'react';
+import { TrafficRecord, recordKey } from '@/lib/types';
+
+const MAX_RECORDS = 2000;
+
+export function useRecords() {
+  const [records, setRecords] = useState<TrafficRecord[]>([]);
+  const [selectedRecord, setSelectedRecord] = useState<TrafficRecord | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isPaused, setIsPaused] = useState(false);
+  const [liveTail, setLiveTail] = useState(true);
+  const isPausedRef = useRef(false);
+
+  const appendRecord = useCallback((record: TrafficRecord) => {
+    if (isPausedRef.current) return;
+
+    setRecords((prev) => {
+      const key = recordKey(record);
+      const exists = prev.some((r) => recordKey(r) === key);
+      if (exists) return prev;
+      const next = [...prev, record];
+      if (next.length > MAX_RECORDS) {
+        return next.slice(next.length - MAX_RECORDS);
+      }
+      return next;
+    });
+  }, []);
+
+  const updateRecords = useCallback((newRecords: TrafficRecord[]) => {
+    setRecords(newRecords);
+  }, []);
+
+  const clearRecords = useCallback(() => {
+    setRecords([]);
+    setSelectedRecord(null);
+  }, []);
+
+  const togglePause = useCallback(() => {
+    setIsPaused((p) => {
+      isPausedRef.current = !p;
+      return !p;
+    });
+  }, []);
+
+  const toggleLiveTail = useCallback(() => {
+    setLiveTail((p) => !p);
+  }, []);
+
+  return {
+    records,
+    selectedRecord,
+    setSelectedRecord,
+    searchQuery,
+    setSearchQuery,
+    isPaused,
+    liveTail,
+    appendRecord,
+    updateRecords,
+    clearRecords,
+    togglePause,
+    toggleLiveTail,
+  };
+}

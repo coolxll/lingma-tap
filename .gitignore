@@ -1,0 +1,46 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+lingma-tap
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build output
+/dist/
+/build/
+
+# Wails build
+/build/bin/
+
+# Node
+node_modules/
+web/node_modules/
+
+# SQLite databases (runtime data)
+*.db
+*.db-wal
+*.db-shm
+
+# Claude Code
+.claude/

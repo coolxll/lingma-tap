@@ -1,0 +1,239 @@
+package main
+
+import (
+	"context"
+	"embed"
+	"fmt"
+	"io/fs"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
+
+	"github.com/lynn/lingma-tap/internal/api"
+	"github.com/lynn/lingma-tap/internal/auth"
+	"github.com/lynn/lingma-tap/internal/bridge"
+	"github.com/lynn/lingma-tap/internal/ca"
+	"github.com/lynn/lingma-tap/internal/proto"
+	"github.com/lynn/lingma-tap/internal/proxy"
+	"github.com/lynn/lingma-tap/internal/storage"
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+//go:embed all:web/dist
+var webAssets embed.FS
+
+type App struct {
+	ctx    context.Context
+	mu     sync.Mutex
+	ca     *ca.CA
+	db     *storage.DB
+	sink   *storage.AsyncSink
+	hub    *api.Hub
+	proxy  *proxy.Server
+	apiLn  net.Listener
+}
+
+func NewApp() *App {
+	return &App{}
+}
+
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+
+	home, _ := os.UserHomeDir()
+	dataDir := filepath.Join(home, ".lingma-tap")
+	os.MkdirAll(dataDir, 0755)
+
+	// Initialize CA
+	c, err := ca.New(dataDir)
+	if err != nil {
+		log.Printf("[app] CA init error: %v", err)
+		return
+	}
+	a.ca = c
+
+	// Initialize SQLite
+	dbPath := filepath.Join(dataDir, "lingma-tap.db")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		log.Printf("[app] SQLite open error: %v", err)
+		return
+	}
+	a.db = db
+	a.sink = storage.NewAsyncSink(db, 10000)
+
+	// Initialize WebSocket Hub
+	a.hub = api.NewHub()
+	go a.hub.Run()
+
+	// Start API server (WebSocket + REST + Bridge)
+	var bridgeHandler api.BridgeHandler
+	creds, err := auth.LoadCredentials()
+	if err != nil {
+		log.Printf("[app] LocalAuth not available (bridge disabled): %v", err)
+	} else {
+		session := auth.NewSession(creds)
+		bridgeHandler = bridge.NewBridgeHandler(session)
+		log.Printf("[app] Bridge initialized for user %s", creds.Name)
+	}
+
+	handler := api.NewHandler(a.hub, a, bridgeHandler)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	a.apiLn, err = net.Listen("tcp", "127.0.0.1:9090")
+	if err != nil {
+		log.Printf("[app] API listen error: %v", err)
+		return
+	}
+	go http.Serve(a.apiLn, mux)
+	log.Printf("[app] API server on %s", a.apiLn.Addr())
+
+	// Initialize proxy server
+	a.proxy = proxy.NewServer(a.ca, func(rec *proto.Record) {
+		if a.sink != nil {
+			a.sink.SaveRecord(rec)
+		}
+		if a.hub != nil {
+			a.hub.Broadcast(rec)
+		}
+	})
+
+	log.Printf("[app] CA cert: %s", a.ca.CertPath())
+}
+
+func (a *App) shutdown(ctx context.Context) {
+	if a.proxy != nil {
+		a.proxy.Stop()
+	}
+	if a.apiLn != nil {
+		a.apiLn.Close()
+	}
+	if a.sink != nil {
+		a.sink.Close()
+	}
+	if a.db != nil {
+		a.db.Close()
+	}
+}
+
+// StartProxy starts the MITM proxy on the given port.
+func (a *App) StartProxy(port int) error {
+	if a.proxy == nil {
+		return fmt.Errorf("proxy not initialized")
+	}
+	return a.proxy.Start(port)
+}
+
+// StopProxy stops the MITM proxy.
+func (a *App) StopProxy() {
+	if a.proxy != nil {
+		a.proxy.Stop()
+	}
+}
+
+// GetRecords returns recent records from the database.
+func (a *App) GetRecords(limit int) []proto.Record {
+	if a.db == nil {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	records, _ := a.db.RecentRecords(limit)
+	return records
+}
+
+// ClearRecords clears all traffic data.
+func (a *App) ClearRecords() error {
+	if a.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	return a.db.ClearTraffic()
+}
+
+// GetCACertPath returns the CA certificate file path.
+func (a *App) GetCACertPath() string {
+	if a.ca == nil {
+		return ""
+	}
+	return a.ca.CertPath()
+}
+
+// GetStatus returns the current status.
+func (a *App) GetStatus() map[string]interface{} {
+	status := map[string]interface{}{
+		"proxy_running": a.proxy != nil,
+	}
+	if a.db != nil {
+		status["stats"] = a.db.Stats()
+	}
+	if a.hub != nil {
+		status["ws_clients"] = a.hub.ClientCount()
+	}
+	return status
+}
+
+// OpenExternal opens a URL in the default browser.
+func (a *App) OpenExternal(url string) {
+	runtime.BrowserOpenURL(a.ctx, url)
+}
+
+// Implement api.RecordStore interface
+func (a *App) RecentRecords(limit int) ([]proto.Record, error) {
+	if a.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return a.db.RecentRecords(limit)
+}
+
+func (a *App) ClearTraffic() error {
+	if a.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	return a.db.ClearTraffic()
+}
+
+func (a *App) Stats() interface{} {
+	if a.db == nil {
+		return nil
+	}
+	return a.db.Stats()
+}
+
+func main() {
+	assets, err := fs.Sub(webAssets, "web/dist")
+	if err != nil {
+		panic(err)
+	}
+
+	app := NewApp()
+	if err := wails.Run(&options.App{
+		Title:     "Lingma Tap",
+		Width:     1400,
+		Height:    900,
+		MinWidth:  1000,
+		MinHeight: 600,
+		AssetServer: &assetserver.Options{
+			Assets: assets,
+		},
+		Mac: &mac.Options{
+			TitleBar: mac.TitleBarHiddenInset(),
+		},
+		OnStartup:  app.startup,
+		OnShutdown: app.shutdown,
+		Bind: []interface{}{
+			app,
+		},
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
