@@ -1,10 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, Copy, Check, Shield, ShieldOff } from 'lucide-react';
 
+// Wails window type
+interface WailsWindow extends Window {
+  go?: {
+    main?: {
+      App?: {
+        GetModels: () => Promise<any[]>;
+      };
+    };
+  };
+}
+
 interface ModelInfo {
-  id: string;
+  id: string;         // key from Lingma (e.g. "dashscope_qwen3_coder")
   object: string;
-  display_name?: string;
+  display_name?: string;  // friendly name (e.g. "Qwen3-Coder")
   owned_by: string;
 }
 
@@ -13,8 +24,6 @@ interface SettingsPanelProps {
   proxyPort: number;
   onToggleProxy: () => void;
 }
-
-const API_BASE = 'http://localhost:9090';
 
 const ENDPOINTS = [
   { method: 'GET', path: '/v1/models', desc: 'Model list' },
@@ -33,12 +42,20 @@ export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: Settin
     setModelsLoading(true);
     setModelsError('');
     try {
-      const resp = await fetch(`${API_BASE}/v1/models`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      setModels(data.data || []);
+      // Use Wails binding (avoids CORS issues)
+      const w = (window as unknown as WailsWindow).go;
+      const result = await w?.main?.App?.GetModels();
+      if (!result) throw new Error('Bridge not available');
+      // Map Go ModelInfo (key/display_name) to our ModelInfo (id/display_name)
+      const mapped: ModelInfo[] = (result as any[]).map(m => ({
+        id: m.key || m.id,
+        object: m.object || 'model',
+        display_name: m.display_name || m.DisplayName || m.key || m.id,
+        owned_by: m.owned_by || 'lingma',
+      }));
+      setModels(mapped);
     } catch (err) {
-      setModelsError(err instanceof Error ? err.message : 'Failed to fetch');
+      setModelsError(err instanceof Error ? err.message : 'Failed to fetch models');
     } finally {
       setModelsLoading(false);
     }
@@ -120,8 +137,8 @@ export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: Settin
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-zinc-800">
-                  <th className="text-left px-4 py-2 text-zinc-400 font-medium">Name</th>
-                  <th className="text-left px-4 py-2 text-zinc-400 font-medium">ID</th>
+                  <th className="text-left px-4 py-2 text-zinc-400 font-medium">Friendly Name</th>
+                  <th className="text-left px-4 py-2 text-zinc-400 font-medium">Model ID</th>
                 </tr>
               </thead>
               <tbody>
@@ -146,7 +163,7 @@ export function SettingsPanel({ proxyRunning, proxyPort, onToggleProxy }: Settin
           <h2 className="text-sm font-semibold text-zinc-200 mb-4">API Endpoints</h2>
           <div className="space-y-2">
             {ENDPOINTS.map((ep) => {
-              const url = `${API_BASE}${ep.path}`;
+              const url = `http://127.0.0.1:9090${ep.path}`;
               return (
                 <div
                   key={ep.path}

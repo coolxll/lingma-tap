@@ -1,4 +1,4 @@
-module github.com/lynn/lingma-tap
+module github.com/coolxll/lingma-tap
 
 go 1.25.0
 

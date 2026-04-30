@@ -1,3 +1,34 @@
+export namespace bridge {
+	
+	export class ModelInfo {
+	    key: string;
+	    display_name: string;
+	    format: string;
+	    source: string;
+	    order: number;
+	    is_vl: boolean;
+	    is_reasoning: boolean;
+	    max_input_tokens: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.display_name = source["display_name"];
+	        this.format = source["format"];
+	        this.source = source["source"];
+	        this.order = source["order"];
+	        this.is_vl = source["is_vl"];
+	        this.is_reasoning = source["is_reasoning"];
+	        this.max_input_tokens = source["max_input_tokens"];
+	    }
+	}
+
+}
+
 export namespace proto {
 	
 	export class SSEEvent {

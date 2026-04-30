@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lynn/lingma-tap/internal/ca"
-	"github.com/lynn/lingma-tap/internal/proto"
+	"github.com/coolxll/lingma-tap/internal/ca"
+	"github.com/coolxll/lingma-tap/internal/proto"
 )
 
 // OnRecordFunc is called when a traffic record is parsed.

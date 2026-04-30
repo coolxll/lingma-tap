@@ -14,6 +14,10 @@ export function GetCACertPath() {
   return window['go']['main']['App']['GetCACertPath']();
 }
 
+export function GetModels() {
+  return window['go']['main']['App']['GetModels']();
+}
+
 export function GetRecords(arg1) {
   return window['go']['main']['App']['GetRecords'](arg1);
 }

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lynn/lingma-tap/internal/proto"
+	"github.com/coolxll/lingma-tap/internal/proto"
 	_ "modernc.org/sqlite"
 )
 

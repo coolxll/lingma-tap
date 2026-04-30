@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/lynn/lingma-tap/internal/encoding"
+	"github.com/coolxll/lingma-tap/internal/encoding"
 )
 
 func md5Hex(s string) string {

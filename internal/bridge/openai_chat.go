@@ -35,6 +35,25 @@ func (h *BridgeHandler) fetchModelsWithCache(ctx context.Context) ([]ModelInfo, 
 	return models, nil
 }
 
+// modelFriendlyNames maps internal Lingma model keys to user-friendly names.
+var modelFriendlyNames = map[string]string{
+	"dashscope_qmodel":                      "Qwen3.6-Plus",
+	"dashscope_qwen3_coder":                 "Qwen3-Coder",
+	"dashscope_qwen_max_latest":             "Qwen3.6-Max",
+	"dashscope_qwen_plus_20250428_thinking": "Qwen3.6-Plus-Thinking",
+	"kmodel":                                "Kimi-K2.6",
+	"mmodel":                                "MiniMax",
+	"org_auto":                              "Auto",
+}
+
+type modelResponse struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	OwnedBy string `json:"owned_by"`
+	Name    string `json:"name,omitempty"`
+}
+
 // HandleModels handles GET /v1/models and GET /v1/models/{id}
 func (h *BridgeHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -52,16 +71,19 @@ func (h *BridgeHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/v1/models")
 	path = strings.TrimPrefix(path, "/")
 
+	created := int64(1700000000)
+
 	if path != "" {
-		// GET /v1/models/{id}
+		// GET /v1/models/{id} - path is the model key (id field)
 		for _, m := range models {
 			if m.Key == path {
-				resp := map[string]any{
-					"id":            m.Key,
-					"object":        "model",
-					"created":       1700000000,
-					"owned_by":      "lingma",
-					"display_name":  m.DisplayName,
+				fName := friendlyName(m.Key, m.DisplayName)
+				resp := modelResponse{
+					ID:      m.Key,
+					Object:  "model",
+					Created: created,
+					OwnedBy: "lingma",
+					Name:    fName,
 				}
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(resp)
@@ -73,14 +95,15 @@ func (h *BridgeHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// GET /v1/models
-	var data []map[string]any
+	var data []modelResponse
 	for _, m := range models {
-		data = append(data, map[string]any{
-			"id":            m.Key,
-			"object":        "model",
-			"created":       1700000000,
-			"owned_by":      "lingma",
-			"display_name":  m.DisplayName,
+		fName := friendlyName(m.Key, m.DisplayName)
+		data = append(data, modelResponse{
+			ID:      m.Key,
+			Object:  "model",
+			Created: created,
+			OwnedBy: "lingma",
+			Name:    fName,
 		})
 	}
 
@@ -442,4 +465,16 @@ func escapeJSON(s string) string {
 
 func currentTimeUnix() int64 {
 	return time.Now().Unix()
+}
+
+// friendlyName returns a user-friendly display name for a model key.
+// Built-in mapping takes priority, then API display name, then falls back to key.
+func friendlyName(key string, apiDisplayName string) string {
+	if name, ok := modelFriendlyNames[key]; ok {
+		return name
+	}
+	if apiDisplayName != "" {
+		return apiDisplayName
+	}
+	return key
 }

@@ -12,13 +12,13 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/lynn/lingma-tap/internal/api"
-	"github.com/lynn/lingma-tap/internal/auth"
-	"github.com/lynn/lingma-tap/internal/bridge"
-	"github.com/lynn/lingma-tap/internal/ca"
-	"github.com/lynn/lingma-tap/internal/proto"
-	"github.com/lynn/lingma-tap/internal/proxy"
-	"github.com/lynn/lingma-tap/internal/storage"
+	"github.com/coolxll/lingma-tap/internal/api"
+	"github.com/coolxll/lingma-tap/internal/auth"
+	"github.com/coolxll/lingma-tap/internal/bridge"
+	"github.com/coolxll/lingma-tap/internal/ca"
+	"github.com/coolxll/lingma-tap/internal/proto"
+	"github.com/coolxll/lingma-tap/internal/proxy"
+	"github.com/coolxll/lingma-tap/internal/storage"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -38,6 +38,7 @@ type App struct {
 	hub    *api.Hub
 	proxy  *proxy.Server
 	apiLn  net.Listener
+	bridgeHandlerField *bridge.BridgeHandler
 }
 
 func NewApp() *App {
@@ -80,7 +81,8 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("[app] LocalAuth not available (bridge disabled): %v", err)
 	} else {
 		session := auth.NewSession(creds)
-		bridgeHandler = bridge.NewBridgeHandler(session)
+		a.bridgeHandlerField = bridge.NewBridgeHandler(session)
+		bridgeHandler = a.bridgeHandlerField
 		log.Printf("[app] Bridge initialized for user %s", creds.Name)
 	}
 
@@ -179,6 +181,14 @@ func (a *App) GetStatus() map[string]interface{} {
 		status["ws_clients"] = a.hub.ClientCount()
 	}
 	return status
+}
+
+// GetModels returns the model list via Wails binding (avoids CORS issues).
+func (a *App) GetModels() ([]bridge.ModelInfo, error) {
+	if a.bridgeHandlerField == nil {
+		return nil, fmt.Errorf("bridge not initialized")
+	}
+	return a.bridgeHandlerField.GetModels()
 }
 
 // OpenExternal opens a URL in the default browser.

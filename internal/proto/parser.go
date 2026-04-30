@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lynn/lingma-tap/internal/encoding"
+	"github.com/coolxll/lingma-tap/internal/encoding"
 )
 
 // ParseRequest parses an HTTP request into a Record (C2S direction).

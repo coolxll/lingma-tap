@@ -20,9 +20,17 @@ interface WailsWindow extends Window {
         ClearRecords: () => Promise<void>;
         GetCACertPath: () => Promise<string>;
         GetStatus: () => Promise<Record<string, unknown>>;
+        GetModels: () => Promise<ModelInfo[]>;
       };
     };
   };
+}
+
+interface ModelInfo {
+  key: string;
+  display_name?: string;
+  object: string;
+  owned_by: string;
 }
 
 const WS_PORT = 9090;

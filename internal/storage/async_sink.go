@@ -5,7 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/lynn/lingma-tap/internal/proto"
+	"github.com/coolxll/lingma-tap/internal/proto"
 )
 
 const defaultQueueCapacity = 10000

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lynn/lingma-tap/internal/auth"
-	"github.com/lynn/lingma-tap/internal/encoding"
+	"github.com/coolxll/lingma-tap/internal/auth"
+	"github.com/coolxll/lingma-tap/internal/encoding"
 )
 
 const lingmaChatURL = "https://lingma-api.tongyi.aliyun.com/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"

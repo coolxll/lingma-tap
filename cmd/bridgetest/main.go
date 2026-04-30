@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/lynn/lingma-tap/internal/auth"
-	"github.com/lynn/lingma-tap/internal/bridge"
+	"github.com/coolxll/lingma-tap/internal/auth"
+	"github.com/coolxll/lingma-tap/internal/bridge"
 )
 
 func main() {

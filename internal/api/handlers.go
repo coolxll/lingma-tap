@@ -6,7 +6,8 @@ import (
 	"strconv"
 
 	"github.com/gorilla/websocket"
-	"github.com/lynn/lingma-tap/internal/proto"
+	"github.com/coolxll/lingma-tap/internal/bridge"
+	"github.com/coolxll/lingma-tap/internal/proto"
 )
 
 type RecordStore interface {
@@ -26,6 +27,7 @@ type BridgeHandler interface {
 	HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 	HandleOpenAIResponses(w http.ResponseWriter, r *http.Request)
 	HandleAnthropicMessages(w http.ResponseWriter, r *http.Request)
+	GetModels() ([]bridge.ModelInfo, error)
 }
 
 func NewHandler(hub *Hub, store RecordStore, bridge BridgeHandler) *Handler {
@@ -45,11 +47,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Bridge endpoints (OpenAI / Anthropic compatible)
 	if h.bridge != nil {
-		mux.HandleFunc("/v1/models", h.bridge.HandleModels)
-		mux.HandleFunc("/v1/models/", h.bridge.HandleModels)
-		mux.HandleFunc("/v1/chat/completions", h.bridge.HandleOpenAIChat)
-		mux.HandleFunc("/v1/responses", h.bridge.HandleOpenAIResponses)
-		mux.HandleFunc("/v1/messages", h.bridge.HandleAnthropicMessages)
+		mux.HandleFunc("/v1/models", corsMiddleware(h.bridge.HandleModels))
+		mux.HandleFunc("/v1/models/", corsMiddleware(h.bridge.HandleModels))
+		mux.HandleFunc("/v1/chat/completions", corsMiddleware(h.bridge.HandleOpenAIChat))
+		mux.HandleFunc("/v1/responses", corsMiddleware(h.bridge.HandleOpenAIResponses))
+		mux.HandleFunc("/v1/messages", corsMiddleware(h.bridge.HandleAnthropicMessages))
 	}
 }
 
@@ -107,4 +109,17 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, x-api-key, anthropic-version")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next(w, r)
+	}
 }

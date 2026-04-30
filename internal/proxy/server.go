@@ -7,8 +7,8 @@ import (
 	"net"
 	"strings"
 
-	"github.com/lynn/lingma-tap/internal/ca"
-	"github.com/lynn/lingma-tap/internal/mitm"
+	"github.com/coolxll/lingma-tap/internal/ca"
+	"github.com/coolxll/lingma-tap/internal/mitm"
 )
 
 // Server is an HTTP CONNECT proxy with MITM interception.
