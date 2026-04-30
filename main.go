@@ -204,7 +204,7 @@ func (a *App) GetRecords(limit int) []proto.Record {
 		return nil
 	}
 	if limit <= 0 {
-		limit = 100
+		limit = 500
 	}
 	records, _ := a.db.RecentRecords(limit)
 	return records
@@ -216,7 +216,7 @@ func (a *App) GetGatewayLogs(limit int) []proto.GatewayLog {
 		return nil
 	}
 	if limit <= 0 {
-		limit = 100
+		limit = 500
 	}
 	logs, _ := a.db.RecentGatewayLogs(limit)
 	return logs

@@ -85,11 +85,25 @@
     "tool_calls": "工具调用"
   },
   "monitor": {
+    "logging_status": {
+      "active": "记录中",
+      "paused": "已暂停",
+      "btn_on": "开启记录",
+      "btn_off": "停止记录"
+    },
+    "search_placeholder": "搜索模型、会话或内容...",
+    "stats": {
+      "tokens": "Tokens",
+      "recent": "近期",
+      "total": "总计",
+      "ok": "成功",
+      "err": "异常"
+    },
     "table": {
       "status": "状态",
       "model": "模型",
       "preview": "预览",
-      "usage": "消耗",
+      "tokens": "Token 消耗",
       "latency": "延迟",
       "time": "时间"
     },
@@ -102,17 +116,6 @@
       "request_payload": "请求报文",
       "response_payload": "响应报文",
       "payload_empty": "正文为空"
-    },
-    "stats": {
-      "total": "总计",
-      "ok": "成功",
-      "err": "异常"
-    },
-    "logging_status": {
-      "active": "流量记录开启",
-      "paused": "流量记录已关",
-      "btn_on": "开启记录",
-      "btn_off": "停止记录"
     },
     "filters": {
       "placeholder": "搜索模型、路径...",

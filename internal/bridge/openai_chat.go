@@ -281,6 +281,7 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 					"delta":         map[string]any{},
 					"finish_reason": event.FinishReason,
 				}}
+				gLog.FinishReason = event.FinishReason
 			} else {
 				chunk["choices"] = []map[string]any{{
 					"index":         0,
@@ -324,6 +325,9 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 			gLog.Status = 200
 			gLog.ResponseBody = fullContent.String()
 			gLog.Latency = time.Since(startTime).Milliseconds()
+			if gLog.FinishReason == "" {
+				gLog.FinishReason = "stop"
+			}
 			h.recorder(gLog)
 
 		case "done":
@@ -444,18 +448,21 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 		}
 	}
 
+	respBytes, _ := json.Marshal(resp)
+
 	// Finalize Log
 	gLog.Status = 200
-	gLog.ResponseBody = fullContent.String()
+	gLog.ResponseBody = string(respBytes)
 	if usage != nil {
 		gLog.InputTokens = usage.PromptTokens
 		gLog.OutputTokens = usage.CompletionTokens
 	}
 	gLog.Latency = time.Since(startTime).Milliseconds()
+	gLog.FinishReason = finishReason
 	h.recorder(gLog)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	w.Write(respBytes)
 }
 
 type toolCallState struct {

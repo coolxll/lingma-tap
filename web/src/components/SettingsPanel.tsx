@@ -24,6 +24,7 @@ interface SettingsPanelProps {
   proxyRunning: boolean;
   proxyPort: number;
   onToggleProxy: () => void;
+  onProxyPortChange?: (port: number) => void;
   gatewayRunning?: boolean;
   gatewayPort?: number;
   onToggleGateway?: () => void;
@@ -36,6 +37,7 @@ export function SettingsPanel({
   proxyRunning, 
   proxyPort, 
   onToggleProxy,
+  onProxyPortChange,
   gatewayRunning = false,
   gatewayPort = 8080,
   onToggleGateway,
@@ -99,111 +101,114 @@ export function SettingsPanel({
 
         {/* Network Settings */}
         <section>
-          <h2 className="text-sm font-semibold text-zinc-200 mb-4">{t('common.settings_tab')}</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <h2 className="text-sm font-semibold text-zinc-200 mb-4 uppercase tracking-widest opacity-60">{t('common.settings_tab')}</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            
             {/* Proxy Settings */}
-            <div className="bg-zinc-900/50 rounded-lg p-4 border border-zinc-800">
-              <div className="flex items-center gap-4 mb-3">
-                <h3 className="text-sm font-medium text-zinc-300">{t('common.proxy')}</h3>
-                <div className="flex items-center gap-2 ml-auto">
-                  <div className={`w-2 h-2 rounded-full ${proxyRunning ? 'bg-green-500' : 'bg-zinc-600'}`} />
-                  <span className="text-xs text-zinc-400">{proxyRunning ? t('common.running') : t('common.stopped')}</span>
+            <div className="bg-zinc-900/30 rounded-2xl p-5 border border-zinc-800/50 flex flex-col justify-between min-h-[160px]">
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-blue-400" />
+                    {t('common.proxy')}
+                  </h3>
+                  <div className="flex items-center gap-2 px-2 py-0.5 rounded-full bg-zinc-950/50 border border-zinc-800/50">
+                    <div className={`w-1.5 h-1.5 rounded-full ${proxyRunning ? 'bg-green-500 animate-pulse' : 'bg-zinc-600'}`} />
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase">{proxyRunning ? t('common.running') : t('common.stopped')}</span>
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-4">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-tighter">{t('common.port')}</span>
+                    <input
+                      type="number"
+                      value={proxyPort}
+                      onChange={(e) => onProxyPortChange?.(parseInt(e.target.value) || 0)}
+                      disabled={proxyRunning}
+                      className="w-20 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-sm font-mono text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500/50 disabled:opacity-50 transition-all"
+                    />
+                  </div>
+                  <button
+                    onClick={onToggleProxy}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ml-auto ${
+                      proxyRunning
+                        ? 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20'
+                        : 'bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20'
+                    }`}
+                  >
+                    {proxyRunning ? (
+                      <><ShieldOff className="w-3.5 h-3.5" /> {t('common.stop')}</>
+                    ) : (
+                      <><Shield className="w-3.5 h-3.5" /> {t('common.start')}</>
+                    )}
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-zinc-400">{t('common.port')}</span>
-                  <span className="px-2 py-1 bg-zinc-800 rounded text-sm font-mono text-zinc-200">
-                    {proxyPort}
-                  </span>
-                </div>
-                <button
-                  onClick={onToggleProxy}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ml-auto ${
-                    proxyRunning
-                      ? 'bg-red-900/50 text-red-400 hover:bg-red-900/70'
-                      : 'bg-green-900/50 text-green-400 hover:bg-green-900/70'
-                  }`}
-                >
-                  {proxyRunning ? (
-                    <><ShieldOff className="w-3.5 h-3.5" /> {t('common.stop')}</>
-                  ) : (
-                    <><Shield className="w-3.5 h-3.5" /> {t('common.start')}</>
-                  )}
-                </button>
-              </div>
-              <p className="mt-3 text-[10px] text-zinc-600">
+              <p className="mt-4 text-[10px] text-zinc-500 leading-relaxed italic">
                 {t('settings.proxy_hint', { port: proxyPort })}
               </p>
             </div>
 
             {/* Gateway Settings */}
-            <div className="bg-zinc-900/50 rounded-lg p-4 border border-zinc-800">
-              <div className="flex items-center gap-4 mb-3">
-                <h3 className="text-sm font-medium text-zinc-300">{t('settings.gateway')}</h3>
-                <div className="flex items-center gap-2 ml-auto">
-                  <div className={`w-2 h-2 rounded-full ${gatewayRunning ? 'bg-green-500' : 'bg-zinc-600'}`} />
-                  <span className="text-xs text-zinc-400">{gatewayRunning ? t('common.running') : t('common.stopped')}</span>
+            <div className="bg-zinc-900/30 rounded-2xl p-5 border border-zinc-800/50 flex flex-col justify-between min-h-[160px]">
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                    <Server className="w-4 h-4 text-purple-400" />
+                    {t('settings.gateway')}
+                  </h3>
+                  <div className="flex items-center gap-2 px-2 py-0.5 rounded-full bg-zinc-950/50 border border-zinc-800/50">
+                    <div className={`w-1.5 h-1.5 rounded-full ${gatewayRunning ? 'bg-green-500 animate-pulse' : 'bg-zinc-600'}`} />
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase">{gatewayRunning ? t('common.running') : t('common.stopped')}</span>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-3">
+
+                <div className="flex items-center gap-4">
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">{t('common.port')}</span>
+                    <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-tighter">{t('common.port')}</span>
                     <input
                       type="number"
                       value={gatewayPort}
                       onChange={(e) => onGatewayPortChange?.(parseInt(e.target.value) || 0)}
                       disabled={gatewayRunning}
-                      className="w-20 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700 disabled:opacity-50 transition-all"
+                      className="w-20 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-sm font-mono text-zinc-200 focus:outline-none focus:ring-1 focus:ring-purple-500/50 disabled:opacity-50 transition-all"
                     />
                   </div>
+                  <button
+                    onClick={onToggleGateway}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ml-auto ${
+                      gatewayRunning
+                        ? 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20'
+                        : 'bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20'
+                    }`}
+                  >
+                    {gatewayRunning ? (
+                      <><ServerOff className="w-3.5 h-3.5" /> {t('common.stop')}</>
+                    ) : (
+                      <><Server className="w-3.5 h-3.5" /> {t('common.start')}</>
+                    )}
+                  </button>
+                </div>
+              </div>
+              
+              <div className="mt-4 flex items-center justify-between pt-3 border-t border-zinc-800/50">
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold text-zinc-400 uppercase">{t('settings.gateway_logging')}</span>
+                  <span className="text-[9px] text-zinc-600 truncate max-w-[150px]">{t('settings.gateway_logging_hint')}</span>
                 </div>
                 <button
-                  onClick={onToggleGateway}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ml-auto ${
-                    gatewayRunning
-                      ? 'bg-red-900/50 text-red-400 hover:bg-red-900/70'
-                      : 'bg-green-900/50 text-green-400 hover:bg-green-900/70'
+                  onClick={onToggleLogging}
+                  className={`relative inline-flex h-4 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    loggingEnabled ? 'bg-green-500/80' : 'bg-zinc-700'
                   }`}
                 >
-                  {gatewayRunning ? (
-                    <><ServerOff className="w-3.5 h-3.5" /> {t('common.stop')}</>
-                  ) : (
-                    <><Server className="w-3.5 h-3.5" /> {t('common.start')}</>
-                  )}
+                  <span
+                    className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      loggingEnabled ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
                 </button>
-              </div>
-              <p className="mt-3 text-[10px] text-zinc-600">
-                {gatewayRunning 
-                  ? t('settings.gateway_running', { port: gatewayPort }) 
-                  : t('settings.gateway_stopped')}
-              </p>
-
-              {/* Logging Toggle */}
-              <div className="mt-4 pt-4 border-t border-zinc-800">
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <span className="block text-xs font-medium text-zinc-300">{t('settings.gateway_logging')}</span>
-                    <p className="text-[10px] text-zinc-600 mt-1">
-                      {t('settings.gateway_logging_hint')}
-                    </p>
-                  </div>
-                  <div className="flex items-center">
-                    <button
-                      onClick={onToggleLogging}
-                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                        loggingEnabled ? 'bg-green-600' : 'bg-zinc-700'
-                      }`}
-                    >
-                      <span
-                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                          loggingEnabled ? 'translate-x-4' : 'translate-x-0'
-                        }`}
-                      />
-                    </button>
-                  </div>
-                </div>
               </div>
             </div>
           </div>

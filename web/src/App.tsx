@@ -58,6 +58,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('proxy');
   const [connected, setConnected] = useState(false);
   const [proxyRunning, setProxyRunning] = useState(false);
+  const [proxyPort, setProxyPort] = useState(PROXY_PORT);
   const [gatewayRunning, setGatewayRunning] = useState(false);
   const [gatewayPort, setGatewayPort] = useState(DEFAULT_GATEWAY_PORT);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -178,13 +179,13 @@ export default function App() {
       setProxyRunning(false);
     } else {
       try {
-        await wails.StartProxy(PROXY_PORT);
+        await wails.StartProxy(proxyPort);
         setProxyRunning(true);
       } catch (err) {
         console.error('Failed to start proxy:', err);
       }
     }
-  }, [wails, proxyRunning]);
+  }, [wails, proxyRunning, proxyPort]);
 
   const handleToggleGateway = useCallback(async () => {
     if (!wails) return;
@@ -254,10 +255,11 @@ export default function App() {
             onToggleLogging={handleToggleGatewayLogging}
           />
         ) : (
-          <SettingsPanel
+          <SettingsPanel 
             proxyRunning={proxyRunning}
-            proxyPort={PROXY_PORT}
+            proxyPort={proxyPort}
             onToggleProxy={handleToggleProxy}
+            onProxyPortChange={setProxyPort}
             gatewayRunning={gatewayRunning}
             gatewayPort={gatewayPort}
             onToggleGateway={handleToggleGateway}

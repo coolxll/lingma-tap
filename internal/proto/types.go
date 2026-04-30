@@ -43,6 +43,7 @@ type Record struct {
 	InputTokens  int    `json:"input_tokens,omitempty"`
 	OutputTokens int    `json:"output_tokens,omitempty"`
 	Latency      int64  `json:"latency,omitempty"`
+	FinishReason string `json:"finish_reason,omitempty"`
 }
 
 // SSEEvent represents a single Server-Sent Event.
@@ -69,6 +70,7 @@ type GatewayLog struct {
 	Error        string     `json:"error,omitempty"`
 	IsSSE        bool       `json:"is_sse"`
 	SSEEvents    []SSEEvent `json:"sse_events,omitempty"`
+	FinishReason string     `json:"finish_reason,omitempty"`
 }
 
 // Session represents an aggregated view of a request/response pair.

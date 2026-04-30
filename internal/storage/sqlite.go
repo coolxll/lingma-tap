@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"encoding/json"
+	"log"
 	"sync"
 	"time"
 
@@ -36,8 +37,23 @@ func (d *DB) Close() error {
 }
 
 func (d *DB) migrate() error {
+	// 1. Migrate legacy 'records' table if it exists
+	var count int
+	_ = d.db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='records'").Scan(&count)
+	if count > 0 {
+		log.Println("[sqlite] Migrating 'records' table to 'proxy_records'...")
+		_, err := d.db.Exec("ALTER TABLE records RENAME TO proxy_records")
+		if err != nil {
+			log.Printf("[sqlite] Migration failed: %v", err)
+		} else {
+			// Also rename indexes for clarity
+			d.db.Exec("DROP INDEX IF EXISTS idx_records_session")
+			d.db.Exec("DROP INDEX IF EXISTS idx_records_ts")
+		}
+	}
+
 	_, err := d.db.Exec(`
-		CREATE TABLE IF NOT EXISTS records (
+		CREATE TABLE IF NOT EXISTS proxy_records (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			ts         TEXT NOT NULL,
 			session    TEXT NOT NULL,
@@ -67,8 +83,8 @@ func (d *DB) migrate() error {
 			raw_json   TEXT NOT NULL,
 			UNIQUE(session, idx)
 		);
-		CREATE INDEX IF NOT EXISTS idx_records_session ON records(session, idx);
-		CREATE INDEX IF NOT EXISTS idx_records_ts ON records(ts);
+		CREATE INDEX IF NOT EXISTS idx_proxy_records_session ON proxy_records(session, idx);
+		CREATE INDEX IF NOT EXISTS idx_proxy_records_ts ON proxy_records(ts);
 
 		CREATE TABLE IF NOT EXISTS sessions (
 			id           TEXT PRIMARY KEY,
@@ -100,6 +116,7 @@ func (d *DB) migrate() error {
 			error         TEXT,
 			is_sse        INTEGER DEFAULT 0,
 			sse_events_json TEXT,
+			finish_reason TEXT,
 			UNIQUE(session)
 		);
 		CREATE INDEX IF NOT EXISTS idx_gateway_logs_ts ON gateway_logs(ts);
@@ -126,7 +143,7 @@ func (d *DB) SaveRecord(rec *proto.Record) error {
 	sseEventsJSON, _ := json.Marshal(rec.SSEEvents)
 
 	_, err = tx.Exec(`
-		INSERT INTO records (ts, session, idx, direction, method, url, host, path, is_encoded, endpoint_type,
+		INSERT INTO proxy_records (ts, session, idx, direction, method, url, host, path, is_encoded, endpoint_type,
 			req_headers_json, req_body, req_body_raw, req_mime, req_size,
 			status, status_text, resp_headers_json, resp_body, resp_mime, resp_size,
 			is_sse, sse_events_json, error, source, raw_json)
@@ -171,7 +188,7 @@ func (d *DB) SaveRecord(rec *proto.Record) error {
 // RecentRecords returns the most recent records.
 func (d *DB) RecentRecords(limit int) ([]proto.Record, error) {
 	rows, err := d.db.Query(`
-		SELECT raw_json FROM records ORDER BY id DESC LIMIT ?
+		SELECT raw_json FROM proxy_records ORDER BY id DESC LIMIT ?
 	`, limit)
 	if err != nil {
 		return nil, err
@@ -209,7 +226,7 @@ func (d *DB) ClearTraffic() error {
 	}
 	defer tx.Rollback()
 
-	tx.Exec("DELETE FROM records")
+	tx.Exec("DELETE FROM proxy_records")
 	tx.Exec("DELETE FROM sessions")
 	return tx.Commit()
 }
@@ -258,7 +275,7 @@ func previewText(rec *proto.Record) string {
 // RecordCount returns the total number of records.
 func (d *DB) RecordCount() int {
 	var count int
-	d.db.QueryRow("SELECT COUNT(*) FROM records").Scan(&count)
+	d.db.QueryRow("SELECT COUNT(*) FROM proxy_records").Scan(&count)
 	return count
 }
 
@@ -280,10 +297,10 @@ type StorageStats struct {
 // Stats returns storage statistics.
 func (d *DB) Stats() StorageStats {
 	var s StorageStats
-	d.db.QueryRow("SELECT COUNT(*) FROM records").Scan(&s.Records)
+	d.db.QueryRow("SELECT COUNT(*) FROM proxy_records").Scan(&s.Records)
 	d.db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&s.Sessions)
-	d.db.QueryRow("SELECT MIN(ts) FROM records").Scan(&s.OldestTs)
-	d.db.QueryRow("SELECT MAX(ts) FROM records").Scan(&s.NewestTs)
+	d.db.QueryRow("SELECT MIN(ts) FROM proxy_records").Scan(&s.OldestTs)
+	d.db.QueryRow("SELECT MAX(ts) FROM proxy_records").Scan(&s.NewestTs)
 	return s
 }
 
@@ -309,8 +326,8 @@ func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
 
 	_, err := d.db.Exec(`
 		INSERT INTO gateway_logs (ts, session, model, method, path, request_body, response_body,
-			input_tokens, output_tokens, status, latency, error, is_sse, sse_events_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			input_tokens, output_tokens, status, latency, error, is_sse, sse_events_json, finish_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session) DO UPDATE SET
 			response_body = excluded.response_body,
 			output_tokens = excluded.output_tokens,
@@ -318,11 +335,12 @@ func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
 			latency = excluded.latency,
 			error = excluded.error,
 			is_sse = excluded.is_sse,
-			sse_events_json = excluded.sse_events_json
+			sse_events_json = excluded.sse_events_json,
+			finish_reason = excluded.finish_reason
 	`,
 		log.Ts, log.Session, log.Model, log.Method, log.Path, log.RequestBody, log.ResponseBody,
 		log.InputTokens, log.OutputTokens, log.Status, log.Latency, log.Error,
-		boolToInt(log.IsSSE), string(sseEventsJSON),
+		boolToInt(log.IsSSE), string(sseEventsJSON), log.FinishReason,
 	)
 	return err
 }
@@ -331,7 +349,7 @@ func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
 func (d *DB) RecentGatewayLogs(limit int) ([]proto.GatewayLog, error) {
 	rows, err := d.db.Query(`
 		SELECT id, ts, session, model, method, path, request_body, response_body,
-			input_tokens, output_tokens, status, latency, error, is_sse, sse_events_json
+			input_tokens, output_tokens, status, latency, error, is_sse, sse_events_json, finish_reason
 		FROM gateway_logs ORDER BY id DESC LIMIT ?
 	`, limit)
 	if err != nil {
@@ -345,7 +363,7 @@ func (d *DB) RecentGatewayLogs(limit int) ([]proto.GatewayLog, error) {
 		var sseJSON string
 		if err := rows.Scan(&l.ID, &l.Ts, &l.Session, &l.Model, &l.Method, &l.Path,
 			&l.RequestBody, &l.ResponseBody, &l.InputTokens, &l.OutputTokens,
-			&l.Status, &l.Latency, &l.Error, &l.IsSSE, &sseJSON); err != nil {
+			&l.Status, &l.Latency, &l.Error, &l.IsSSE, &sseJSON, &l.FinishReason); err != nil {
 			continue
 		}
 		json.Unmarshal([]byte(sseJSON), &l.SSEEvents)

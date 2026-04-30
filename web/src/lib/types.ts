@@ -40,6 +40,7 @@ export interface TrafficRecord {
   input_tokens?: number;
   output_tokens?: number;
   latency?: number;
+  finish_reason?: string;
 }
 
 export interface GatewayLog {

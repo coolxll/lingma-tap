@@ -63,6 +63,7 @@ export namespace proto {
 	    error?: string;
 	    is_sse: boolean;
 	    sse_events?: SSEEvent[];
+	    finish_reason?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new GatewayLog(source);
@@ -85,6 +86,7 @@ export namespace proto {
 	        this.error = source["error"];
 	        this.is_sse = source["is_sse"];
 	        this.sse_events = this.convertValues(source["sse_events"], SSEEvent);
+	        this.finish_reason = source["finish_reason"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -136,6 +138,7 @@ export namespace proto {
 	    input_tokens?: number;
 	    output_tokens?: number;
 	    latency?: number;
+	    finish_reason?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Record(source);
@@ -173,6 +176,7 @@ export namespace proto {
 	        this.input_tokens = source["input_tokens"];
 	        this.output_tokens = source["output_tokens"];
 	        this.latency = source["latency"];
+	        this.finish_reason = source["finish_reason"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

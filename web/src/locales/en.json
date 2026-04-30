@@ -84,11 +84,25 @@
     "tool_calls": "Tool Calls"
   },
   "monitor": {
+    "logging_status": {
+      "active": "Logging Active",
+      "paused": "Logging Paused",
+      "btn_on": "Start Logging",
+      "btn_off": "Stop Logging"
+    },
+    "search_placeholder": "Search models, sessions or content...",
+    "stats": {
+      "tokens": "Tokens",
+      "recent": "Recent",
+      "total": "Total",
+      "ok": "Success",
+      "err": "Error"
+    },
     "table": {
       "status": "Status",
       "model": "Model",
       "preview": "Preview",
-      "usage": "Usage",
+      "tokens": "Tokens",
       "latency": "Latency",
       "time": "Time"
     },
@@ -101,17 +115,6 @@
       "request_payload": "Request Payload",
       "response_payload": "Response Payload",
       "payload_empty": "Payload is empty"
-    },
-    "stats": {
-      "total": "Total",
-      "ok": "Success",
-      "err": "Error"
-    },
-    "logging_status": {
-      "active": "Logging Active",
-      "paused": "Logging Paused",
-      "btn_on": "Start Logging",
-      "btn_off": "Stop Logging"
     },
     "filters": {
       "placeholder": "Search model, path...",
