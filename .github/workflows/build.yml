@@ -1,0 +1,131 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows/amd64
+            name: windows-x64
+          - os: macos-latest
+            platform: darwin/amd64
+            name: macos-x64
+          - os: macos-latest
+            platform: darwin/arm64
+            name: macos-arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Install Frontend Dependencies
+        working-directory: web
+        run: npm install
+
+      - name: Build Wails App
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            wails build -platform ${{ matrix.platform }} -clean
+          else
+            # For macOS, we might want to skip code signing if no certificates are provided
+            # but for a basic build, this should work.
+            wails build -platform ${{ matrix.platform }} -clean
+          fi
+
+      - name: Package Windows
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          cd build/bin
+          if (Test-Path "Lingma Tap.exe") {
+            Rename-Item "Lingma Tap.exe" "lingma-tap-windows-x64.exe"
+            Compress-Archive -Path "lingma-tap-windows-x64.exe" -DestinationPath "../../lingma-tap-windows-x64.zip"
+          } else {
+            Write-Error "Binary not found"
+            exit 1
+          }
+
+      - name: Package macOS
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          # 安装 create-dmg 工具
+          brew install create-dmg
+          cd build/bin
+          if [ -d "Lingma Tap.app" ]; then
+            # 创建 dmg
+            create-dmg \
+              --volname "Lingma Tap" \
+              --window-pos 200 120 \
+              --window-size 600 400 \
+              --icon-size 100 \
+              --icon "Lingma Tap.app" 175 190 \
+              --hide-extension "Lingma Tap.app" \
+              --app-drop-link 425 190 \
+              "../../lingma-tap-${{ matrix.name }}.dmg" \
+              "Lingma Tap.app"
+          else
+            echo "App bundle not found"
+            exit 1
+          fi
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lingma-tap-${{ matrix.name }}
+          path: |
+            *.zip
+            *.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.zip
+            artifacts/*.dmg
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
