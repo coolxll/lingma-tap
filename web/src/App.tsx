@@ -59,7 +59,7 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [proxyRunning, setProxyRunning] = useState(false);
   const [gatewayRunning, setGatewayRunning] = useState(false);
-  const [theme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [stats, setStats] = useState<StorageStats | null>(null);
   const [caCertPath, setCaCertPath] = useState('');
   const [gatewayLoggingEnabled, setGatewayLoggingEnabled] = useState(true);
@@ -98,6 +98,17 @@ export default function App() {
     // Don't assume the response is the immediate next record (interleaving possible)
     return records.find(r => r.session === selectedRecord.session && r.direction === 'S2C') || null;
   }, [selectedRecord, records]);
+
+  // Apply theme
+  useEffect(() => {
+    if (theme === 'light') {
+      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('light');
+    } else {
+      document.documentElement.classList.remove('light');
+      document.documentElement.classList.add('dark');
+    }
+  }, [theme]);
 
   // Initialize: load existing records
   useEffect(() => {
@@ -202,6 +213,10 @@ export default function App() {
     clearRecords();
   }, [wails, clearRecords]);
 
+  const handleToggleTheme = useCallback(() => {
+    setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
+  }, []);
+
   return (
     <div className="h-dvh flex flex-col bg-zinc-950 text-zinc-100">
       <TitleBar
@@ -215,7 +230,7 @@ export default function App() {
         onTogglePause={togglePause}
         onToggleLiveTail={toggleLiveTail}
         onClear={handleClear}
-        onToggleTheme={() => {}}
+        onToggleTheme={handleToggleTheme}
       />
 
       <div className="flex-1 overflow-hidden">

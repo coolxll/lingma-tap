@@ -1,1 +1,44 @@
 @import "tailwindcss";
+
+:root {
+  --app-bg: #09090b;
+  --app-surface: #18181b;
+  --app-border: #27272a;
+  --app-text: #f4f4f5;
+  --app-text-dim: #a1a1aa;
+}
+
+:root.light {
+  --app-bg: #ffffff;
+  --app-surface: #f4f4f5;
+  --app-border: #e4e4e7;
+  --app-text: #09090b;
+  --app-text-dim: #71717a;
+}
+
+/* Override dark-themed hardcoded classes when in light mode */
+.light body {
+  background-color: var(--app-bg);
+  color: var(--app-text);
+}
+
+.light .bg-zinc-950 { background-color: var(--app-bg) !important; }
+.light .bg-zinc-900 { background-color: var(--app-surface) !important; }
+.light .bg-zinc-900\/50 { background-color: rgba(244, 244, 245, 0.5) !important; }
+.light .bg-zinc-950\/50 { background-color: rgba(255, 255, 255, 0.5) !important; }
+
+.light .text-zinc-100 { color: var(--app-text) !important; }
+.light .text-zinc-200 { color: var(--app-text) !important; }
+.light .text-zinc-300 { color: var(--app-text) !important; }
+.light .text-zinc-400 { color: var(--app-text-dim) !important; }
+.light .text-zinc-500 { color: var(--app-text-dim) !important; }
+
+.light .border-zinc-900 { border-color: var(--app-border) !important; }
+.light .border-zinc-800 { border-color: var(--app-border) !important; }
+
+/* Adjustments for better visibility in light mode */
+.light .shadow-inner { box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05) !important; }
+.light .bg-zinc-800 { background-color: #e4e4e7 !important; }
+.light .hover\:bg-zinc-800:hover { background-color: #e4e4e7 !important; }
+
+/* Keep some specific dark accents if needed, but mostly invert */

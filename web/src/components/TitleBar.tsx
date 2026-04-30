@@ -1,4 +1,4 @@
-import { Shield, ShieldOff, Pause, Play, Trash2, Sun, Moon, Globe } from 'lucide-react';
+import { Shield, ShieldOff, Pause, Play, Trash2, Sun, Moon, Globe, ArrowDownToLine } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import i18n from '@/i18n';
 
@@ -81,8 +81,8 @@ export function TitleBar({
 
       {/* Right: Actions */}
       <div className="flex items-center justify-end gap-1.5 flex-1 no-drag">
-        {/* Only show these controls on proxy/gateway tabs */}
-        {(activeTab === 'proxy' || activeTab === 'gateway') && (
+        {/* Only show these controls on proxy tab */}
+        {activeTab === 'proxy' && (
           <div className="flex items-center gap-1.5 mr-2">
             <button
               onClick={onToggleProxy}
@@ -99,22 +99,23 @@ export function TitleBar({
 
             <button
               onClick={onTogglePause}
-              className={`p-1.5 rounded-full transition-colors ${
-                isPaused ? 'bg-yellow-900/40 text-yellow-400' : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs transition-colors ${
+                isPaused ? 'bg-zinc-800 text-zinc-500 hover:bg-zinc-700' : 'bg-amber-900/40 text-amber-400 hover:bg-amber-900/60'
               }`}
               title={isPaused ? t('titlebar.resume') : t('titlebar.pause')}
             >
-              {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+              {isPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+              {isPaused ? t('titlebar.resume') : t('titlebar.pause')}
             </button>
 
             <button
               onClick={onToggleLiveTail}
-              className={`px-2 py-1.5 rounded-full text-xs transition-colors ${
+              className={`p-1.5 rounded-full transition-colors ${
                 liveTail ? 'bg-blue-900/40 text-blue-400' : 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800'
               }`}
               title={liveTail ? t('titlebar.disable_auto_scroll') : t('titlebar.enable_auto_scroll')}
             >
-              {t('titlebar.tail')}
+              <ArrowDownToLine className="w-4 h-4" />
             </button>
 
             <button
