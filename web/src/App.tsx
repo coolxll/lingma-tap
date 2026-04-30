@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { TrafficRecord, StorageStats } from '@/lib/types';
 import { WSClient } from '@/lib/ws-client';
 import { useRecords } from '@/hooks/useRecords';
-import { TitleBar } from '@/components/TitleBar';
+import { TitleBar, TabId } from '@/components/TitleBar';
 import { RecordList } from '@/components/RecordList';
 import { DetailPanel } from '@/components/DetailPanel';
 import { ResizablePanels } from '@/components/ResizablePanels';
 import { BottomDock } from '@/components/BottomDock';
+import { SettingsPanel } from '@/components/SettingsPanel';
 
 // Wails window type
 interface WailsWindow extends Window {
@@ -41,6 +42,7 @@ export default function App() {
     toggleLiveTail,
   } = useRecords();
 
+  const [activeTab, setActiveTab] = useState<TabId>('monitor');
   const [connected, setConnected] = useState(false);
   const [proxyRunning, setProxyRunning] = useState(false);
   const [theme] = useState<'dark' | 'light'>('dark');
@@ -146,10 +148,12 @@ export default function App() {
   return (
     <div className="h-dvh flex flex-col bg-zinc-950 text-zinc-100">
       <TitleBar
+        activeTab={activeTab}
         proxyRunning={proxyRunning}
         isPaused={isPaused}
         liveTail={liveTail}
         theme={theme}
+        onTabChange={setActiveTab}
         onToggleProxy={handleToggleProxy}
         onTogglePause={togglePause}
         onToggleLiveTail={toggleLiveTail}
@@ -158,14 +162,22 @@ export default function App() {
       />
 
       <div className="flex-1 overflow-hidden">
-        <ResizablePanels defaultSizes={[35, 65]} minSizes={[250, 300]}>
-          <RecordList
-            records={records}
-            selectedRecord={selectedRecord}
-            onSelectRecord={setSelectedRecord}
+        {activeTab === 'monitor' ? (
+          <ResizablePanels defaultSizes={[35, 65]} minSizes={[250, 300]}>
+            <RecordList
+              records={records}
+              selectedRecord={selectedRecord}
+              onSelectRecord={setSelectedRecord}
+            />
+            <DetailPanel request={selectedRecord} response={responseRecord} />
+          </ResizablePanels>
+        ) : (
+          <SettingsPanel
+            proxyRunning={proxyRunning}
+            proxyPort={PROXY_PORT}
+            onToggleProxy={handleToggleProxy}
           />
-          <DetailPanel request={selectedRecord} response={responseRecord} />
-        </ResizablePanels>
+        )}
       </div>
 
       <BottomDock

@@ -1,10 +1,14 @@
 import { Shield, ShieldOff, Pause, Play, Trash2, Sun, Moon } from 'lucide-react';
 
+export type TabId = 'monitor' | 'settings';
+
 interface TitleBarProps {
+  activeTab: TabId;
   proxyRunning: boolean;
   isPaused: boolean;
   liveTail: boolean;
   theme: 'dark' | 'light';
+  onTabChange: (tab: TabId) => void;
   onToggleProxy: () => void;
   onTogglePause: () => void;
   onToggleLiveTail: () => void;
@@ -13,10 +17,12 @@ interface TitleBarProps {
 }
 
 export function TitleBar({
+  activeTab,
   proxyRunning,
   isPaused,
   liveTail,
   theme,
+  onTabChange,
   onToggleProxy,
   onTogglePause,
   onToggleLiveTail,
@@ -29,9 +35,35 @@ export function TitleBar({
       <div className="w-16 shrink-0" />
 
       {/* Title */}
-      <div className="flex items-center gap-2 mr-4">
+      <div className="flex items-center gap-2 mr-2">
         <span className="text-sm font-bold tracking-tight text-zinc-100">Lingma Tap</span>
       </div>
+
+      {/* Tab buttons */}
+      <div className="flex items-center gap-0.5 mr-2">
+        <button
+          onClick={() => onTabChange('monitor')}
+          className={`px-2.5 py-1 text-xs font-medium transition-colors border-b-2 ${
+            activeTab === 'monitor'
+              ? 'text-zinc-100 border-blue-500'
+              : 'text-zinc-500 border-transparent hover:text-zinc-300'
+          }`}
+        >
+          Monitor
+        </button>
+        <button
+          onClick={() => onTabChange('settings')}
+          className={`px-2.5 py-1 text-xs font-medium transition-colors border-b-2 ${
+            activeTab === 'settings'
+              ? 'text-zinc-100 border-blue-500'
+              : 'text-zinc-500 border-transparent hover:text-zinc-300'
+          }`}
+        >
+          Settings
+        </button>
+      </div>
+
+      <div className="w-px h-5 bg-zinc-800 mx-1" />
 
       {/* Proxy toggle */}
       <button
