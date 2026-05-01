@@ -262,7 +262,7 @@ export function SettingsPanel({
           <h2 className="text-sm font-semibold text-zinc-200 mb-4">{t('settings.api_endpoints')}</h2>
           <div className="space-y-2">
             {ENDPOINTS.map((ep) => {
-              const url = `http://127.0.0.1:9090${ep.path}`;
+              const url = `http://127.0.0.1:${gatewayPort}${ep.path}`;
               return (
                 <div
                   key={ep.path}

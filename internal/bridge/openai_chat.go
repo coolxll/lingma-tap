@@ -37,17 +37,6 @@ func (h *BridgeHandler) fetchModelsWithCache(ctx context.Context) ([]ModelInfo, 
 	return models, nil
 }
 
-// modelFriendlyNames maps internal Lingma model keys to user-friendly names.
-var modelFriendlyNames = map[string]string{
-	"dashscope_qmodel":                      "Qwen3.6-Plus",
-	"dashscope_qwen3_coder":                 "Qwen3-Coder",
-	"dashscope_qwen_max_latest":             "Qwen3.6-Max",
-	"dashscope_qwen_plus_20250428_thinking": "Qwen3.6-Plus-Thinking",
-	"kmodel":                                "Kimi-K2.6",
-	"mmodel":                                "MiniMax",
-	"org_auto":                              "Auto",
-}
-
 type modelResponse struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"`
@@ -143,8 +132,8 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Map model name to Lingma model key
-	modelKey := mapModelToLingma(req.Model)
+	// Dynamically map model name to Lingma model key
+	modelKey := h.resolveModelKey(r.Context(), req.Model)
 
 	// Build parameters
 	params := map[string]any{}
@@ -471,25 +460,32 @@ type toolCallState struct {
 	args strings.Builder
 }
 
-func mapModelToLingma(model string) string {
-	switch strings.ToLower(model) {
-	case "org_auto", "auto", "":
+// resolveModelKey dynamically maps a requested model string to a Lingma model key
+// by checking the fetched models' keys and display names.
+func (h *BridgeHandler) resolveModelKey(ctx context.Context, model string) string {
+	if model == "" {
 		return "org_auto"
-	case "qmodel", "dashscope_qmodel":
-		return "dashscope_qmodel"
-	case "coder", "qwen3-coder", "dashscope_qwen3_coder":
-		return "dashscope_qwen3_coder"
-	case "thinking", "qwen-plus-thinking", "dashscope_qwen_plus_20250428_thinking":
-		return "dashscope_qwen_plus_20250428_thinking"
-	case "max", "qwen-max", "dashscope_qwen_max_latest":
-		return "dashscope_qwen_max_latest"
-	case "kmodel":
-		return "kmodel"
-	case "mmodel":
-		return "mmodel"
-	default:
-		return model // pass through as-is (may be a direct Lingma model key)
 	}
+
+	models, err := h.fetchModelsWithCache(ctx)
+	if err == nil {
+		modelLower := strings.ToLower(model)
+		for _, m := range models {
+			if strings.ToLower(m.Key) == modelLower {
+				return m.Key
+			}
+			if strings.ToLower(m.DisplayName) == modelLower {
+				return m.Key
+			}
+		}
+	}
+
+	// Fallback logic if not found or fetch fails
+	modelLower := strings.ToLower(model)
+	if modelLower == "org_auto" || modelLower == "auto" {
+		return "org_auto"
+	}
+	return model
 }
 
 func writeOpenAIError(w http.ResponseWriter, status int, message string) {
@@ -520,11 +516,8 @@ func currentTimeUnix() int64 {
 }
 
 // friendlyName returns a user-friendly display name for a model key.
-// Built-in mapping takes priority, then API display name, then falls back to key.
+// It uses API display name if available, then falls back to key.
 func friendlyName(key string, apiDisplayName string) string {
-	if name, ok := modelFriendlyNames[key]; ok {
-		return name
-	}
 	if apiDisplayName != "" {
 		return apiDisplayName
 	}

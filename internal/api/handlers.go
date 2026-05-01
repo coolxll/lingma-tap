@@ -40,11 +40,13 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/records", h.HandleWebSocket)
 	mux.HandleFunc("/api/records", h.handleRecords)
 	mux.HandleFunc("/api/status", h.handleStatus)
+}
 
+func (h *Handler) RegisterGatewayRoutes(mux *http.ServeMux) {
 	// Bridge endpoints (OpenAI / Anthropic compatible)
 	if h.bridge != nil {
 		mux.HandleFunc("/v1/models", corsMiddleware(h.bridge.HandleModels))

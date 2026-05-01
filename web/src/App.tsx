@@ -37,7 +37,7 @@ interface ModelInfo {
   owned_by: string;
 }
 
-const WS_PORT = 9090;
+const WS_PORT = 9091;
 const PROXY_PORT = 9528;
 const DEFAULT_GATEWAY_PORT = 9090;
 

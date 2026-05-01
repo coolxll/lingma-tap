@@ -37,8 +37,9 @@ type App struct {
 	sink   *storage.AsyncSink
 	hub    *api.Hub
 	proxy  *proxy.Server
-	apiLn  net.Listener
+	apiLn              net.Listener
 	bridgeHandlerField *bridge.BridgeHandler
+	gatewayServer      *http.Server
 	gatewayLogging     bool
 }
 
@@ -127,15 +128,15 @@ func (a *App) startup(ctx context.Context) {
 
 	handler := api.NewHandler(a.hub, a, bridgeHandler)
 	mux := http.NewServeMux()
-	handler.RegisterRoutes(mux)
+	handler.RegisterInternalRoutes(mux)
 
-	a.apiLn, err = net.Listen("tcp", "127.0.0.1:9090")
+	a.apiLn, err = net.Listen("tcp", "127.0.0.1:9091")
 	if err != nil {
 		log.Printf("[app] API listen error: %v", err)
 		return
 	}
 	go http.Serve(a.apiLn, mux)
-	log.Printf("[app] API server on %s", a.apiLn.Addr())
+	log.Printf("[app] Management API server on %s", a.apiLn.Addr())
 	a.gatewayLogging = true
 
 	a.proxy = proxy.NewServer(a.ca, func(rec *proto.Record) {
@@ -187,15 +188,43 @@ func (a *App) StopProxy() {
 
 // StartGateway starts the AI Gateway.
 func (a *App) StartGateway(port int) error {
-	// TODO: Implement AI Gateway
-	log.Printf("[app] StartGateway called with port %d (not implemented)", port)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.gatewayServer != nil {
+		a.gatewayServer.Close()
+	}
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	handler := api.NewHandler(a.hub, a, a.bridgeHandlerField)
+	mux := http.NewServeMux()
+	handler.RegisterGatewayRoutes(mux)
+
+	a.gatewayServer = &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
+	go func() {
+		log.Printf("[app] AI Gateway starting on %s", addr)
+		if err := a.gatewayServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("[app] AI Gateway error: %v", err)
+		}
+	}()
+
 	return nil
 }
 
 // StopGateway stops the AI Gateway.
 func (a *App) StopGateway() {
-	// TODO: Implement AI Gateway
-	log.Printf("[app] StopGateway called (not implemented)")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.gatewayServer != nil {
+		log.Printf("[app] Stopping AI Gateway...")
+		a.gatewayServer.Close()
+		a.gatewayServer = nil
+	}
 }
 
 // GetRecords returns recent proxy traffic records.
@@ -249,7 +278,7 @@ func (a *App) SetLogging(enabled bool) {
 func (a *App) GetStatus() map[string]interface{} {
 	status := map[string]interface{}{
 		"proxy_running":   a.proxy != nil,
-		"gateway_running": false, // TODO: Update when gateway is implemented
+		"gateway_running": a.gatewayServer != nil,
 		"gateway_logging": a.gatewayLogging,
 	}
 	if a.db != nil {

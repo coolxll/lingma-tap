@@ -35,7 +35,7 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	modelKey := mapModelToLingma(req.Model)
+	modelKey := h.resolveModelKey(r.Context(), req.Model)
 
 	params := map[string]any{}
 	if req.Temperature != nil {
