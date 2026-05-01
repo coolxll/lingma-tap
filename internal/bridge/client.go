@@ -59,6 +59,21 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	// Aliyun/Lingma aliases
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
+func (u *Usage) Consolidate() {
+	if u.PromptTokens == 0 && u.InputTokens != 0 {
+		u.PromptTokens = u.InputTokens
+	}
+	if u.CompletionTokens == 0 && u.OutputTokens != 0 {
+		u.CompletionTokens = u.OutputTokens
+	}
+	if u.TotalTokens == 0 {
+		u.TotalTokens = u.PromptTokens + u.CompletionTokens
+	}
 }
 
 // ChatStream sends a chat request to Lingma and streams SSE events.
@@ -165,7 +180,7 @@ func (c *LingmaClient) parseSSEData(data string) (SSEEvent, error) {
 		} `json:"choices"`
 		Usage *Usage `json:"usage"`
 	}
-	if err := json.Unmarshal([]byte(data), &direct); err == nil && len(direct.Choices) > 0 {
+	if err := json.Unmarshal([]byte(data), &direct); err == nil && (len(direct.Choices) > 0 || direct.Usage != nil) {
 		event := SSEEvent{Type: "data", Raw: []byte(data)}
 		for _, choice := range direct.Choices {
 			if choice.Delta.Content != "" {
@@ -184,6 +199,7 @@ func (c *LingmaClient) parseSSEData(data string) (SSEEvent, error) {
 			}
 		}
 		if direct.Usage != nil {
+			direct.Usage.Consolidate()
 			event.Usage = direct.Usage
 		}
 		return event, nil
@@ -246,6 +262,7 @@ func (c *LingmaClient) parseInnerJSON(body string) (SSEEvent, error) {
 	}
 
 	if inner.Usage != nil {
+		inner.Usage.Consolidate()
 		event.Usage = inner.Usage
 	}
 

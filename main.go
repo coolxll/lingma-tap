@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/coolxll/lingma-tap/internal/api"
 	"github.com/coolxll/lingma-tap/internal/auth"
@@ -227,27 +228,35 @@ func (a *App) StopGateway() {
 	}
 }
 
-// GetRecords returns recent proxy traffic records.
-func (a *App) GetRecords(limit int) []proto.Record {
+// GetRecords returns recent proxy traffic records, optionally skipping the first `offset` records.
+func (a *App) GetRecords(limit int, offset ...int) []proto.Record {
 	if a.db == nil {
 		return nil
 	}
 	if limit <= 0 {
 		limit = 500
 	}
-	records, _ := a.db.RecentRecords(limit)
+	off := 0
+	if len(offset) > 0 {
+		off = offset[0]
+	}
+	records, _ := a.db.RecentRecords(limit, off)
 	return records
 }
 
-// GetGatewayLogs returns recent AI Gateway logs.
-func (a *App) GetGatewayLogs(limit int) []proto.GatewayLog {
+// GetGatewayLogs returns recent AI Gateway logs, optionally skipping the first `offset` records.
+func (a *App) GetGatewayLogs(limit int, offset ...int) []proto.GatewayLog {
 	if a.db == nil {
 		return nil
 	}
 	if limit <= 0 {
 		limit = 500
 	}
-	logs, _ := a.db.RecentGatewayLogs(limit)
+	off := 0
+	if len(offset) > 0 {
+		off = offset[0]
+	}
+	logs, _ := a.db.RecentGatewayLogs(limit, off)
 	return logs
 }
 
@@ -257,6 +266,16 @@ func (a *App) ClearRecords() error {
 		return fmt.Errorf("database not initialized")
 	}
 	return a.db.ClearTraffic()
+}
+
+// ClearRecordsBefore clears traffic data older than the specified number of days.
+// Returns the number of deleted records.
+func (a *App) ClearRecordsBefore(days int) (int, error) {
+	if a.db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+	cutoff := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
+	return a.db.ClearTrafficBefore(cutoff)
 }
 
 // GetCACertPath returns the CA certificate file path.

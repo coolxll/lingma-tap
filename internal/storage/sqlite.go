@@ -185,11 +185,16 @@ func (d *DB) SaveRecord(rec *proto.Record) error {
 	return tx.Commit()
 }
 
-// RecentRecords returns the most recent records.
-func (d *DB) RecentRecords(limit int) ([]proto.Record, error) {
+// RecentRecords returns the most recent records, optionally skipping the first `offset` records.
+func (d *DB) RecentRecords(limit int, offset ...int) ([]proto.Record, error) {
+	off := 0
+	if len(offset) > 0 {
+		off = offset[0]
+	}
+
 	rows, err := d.db.Query(`
-		SELECT raw_json FROM proxy_records ORDER BY id DESC LIMIT ?
-	`, limit)
+		SELECT raw_json FROM proxy_records ORDER BY id DESC LIMIT ? OFFSET ?
+	`, limit, off)
 	if err != nil {
 		return nil, err
 	}
@@ -208,14 +213,10 @@ func (d *DB) RecentRecords(limit int) ([]proto.Record, error) {
 		records = append(records, rec)
 	}
 
-	// Reverse to chronological order
-	for i, j := 0, len(records)-1; i < j; i, j = i+1, j-1 {
-		records[i], records[j] = records[j], records[i]
-	}
 	return records, nil
 }
 
-// ClearTraffic deletes all records and sessions.
+// ClearTraffic deletes all records, sessions, and gateway logs.
 func (d *DB) ClearTraffic() error {
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
@@ -228,7 +229,44 @@ func (d *DB) ClearTraffic() error {
 
 	tx.Exec("DELETE FROM proxy_records")
 	tx.Exec("DELETE FROM sessions")
+	tx.Exec("DELETE FROM gateway_logs")
 	return tx.Commit()
+}
+
+// ClearTrafficBefore deletes records older than the specified date (RFC3339 format).
+// It returns the total number of deleted records.
+func (d *DB) ClearTrafficBefore(beforeDate string) (int, error) {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	// Delete old proxy records
+	result, err := tx.Exec("DELETE FROM proxy_records WHERE ts < ?", beforeDate)
+	if err != nil {
+		return 0, err
+	}
+	proxyDeleted, _ := result.RowsAffected()
+
+	// Delete orphan sessions (no remaining records)
+	tx.Exec(`DELETE FROM sessions WHERE id NOT IN (SELECT DISTINCT session FROM proxy_records)`)
+
+	// Delete old gateway logs
+	result, err = tx.Exec("DELETE FROM gateway_logs WHERE ts < ?", beforeDate)
+	if err != nil {
+		return 0, err
+	}
+	gatewayDeleted, _ := result.RowsAffected()
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return int(proxyDeleted + gatewayDeleted), nil
 }
 
 // ListSessions returns sessions ordered by last_ts descending.
@@ -345,13 +383,18 @@ func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
 	return err
 }
 
-// RecentGatewayLogs returns recent logs from the gateway_logs table.
-func (d *DB) RecentGatewayLogs(limit int) ([]proto.GatewayLog, error) {
+// RecentGatewayLogs returns recent logs from the gateway_logs table, optionally skipping `offset` records.
+func (d *DB) RecentGatewayLogs(limit int, offset ...int) ([]proto.GatewayLog, error) {
+	off := 0
+	if len(offset) > 0 {
+		off = offset[0]
+	}
+
 	rows, err := d.db.Query(`
 		SELECT id, ts, session, model, method, path, request_body, response_body,
 			input_tokens, output_tokens, status, latency, error, is_sse, sse_events_json, finish_reason
-		FROM gateway_logs ORDER BY id DESC LIMIT ?
-	`, limit)
+		FROM gateway_logs ORDER BY id DESC LIMIT ? OFFSET ?
+	`, limit, off)
 	if err != nil {
 		return nil, err
 	}
@@ -369,6 +412,7 @@ func (d *DB) RecentGatewayLogs(limit int) ([]proto.GatewayLog, error) {
 		json.Unmarshal([]byte(sseJSON), &l.SSEEvents)
 		logs = append(logs, l)
 	}
+
 	return logs, nil
 }
 

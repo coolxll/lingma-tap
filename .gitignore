@@ -45,3 +45,4 @@ web/dist
 
 # Claude Code
 .claude/
+web/package.json.md5

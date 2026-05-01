@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Copy, Check, Shield, ShieldOff, Server, ServerOff } from 'lucide-react';
+import { RefreshCw, Copy, Check, Shield, ShieldOff, Server, ServerOff, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 // Wails window type
@@ -8,6 +8,8 @@ interface WailsWindow extends Window {
     main?: {
       App?: {
         GetModels: () => Promise<any[]>;
+        ClearRecords: () => Promise<void>;
+        ClearRecordsBefore: (days: number) => Promise<number>;
       };
     };
   };
@@ -18,6 +20,13 @@ interface ModelInfo {
   object: string;
   display_name?: string;  // friendly name (e.g. "Qwen3-Coder")
   owned_by: string;
+}
+
+interface StorageStats {
+  records: number;
+  sessions: number;
+  oldest_ts?: string;
+  newest_ts?: string;
 }
 
 interface SettingsPanelProps {
@@ -31,11 +40,14 @@ interface SettingsPanelProps {
   onGatewayPortChange?: (port: number) => void;
   loggingEnabled?: boolean;
   onToggleLogging?: () => void;
+  stats?: StorageStats | null;
+  onClearAll?: () => void;
+  onClearBefore?: (days: number) => Promise<number>;
 }
 
-export function SettingsPanel({ 
-  proxyRunning, 
-  proxyPort, 
+export function SettingsPanel({
+  proxyRunning,
+  proxyPort,
   onToggleProxy,
   onProxyPortChange,
   gatewayRunning = false,
@@ -43,13 +55,19 @@ export function SettingsPanel({
   onToggleGateway,
   onGatewayPortChange,
   loggingEnabled,
-  onToggleLogging
+  onToggleLogging,
+  stats,
+  onClearAll,
+  onClearBefore,
 }: SettingsPanelProps) {
   const { t } = useTranslation();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState('');
   const [copied, setCopied] = useState<string | null>(null);
+  const [clearDays, setClearDays] = useState(30);
+  const [clearMsg, setClearMsg] = useState('');
+  const [clearLoading, setClearLoading] = useState(false);
 
   const ENDPOINTS = [
     { method: 'GET', path: '/v1/models', desc: t('settings.models') },
@@ -94,6 +112,38 @@ export function SettingsPanel({
       // ignore
     }
   };
+
+  const handleClearAll = useCallback(async () => {
+    if (!onClearAll) return;
+    if (!window.confirm('确定要清空所有流量记录吗？此操作不可恢复。')) return;
+    setClearLoading(true);
+    setClearMsg('');
+    try {
+      await onClearAll();
+      setClearMsg('已清空所有记录');
+      setTimeout(() => setClearMsg(''), 3000);
+    } catch (err) {
+      setClearMsg(`错误: ${err instanceof Error ? err.message : '未知错误'}`);
+    } finally {
+      setClearLoading(false);
+    }
+  }, [onClearAll]);
+
+  const handleClearBefore = useCallback(async () => {
+    if (!onClearBefore) return;
+    if (!window.confirm(`确定要删除 ${clearDays} 天前的所有记录吗？此操作不可恢复。`)) return;
+    setClearLoading(true);
+    setClearMsg('');
+    try {
+      const deleted = await onClearBefore(clearDays);
+      setClearMsg(`已删除 ${deleted} 条记录`);
+      setTimeout(() => setClearMsg(''), 3000);
+    } catch (err) {
+      setClearMsg(`错误: ${err instanceof Error ? err.message : '未知错误'}`);
+    } finally {
+      setClearLoading(false);
+    }
+  }, [onClearBefore, clearDays]);
 
   return (
     <div className="h-full overflow-y-auto bg-zinc-950 p-6">
@@ -291,6 +341,80 @@ export function SettingsPanel({
             })}
           </div>
         </section>
+        {/* Data Management */}
+        <section>
+          <h2 className="text-sm font-semibold text-zinc-200 mb-4">{t('settings.data_management')}</h2>
+          <div className="bg-zinc-900/30 rounded-2xl p-5 border border-zinc-800/50 space-y-4">
+            {/* Stats */}
+            {stats && (
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div className="bg-zinc-950/50 rounded-lg p-3">
+                  <div className="text-[10px] text-zinc-500 uppercase">{t('settings.records_count')}</div>
+                  <div className="text-lg font-bold text-zinc-100">{stats.records}</div>
+                </div>
+                <div className="bg-zinc-950/50 rounded-lg p-3">
+                  <div className="text-[10px] text-zinc-500 uppercase">{t('settings.sessions_count')}</div>
+                  <div className="text-lg font-bold text-zinc-100">{stats.sessions}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Clear All */}
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs font-bold text-zinc-200">{t('settings.clear_all')}</div>
+                <div className="text-[10px] text-zinc-500">{t('settings.clear_all_hint')}</div>
+              </div>
+              <button
+                onClick={handleClearAll}
+                disabled={clearLoading}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-all disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                {t('common.clear')}
+              </button>
+            </div>
+
+            {/* Clear Before */}
+            <div className="flex items-center justify-between pt-3 border-t border-zinc-800/50">
+              <div>
+                <div className="text-xs font-bold text-zinc-200">{t('settings.clear_before')}</div>
+                <div className="text-[10px] text-zinc-500">{t('settings.clear_before_hint')}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={clearDays}
+                  onChange={(e) => setClearDays(parseInt(e.target.value) || 30)}
+                  min={1}
+                  max={365}
+                  className="w-16 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-xs font-mono text-zinc-200 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+                />
+                <span className="text-xs text-zinc-400">{t('settings.days')}</span>
+                <button
+                  onClick={handleClearBefore}
+                  disabled={clearLoading}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 transition-all disabled:opacity-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  {t('common.clear')}
+                </button>
+              </div>
+            </div>
+
+            {/* Message */}
+            {clearMsg && (
+              <div className={`text-xs p-2 rounded-lg ${
+                clearMsg.includes('错误') || clearMsg.includes('Error')
+                  ? 'bg-red-500/10 text-red-400'
+                  : 'bg-green-500/10 text-green-400'
+              }`}>
+                {clearMsg}
+              </div>
+            )}
+          </div>
+        </section>
+
 
       </div>
     </div>

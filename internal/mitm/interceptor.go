@@ -142,7 +142,17 @@ func (i *Interceptor) pipeHTTP(client, server net.Conn, host string) {
 			return
 		}
 
-		// Read response body
+		// Handle SSE streaming responses differently
+		if isSSE(resp) {
+			i.handleSSEResponse(resp, client, sessionID, &index)
+			// After SSE stream ends, check if connection should close
+			if strings.EqualFold(resp.Header.Get("Connection"), "close") {
+				return
+			}
+			continue
+		}
+
+		// Read response body (non-SSE)
 		var respBody []byte
 		if resp.Body != nil {
 			respBody, _ = io.ReadAll(resp.Body)
@@ -167,6 +177,56 @@ func (i *Interceptor) pipeHTTP(client, server net.Conn, host string) {
 		if strings.EqualFold(resp.Header.Get("Connection"), "close") {
 			return
 		}
+	}
+}
+
+// isSSE checks if the response is a Server-Sent Event stream.
+func isSSE(resp *http.Response) bool {
+	return strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
+}
+
+// handleSSEResponse streams an SSE response to the client while capturing the full body for recording.
+func (i *Interceptor) handleSSEResponse(resp *http.Response, client net.Conn, sessionID string, index *int) {
+	// Write status line to client
+	statusLine := fmt.Sprintf("%s %s\r\n", resp.Proto, resp.Status)
+	if _, err := client.Write([]byte(statusLine)); err != nil {
+		log.Printf("[mitm] write SSE status error: %v", err)
+		return
+	}
+
+	// Write headers to client (use a trimmed header set)
+	resp.Header.Del("Transfer-Encoding") // Body will be written raw
+	resp.Header.Write(client)
+
+	// Write blank line (end of headers)
+	client.Write([]byte("\r\n"))
+
+	// Stream body to client while capturing
+	var fullBody bytes.Buffer
+	buf := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			// Forward to client immediately
+			if _, werr := client.Write(buf[:n]); werr != nil {
+				log.Printf("[mitm] write SSE chunk error: %v", werr)
+				resp.Body.Close()
+				return
+			}
+			// Capture for recording
+			fullBody.Write(buf[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
+	resp.Body.Close()
+
+	// Create and record the response record with the full captured body
+	respRec := proto.ParseResponse(resp, fullBody.Bytes(), sessionID, *index)
+	(*index)++
+	if i.onRecord != nil {
+		i.onRecord(respRec)
 	}
 }
 
@@ -218,6 +278,12 @@ func (i *Interceptor) InterceptPlain(clientConn net.Conn, targetHost string, tar
 		resp, err := http.ReadResponse(serverReader, req)
 		if err != nil {
 			return
+		}
+
+		// Handle SSE streaming responses
+		if isSSE(resp) {
+			i.handleSSEResponse(resp, clientConn, sessionID, &index)
+			continue
 		}
 
 		var respBody []byte

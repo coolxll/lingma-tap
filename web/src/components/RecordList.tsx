@@ -7,6 +7,9 @@ interface RecordListProps {
   records: TrafficRecord[];
   selectedRecord: TrafficRecord | null;
   onSelectRecord: (record: TrafficRecord) => void;
+  onLoadMore?: () => void;
+  canLoadMore?: boolean;
+  liveTail?: boolean;
 }
 
 interface RequestPair {
@@ -54,6 +57,9 @@ export const RecordList = memo(function RecordList({
   records,
   selectedRecord,
   onSelectRecord,
+  onLoadMore,
+  canLoadMore,
+  liveTail,
 }: RecordListProps) {
   const { t } = useTranslation();
   const [localSearch, setLocalSearch] = useState('');
@@ -89,12 +95,12 @@ export const RecordList = memo(function RecordList({
     selectedRef.current?.scrollIntoView({ block: 'nearest' });
   }, [selectedRecord]);
 
-  // Auto-scroll to bottom on new records
+  // Auto-scroll to top on new records if live tail is on
   useEffect(() => {
-    if (scrollRef.current && !localSearch) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (scrollRef.current && liveTail && !localSearch) {
+      scrollRef.current.scrollTop = 0;
     }
-  }, [records.length, localSearch]);
+  }, [records.length, liveTail, localSearch]);
 
   // Which pair is selected?
   const selectedSession = selectedRecord?.session;
@@ -233,6 +239,18 @@ export const RecordList = memo(function RecordList({
               </div>
             );
           })
+        )}
+
+        {/* Load More */}
+        {onLoadMore && canLoadMore && (
+          <div className="p-4 border-t border-zinc-900 flex justify-center">
+            <button
+              onClick={onLoadMore}
+              className="px-4 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs rounded transition-colors"
+            >
+              {t('recordlist.load_more')}
+            </button>
+          </div>
         )}
       </div>
 

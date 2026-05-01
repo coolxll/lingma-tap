@@ -22,9 +22,9 @@ export function useRecords() {
         next[index] = record;
         return next;
       }
-      const next = [...prev, record];
+      const next = [record, ...prev];
       if (next.length > MAX_RECORDS) {
-        return next.slice(next.length - MAX_RECORDS);
+        return next.slice(0, MAX_RECORDS);
       }
       return next;
     });
@@ -32,6 +32,15 @@ export function useRecords() {
 
   const updateRecords = useCallback((newRecords: TrafficRecord[]) => {
     setRecords(newRecords);
+  }, []);
+
+  const appendRecords = useCallback((newRecords: TrafficRecord[]) => {
+    setRecords(prev => {
+      const existingKeys = new Set(prev.map(r => recordKey(r)));
+      const filtered = newRecords.filter(r => !existingKeys.has(recordKey(r)));
+      // New records from pagination are older, should be appended to the end
+      return [...prev, ...filtered];
+    });
   }, []);
 
   const clearRecords = useCallback(() => {
@@ -63,5 +72,6 @@ export function useRecords() {
     clearRecords,
     togglePause,
     toggleLiveTail,
+    appendRecords,
   };
 }

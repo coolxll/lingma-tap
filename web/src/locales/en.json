@@ -43,7 +43,8 @@
     "no_matches": "No matches",
     "session": "session",
     "requests": "requests",
-    "records_count": "records"
+    "records_count": "records",
+    "load_more": "Load More"
   },
   "detailpanel": {
     "select_record": "Select a record to view details",
