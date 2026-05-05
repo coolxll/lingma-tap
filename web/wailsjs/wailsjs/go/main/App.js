@@ -6,6 +6,10 @@ export function ClearRecords() {
   return window['go']['main']['App']['ClearRecords']();
 }
 
+export function ClearRecordsBefore(arg1) {
+  return window['go']['main']['App']['ClearRecordsBefore'](arg1);
+}
+
 export function ClearTraffic() {
   return window['go']['main']['App']['ClearTraffic']();
 }
@@ -14,16 +18,16 @@ export function GetCACertPath() {
   return window['go']['main']['App']['GetCACertPath']();
 }
 
-export function GetGatewayLogs(arg1) {
-  return window['go']['main']['App']['GetGatewayLogs'](arg1);
+export function GetGatewayLogs(arg1, arg2) {
+  return window['go']['main']['App']['GetGatewayLogs'](arg1, arg2);
 }
 
 export function GetModels() {
   return window['go']['main']['App']['GetModels']();
 }
 
-export function GetRecords(arg1) {
-  return window['go']['main']['App']['GetRecords'](arg1);
+export function GetRecords(arg1, arg2) {
+  return window['go']['main']['App']['GetRecords'](arg1, arg2);
 }
 
 export function GetStatus() {

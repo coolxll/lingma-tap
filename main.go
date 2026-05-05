@@ -31,13 +31,13 @@ import (
 var webAssets embed.FS
 
 type App struct {
-	ctx    context.Context
-	mu     sync.Mutex
-	ca     *ca.CA
-	db     *storage.DB
-	sink   *storage.AsyncSink
-	hub    *api.Hub
-	proxy  *proxy.Server
+	ctx                context.Context
+	mu                 sync.Mutex
+	ca                 *ca.CA
+	db                 *storage.DB
+	sink               *storage.AsyncSink
+	hub                *api.Hub
+	proxy              *proxy.Server
 	apiLn              net.Listener
 	bridgeHandlerField *bridge.BridgeHandler
 	gatewayServer      *http.Server
@@ -155,6 +155,26 @@ func (a *App) startup(ctx context.Context) {
 	})
 
 	log.Printf("[app] CA cert: %s", a.ca.CertPath())
+
+	// Auto-start Proxy on default port 9528
+	go func() {
+		time.Sleep(500 * time.Millisecond) // Give Wails a moment to settle
+		if err := a.StartProxy(9528); err != nil {
+			log.Printf("[app] Auto-start Proxy error: %v", err)
+		} else {
+			log.Printf("[app] Auto-started Proxy on port 9528")
+		}
+	}()
+
+	// Auto-start AI Gateway on default port 9090
+	go func() {
+		time.Sleep(600 * time.Millisecond)
+		if err := a.StartGateway(9090); err != nil {
+			log.Printf("[app] Auto-start Gateway error: %v", err)
+		} else {
+			log.Printf("[app] Auto-started AI Gateway on port 9090")
+		}
+	}()
 }
 
 func (a *App) shutdown(ctx context.Context) {

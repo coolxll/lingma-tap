@@ -30,6 +30,7 @@ type Record struct {
 	StatusText  string            `json:"status_text"`
 	RespHeaders map[string]string `json:"response_headers"`
 	RespBody    string            `json:"response_body"`
+	RespBodyRaw string            `json:"response_body_raw"`
 	RespMime    string            `json:"response_mime"`
 	RespSize    int64             `json:"response_size"`
 	IsSSE       bool              `json:"is_sse"`

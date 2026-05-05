@@ -183,6 +183,8 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 	// Track tool call state for proper ID management
 	toolCallIDs := make(map[int]string)
 	var fullContent strings.Builder
+	var usage *Usage
+	var finishReason string
 
 	finishSent := false
 
@@ -265,6 +267,7 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 			if event.FinishReason != "" {
 				finishSent = true
+				finishReason = event.FinishReason
 				chunk["choices"] = []map[string]any{{
 					"index":         0,
 					"delta":         map[string]any{},
@@ -281,6 +284,7 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 			if event.Usage != nil {
 				chunk["usage"] = event.Usage
+				usage = event.Usage
 				gLog.InputTokens = event.Usage.PromptTokens
 				gLog.OutputTokens = event.Usage.CompletionTokens
 			}
@@ -312,11 +316,53 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 			// Finalize Log
 			gLog.Status = 200
-			gLog.ResponseBody = fullContent.String()
-			gLog.Latency = time.Since(startTime).Milliseconds()
-			if gLog.FinishReason == "" {
-				gLog.FinishReason = "stop"
+
+			// Synthesize original response structure
+			if finishReason == "" {
+				finishReason = "stop"
 			}
+			gLog.FinishReason = finishReason
+
+			resp := map[string]any{
+				"id":      reqID,
+				"object":  "chat.completion",
+				"created": created,
+				"model":   modelKey,
+			}
+			choice := map[string]any{
+				"index":         0,
+				"finish_reason": finishReason,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": fullContent.String(),
+				},
+			}
+			// Add tool calls if we tracked them
+			if len(toolCallIDs) > 0 {
+				var tcList []map[string]any
+				for idx, id := range toolCallIDs {
+					tcList = append(tcList, map[string]any{
+						"id":    id,
+						"type":  "function",
+						"index": idx,
+						// We'd need to reconstruct args if we wanted a perfect structure, but this is a summary
+					})
+				}
+				choice["message"].(map[string]any)["tool_calls"] = tcList
+			}
+			resp["choices"] = []map[string]any{choice}
+			if usage != nil {
+				resp["usage"] = usage
+			} else {
+				resp["usage"] = map[string]any{
+					"prompt_tokens":     gLog.InputTokens,
+					"completion_tokens": gLog.OutputTokens,
+					"total_tokens":      gLog.InputTokens + gLog.OutputTokens,
+				}
+			}
+			respBytes, _ := json.Marshal(resp)
+			gLog.ResponseBody = string(respBytes)
+			gLog.Latency = time.Since(startTime).Milliseconds()
 			h.recorder(gLog)
 
 		case "done":
@@ -414,8 +460,8 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 			})
 		}
 		choice["message"] = map[string]any{
-			"role":      "assistant",
-			"content":   nil,
+			"role":       "assistant",
+			"content":    nil,
 			"tool_calls": tcList,
 		}
 	} else {

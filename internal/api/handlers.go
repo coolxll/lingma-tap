@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gorilla/websocket"
 	"github.com/coolxll/lingma-tap/internal/bridge"
 	"github.com/coolxll/lingma-tap/internal/proto"
+	"github.com/gorilla/websocket"
 )
 
 type RecordStore interface {

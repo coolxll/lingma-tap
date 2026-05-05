@@ -208,12 +208,12 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	writeAnthropicSSE(w, "message_start", map[string]any{
 		"type": "message_start",
 		"message": map[string]any{
-			"id":           msgID,
-			"type":         "message",
-			"role":         "assistant",
-			"content":      []any{},
-			"model":        modelKey,
-			"stop_reason":  nil,
+			"id":            msgID,
+			"type":          "message",
+			"role":          "assistant",
+			"content":       []any{},
+			"model":         modelKey,
+			"stop_reason":   nil,
 			"stop_sequence": nil,
 			"usage": map[string]any{
 				"input_tokens":  0,
@@ -237,8 +237,8 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 				if !blockStarted {
 					// Start text content block
 					writeAnthropicSSE(w, "content_block_start", map[string]any{
-						"type":         "content_block_start",
-						"index":        blockIndex,
+						"type":          "content_block_start",
+						"index":         blockIndex,
 						"content_block": map[string]any{"type": "text", "text": ""},
 					})
 					blockStarted = true

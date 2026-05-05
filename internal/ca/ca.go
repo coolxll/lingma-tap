@@ -19,10 +19,10 @@ import (
 
 // CA manages a self-signed root CA that can issue per-host leaf certificates.
 type CA struct {
-	certDir  string
-	caCert   *x509.Certificate
-	caKey    *ecdsa.PrivateKey
-	certMu   sync.Mutex
+	certDir   string
+	caCert    *x509.Certificate
+	caKey     *ecdsa.PrivateKey
+	certMu    sync.Mutex
 	certCache map[string]*tls.Certificate
 }
 

@@ -129,9 +129,9 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 						"type":  "response.output_item.added",
 						"index": blockIndex,
 						"item": map[string]any{
-							"id":    "msg_" + newUUID()[:24],
-							"type":  "message",
-							"role":  "assistant",
+							"id":     "msg_" + newUUID()[:24],
+							"type":   "message",
+							"role":   "assistant",
 							"status": "in_progress",
 							"content": []map[string]any{{
 								"type": "output_text",
@@ -221,9 +221,9 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 		"status": "completed",
 		"model":  modelKey,
 		"output": []map[string]any{{
-			"id":    "msg_" + newUUID()[:24],
-			"type":  "message",
-			"role":  "assistant",
+			"id":     "msg_" + newUUID()[:24],
+			"type":   "message",
+			"role":   "assistant",
 			"status": "completed",
 			"content": []map[string]any{{
 				"type": "output_text",

@@ -5,15 +5,17 @@ import {bridge} from '../models';
 
 export function ClearRecords():Promise<void>;
 
+export function ClearRecordsBefore(arg1:number):Promise<number>;
+
 export function ClearTraffic():Promise<void>;
 
 export function GetCACertPath():Promise<string>;
 
-export function GetGatewayLogs(arg1:number):Promise<Array<proto.GatewayLog>>;
+export function GetGatewayLogs(arg1:number,arg2:Array<number>):Promise<Array<proto.GatewayLog>>;
 
 export function GetModels():Promise<Array<bridge.ModelInfo>>;
 
-export function GetRecords(arg1:number):Promise<Array<proto.Record>>;
+export function GetRecords(arg1:number,arg2:Array<number>):Promise<Array<proto.Record>>;
 
 export function GetStatus():Promise<Record<string, any>>;
 

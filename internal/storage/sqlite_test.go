@@ -25,12 +25,12 @@ func TestClearTraffic(t *testing.T) {
 		Ts:        time.Now().Format(time.RFC3339),
 		Session:   "test-session",
 		Index:     1,
-		Direction:  "C2S",
-		Method:     "POST",
-		Path:       "/test",
-		ReqBody:    "test request",
-		RespBody:   "test response",
-		Status:     200,
+		Direction: "C2S",
+		Method:    "POST",
+		Path:      "/test",
+		ReqBody:   "test request",
+		RespBody:  "test response",
+		Status:    200,
 	}
 	if err := db.SaveRecord(rec); err != nil {
 		t.Fatalf("Failed to save record: %v", err)
@@ -56,14 +56,14 @@ func TestClearTraffic(t *testing.T) {
 
 	// Insert gateway log and verify it's also cleared
 	gatewayLog := &proto.GatewayLog{
-		Ts:        time.Now().Format(time.RFC3339),
-		Session:   "gateway-session",
-		Model:      "test-model",
-		Method:     "POST",
-		Path:       "/gateway",
-		RequestBody: "req",
+		Ts:           time.Now().Format(time.RFC3339),
+		Session:      "gateway-session",
+		Model:        "test-model",
+		Method:       "POST",
+		Path:         "/gateway",
+		RequestBody:  "req",
 		ResponseBody: "resp",
-		Status:     200,
+		Status:       200,
 	}
 	if err := db.SaveGatewayLog(gatewayLog); err != nil {
 		t.Fatalf("Failed to save gateway log: %v", err)

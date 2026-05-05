@@ -7,7 +7,8 @@ import (
 
 // ParseSSEEvents parses a text/event-stream response body into structured SSE events.
 // It handles the double-JSON encoding used by Lingma:
-//   data:{"headers":{...},"body":"<inner JSON string>","statusCodeValue":200,"statusCode":"OK"}
+//
+//	data:{"headers":{...},"body":"<inner JSON string>","statusCodeValue":200,"statusCode":"OK"}
 //
 // The inner "body" field is a JSON string that gets parsed separately.
 func ParseSSEEvents(body string) []SSEEvent {

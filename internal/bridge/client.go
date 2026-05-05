@@ -49,9 +49,9 @@ type SSEEvent struct {
 }
 
 type ToolCallDelta struct {
-	Index    int
-	ID       string
-	Name     string
+	Index     int
+	ID        string
+	Name      string
 	Arguments string
 }
 
@@ -149,10 +149,10 @@ func (c *LingmaClient) readSSE(body io.Reader, cb func(SSEEvent) error) error {
 func (c *LingmaClient) parseSSEData(data string) (SSEEvent, error) {
 	// Try to parse as the double-JSON envelope: {"headers":{...},"body":"...","statusCodeValue":200,"statusCode":"OK"}
 	var envelope struct {
-		Headers        map[string]any `json:"headers"`
-		Body           string         `json:"body"`
-		StatusCode     any            `json:"statusCode"`
-		StatusCodeVal  any            `json:"statusCodeValue"`
+		Headers       map[string]any `json:"headers"`
+		Body          string         `json:"body"`
+		StatusCode    any            `json:"statusCode"`
+		StatusCodeVal any            `json:"statusCodeValue"`
 	}
 	if err := json.Unmarshal([]byte(data), &envelope); err == nil && envelope.Body != "" {
 		if envelope.Body == "[DONE]" {
@@ -274,41 +274,41 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 	requestID := newUUID()
 
 	body := map[string]any{
-		"request_id":        requestID,
-		"request_set_id":    "",
-		"chat_record_id":    requestID,
-		"stream":            true,
-		"image_urls":        nil,
-		"is_reply":          false,
-		"is_retry":          false,
-		"session_id":        newUUID(),
-		"code_language":     "",
-		"source":            0,
-		"version":           "3",
-		"chat_prompt":       "",
-		"aliyun_user_type":  "enterprise_standard",
-		"agent_id":          "agent_common",
-		"task_id":           "question_refine",
+		"request_id":       requestID,
+		"request_set_id":   "",
+		"chat_record_id":   requestID,
+		"stream":           true,
+		"image_urls":       nil,
+		"is_reply":         false,
+		"is_retry":         false,
+		"session_id":       newUUID(),
+		"code_language":    "",
+		"source":           0,
+		"version":          "3",
+		"chat_prompt":      "",
+		"aliyun_user_type": "enterprise_standard",
+		"agent_id":         "agent_common",
+		"task_id":          "question_refine",
 		"model_config": map[string]any{
-			"key":                modelKey,
-			"display_name":      "",
-			"model":             "",
-			"format":            "",
-			"is_vl":             false,
-			"is_reasoning":      false,
-			"api_key":           "",
-			"url":               "",
-			"source":            "",
-			"max_input_tokens":  0,
-			"enable":            false,
-			"price_factor":      0,
+			"key":                   modelKey,
+			"display_name":          "",
+			"model":                 "",
+			"format":                "",
+			"is_vl":                 false,
+			"is_reasoning":          false,
+			"api_key":               "",
+			"url":                   "",
+			"source":                "",
+			"max_input_tokens":      0,
+			"enable":                false,
+			"price_factor":          0,
 			"original_price_factor": 0,
-			"is_default":        false,
-			"is_new":            false,
-			"exclude_tags":      nil,
-			"tags":              nil,
-			"icon":              nil,
-			"strategies":        nil,
+			"is_default":            false,
+			"is_new":                false,
+			"exclude_tags":          nil,
+			"tags":                  nil,
+			"icon":                  nil,
+			"strategies":            nil,
 		},
 		"messages": messages,
 		"business": map[string]any{

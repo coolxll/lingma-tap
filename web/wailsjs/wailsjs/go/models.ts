@@ -129,6 +129,7 @@ export namespace proto {
 	    status_text: string;
 	    response_headers: Record<string, string>;
 	    response_body: string;
+	    response_body_raw: string;
 	    response_mime: string;
 	    response_size: number;
 	    is_sse: boolean;
@@ -167,6 +168,7 @@ export namespace proto {
 	        this.status_text = source["status_text"];
 	        this.response_headers = source["response_headers"];
 	        this.response_body = source["response_body"];
+	        this.response_body_raw = source["response_body_raw"];
 	        this.response_mime = source["response_mime"];
 	        this.response_size = source["response_size"];
 	        this.is_sse = source["is_sse"];
