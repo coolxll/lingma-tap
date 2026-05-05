@@ -27,6 +27,7 @@ export interface TrafficRecord {
   status_text: string;
   response_headers: { [key: string]: string };
   response_body: string;
+  response_body_raw?: string;
   response_mime: string;
   response_size: number;
   is_sse: boolean;

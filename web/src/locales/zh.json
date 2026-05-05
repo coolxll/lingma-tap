@@ -15,7 +15,8 @@
     "proxy_tab": "代理抓包",
     "gateway_tab": "AI Gateway",
     "antigravity_tab": "Antigravity",
-    "settings_tab": "设置"
+    "settings_tab": "设置",
+    "all": "全部"
   },
   "titlebar": {
     "start_proxy": "启动代理",
@@ -59,7 +60,9 @@
     "response_headers": "响应头",
     "response_body": "响应体",
     "response": "响应",
-    "waiting": "等待响应..."
+    "waiting": "等待响应...",
+    "friendly": "友好可读",
+    "raw": "原始 (RAW)"
   },
   "settings": {
     "models": "模型",

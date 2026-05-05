@@ -69,6 +69,7 @@ export default function App() {
   const [gatewayLoggingEnabled, setGatewayLoggingEnabled] = useState(true);
   const [displayCount, setDisplayCount] = useState(200);
   const [canLoadMore, setCanLoadMore] = useState(true);
+  const [proxyTypeFilter, setProxyTypeFilter] = useState<'all' | 'chat' | 'embedding' | 'other'>('all');
   const liveTailRef = useRef(liveTail);
   const selectedRef = useRef(selectedRecord);
   const recordsRef = useRef(records);
@@ -77,20 +78,21 @@ export default function App() {
   const displayedRecords = useMemo(() => {
     let result: TrafficRecord[];
     if (activeTab === 'proxy') {
-      result = records.filter(r => 
-        r.source === 'proxy' && (
-          r.endpoint_type === 'chat' || 
-          r.endpoint_type === 'embedding' || 
-          r.endpoint_type === 'finish'
-        )
-      );
+      result = records.filter(r => {
+        if (r.source !== 'proxy') return false;
+        if (proxyTypeFilter === 'all') return true;
+        if (proxyTypeFilter === 'chat') return r.endpoint_type === 'chat' || r.endpoint_type === 'finish';
+        if (proxyTypeFilter === 'embedding') return r.endpoint_type === 'embedding';
+        if (proxyTypeFilter === 'other') return r.endpoint_type === 'other' || r.endpoint_type === 'tracking';
+        return true;
+      });
     } else if (activeTab === 'gateway') {
       result = records.filter(r => (r as any).source === 'gateway');
     } else {
       result = records;
     }
     return result.slice(0, displayCount);
-  }, [records, activeTab, displayCount]);
+  }, [records, activeTab, displayCount, proxyTypeFilter]);
 
   useEffect(() => { liveTailRef.current = liveTail; }, [liveTail]);
   useEffect(() => { selectedRef.current = selectedRecord; }, [selectedRecord]);
@@ -101,7 +103,8 @@ export default function App() {
 
   const handleLoadMore = useCallback(async () => {
     if (!wails || !canLoadMore) return;
-    const offset = recordsRef.current.length;
+    // Count only proxy records for the offset
+    const offset = recordsRef.current.filter(r => r.source === 'proxy').length;
     const newRecords = await wails.GetRecords(200, offset);
     if (newRecords && newRecords.length > 0) {
       appendRecords(newRecords);
@@ -356,6 +359,8 @@ export default function App() {
               onLoadMore={handleLoadMore}
               canLoadMore={canLoadMore}
               liveTail={liveTail}
+              typeFilter={proxyTypeFilter}
+              onTypeFilterChange={setProxyTypeFilter}
             />
             <DetailPanel request={selectedRecord} response={responseRecord} />
           </ResizablePanels>

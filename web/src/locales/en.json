@@ -14,7 +14,8 @@
     "copied": "Copied",
     "proxy_tab": "Proxy",
     "gateway_tab": "AI Gateway",
-    "settings_tab": "Settings"
+    "settings_tab": "Settings",
+    "all": "All"
   },
   "titlebar": {
     "start_proxy": "Start Proxy",
@@ -58,7 +59,9 @@
     "response_headers": "Response Headers",
     "response_body": "Response Body",
     "response": "Response",
-    "waiting": "Waiting for response..."
+    "waiting": "Waiting for response...",
+    "friendly": "Friendly",
+    "raw": "RAW"
   },
   "settings": {
     "models": "Models",

@@ -10,6 +10,8 @@ interface RecordListProps {
   onLoadMore?: () => void;
   canLoadMore?: boolean;
   liveTail?: boolean;
+  typeFilter?: 'all' | 'chat' | 'embedding' | 'other';
+  onTypeFilterChange?: (filter: 'all' | 'chat' | 'embedding' | 'other') => void;
 }
 
 interface RequestPair {
@@ -34,7 +36,9 @@ function groupBySession(records: TrafficRecord[]): SessionGroup[] {
   const result: SessionGroup[] = [];
   for (const [session, recs] of sessionMap) {
     const pairs: RequestPair[] = [];
-    for (const rec of recs) {
+    // Sort by index ascending to ensure C2S comes before S2C
+    const sortedRecs = [...recs].sort((a, b) => a.index - b.index);
+    for (const rec of sortedRecs) {
       if (rec.direction === 'C2S') {
         pairs.push({ req: rec });
       } else if (pairs.length > 0) {
@@ -60,6 +64,8 @@ export const RecordList = memo(function RecordList({
   onLoadMore,
   canLoadMore,
   liveTail,
+  typeFilter = 'all',
+  onTypeFilterChange,
 }: RecordListProps) {
   const { t } = useTranslation();
   const [localSearch, setLocalSearch] = useState('');
@@ -115,7 +121,7 @@ export const RecordList = memo(function RecordList({
   return (
     <div className="h-full flex flex-col bg-zinc-950">
       {/* Search */}
-      <div className="px-2 py-1.5 border-b border-zinc-800 shrink-0">
+      <div className="px-2 py-1.5 border-b border-zinc-800 shrink-0 space-y-2">
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500" />
           <input
@@ -125,6 +131,23 @@ export const RecordList = memo(function RecordList({
             placeholder={t('recordlist.filter')}
             className="w-full pl-7 pr-2 py-1 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
           />
+        </div>
+
+        {/* Type Filter */}
+        <div className="flex gap-1">
+          {(['all', 'chat', 'embedding', 'other'] as const).map((type) => (
+            <button
+              key={type}
+              onClick={() => onTypeFilterChange?.(type)}
+              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                typeFilter === type
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
+              }`}
+            >
+              {type === 'all' ? t('common.all') : getEndpointLabel(type)}
+            </button>
+          ))}
         </div>
       </div>
 

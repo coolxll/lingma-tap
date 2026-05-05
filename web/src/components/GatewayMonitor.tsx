@@ -21,6 +21,8 @@ export function GatewayMonitor({
   const [filter, setFilter] = useState('');
   const [selectedRow, setSelectedRow] = useState<{ req: TrafficRecord; resp: TrafficRecord | null } | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [requestViewMode, setRequestViewMode] = useState<'friendly' | 'raw'>('friendly');
+  const [responseViewMode, setResponseViewMode] = useState<'friendly' | 'raw'>('friendly');
   const PAGE_SIZE = 50;
 
   // Filter and Limit to 500
@@ -311,17 +313,43 @@ export function GatewayMonitor({
                       <div className="w-1 h-3 bg-blue-500 rounded-full" />
                       Prompt (Last Message)
                     </span>
+                    <div className="flex bg-zinc-900/50 rounded-lg p-0.5 border border-zinc-800">
+                      <button 
+                        onClick={() => setRequestViewMode('friendly')}
+                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+                          requestViewMode === 'friendly' 
+                            ? 'bg-zinc-800 text-blue-400 shadow-sm' 
+                            : 'text-zinc-500 hover:text-zinc-400'
+                        }`}
+                      >
+                        FRIENDLY
+                      </button>
+                      <button 
+                        onClick={() => setRequestViewMode('raw')}
+                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+                          requestViewMode === 'raw' 
+                            ? 'bg-zinc-800 text-purple-400 shadow-sm' 
+                            : 'text-zinc-500 hover:text-zinc-400'
+                        }`}
+                      >
+                        RAW
+                      </button>
+                    </div>
                   </div>
-                  <div className="bg-zinc-900/30 border border-zinc-800/50 rounded-xl p-4 text-sm text-zinc-300 min-h-[120px] font-sans leading-relaxed">
-                    {(() => {
-                      try {
-                        const body = JSON.parse(selectedRow.req.request_body || '{}');
-                        const lastMsg = body.messages?.slice(-1)[0];
-                        return lastMsg?.content || 'No prompt content';
-                      } catch {
-                        return selectedRow.req.request_body;
-                      }
-                    })()}
+                  <div className="bg-zinc-900/30 border border-zinc-800/50 rounded-xl p-4 text-sm text-zinc-300 min-h-[200px] font-sans leading-relaxed overflow-auto">
+                    {requestViewMode === 'friendly' ? (
+                      (() => {
+                        try {
+                          const body = JSON.parse(selectedRow.req.request_body || '{}');
+                          const lastMsg = body.messages?.slice(-1)[0];
+                          return lastMsg?.content || 'No prompt content';
+                        } catch {
+                          return selectedRow.req.request_body;
+                        }
+                      })()
+                    ) : (
+                      <JsonViewer data={selectedRow.req.request_body || '{}'} />
+                    )}
                   </div>
                 </div>
 
@@ -332,9 +360,42 @@ export function GatewayMonitor({
                       <div className="w-1 h-3 bg-green-500 rounded-full" />
                       Assistant Response
                     </span>
+                    <div className="flex bg-zinc-900/50 rounded-lg p-0.5 border border-zinc-800">
+                      <button 
+                        onClick={() => setResponseViewMode('friendly')}
+                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+                          responseViewMode === 'friendly' 
+                            ? 'bg-zinc-800 text-green-400 shadow-sm' 
+                            : 'text-zinc-500 hover:text-zinc-400'
+                        }`}
+                      >
+                        FRIENDLY
+                      </button>
+                      <button 
+                        onClick={() => setResponseViewMode('raw')}
+                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+                          responseViewMode === 'raw' 
+                            ? 'bg-zinc-800 text-blue-400 shadow-sm' 
+                            : 'text-zinc-500 hover:text-zinc-400'
+                        }`}
+                      >
+                        RAW
+                      </button>
+                    </div>
                   </div>
-                  <div className="bg-zinc-900/30 border border-zinc-800/50 rounded-xl p-4 text-sm text-zinc-200 min-h-[120px] font-sans leading-relaxed whitespace-pre-wrap">
-                    {selectedRow.req.response_body || 'Waiting for response...'}
+                  <div className="bg-zinc-900/30 border border-zinc-800/50 rounded-xl p-4 text-sm text-zinc-200 min-h-[200px] font-sans leading-relaxed overflow-auto">
+                    {responseViewMode === 'friendly' ? (
+                      (() => {
+                        try {
+                          const body = JSON.parse(selectedRow.req.response_body || '{}');
+                          return body.choices?.[0]?.message?.content || body.choices?.[0]?.delta?.content || selectedRow.req.response_body || 'Waiting for response...';
+                        } catch {
+                          return selectedRow.req.response_body || 'Waiting for response...';
+                        }
+                      })()
+                    ) : (
+                      <JsonViewer data={selectedRow.req.response_body || '{}'} />
+                    )}
                   </div>
                 </div>
               </div>

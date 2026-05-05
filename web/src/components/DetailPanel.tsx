@@ -1,8 +1,9 @@
-import { memo } from 'react';
+import { memo, useState, useMemo } from 'react';
 import { TrafficRecord, formatTimestamp, getEndpointLabel } from '@/lib/types';
 import { JsonViewer } from './JsonViewer';
 import { SseEventList } from './SseEventList';
 import { useTranslation } from 'react-i18next';
+import { MessageSquare, Code, User, Bot, Sparkles } from 'lucide-react';
 
 interface DetailPanelProps {
   request: TrafficRecord | null;
@@ -11,6 +12,64 @@ interface DetailPanelProps {
 
 export const DetailPanel = memo(function DetailPanel({ request, response }: DetailPanelProps) {
   const { t } = useTranslation();
+  const [viewMode, setViewMode] = useState<'friendly' | 'standard'>('standard');
+
+  const chatContent = useMemo(() => {
+    if (!request || (request.endpoint_type !== 'chat' && request.endpoint_type !== 'finish')) return null;
+
+    let prompt = '';
+    let completion = '';
+
+    // Extract prompt
+    try {
+      const reqBody = JSON.parse(request.request_body || '{}');
+      if (reqBody.messages && Array.isArray(reqBody.messages)) {
+        const lastMsg = reqBody.messages[reqBody.messages.length - 1];
+        prompt = lastMsg.content || '';
+      } else if (reqBody.prompt) {
+        prompt = reqBody.prompt;
+      }
+    } catch (e) {
+      prompt = request.request_body;
+    }
+
+    // Extract completion
+    if (response) {
+      if (response.is_sse && response.sse_events) {
+        completion = response.sse_events
+          .map((e: any) => {
+            try {
+              if (!e.data || e.data === '[DONE]') return '';
+              const data = JSON.parse(e.data);
+              
+              // Handle nested structure if 'body' exists
+              let target = data;
+              if (data.body && typeof data.body === 'string') {
+                try {
+                  target = JSON.parse(data.body);
+                } catch {
+                  // If body is not JSON, use it as is or fallback
+                }
+              }
+
+              return target.choices?.[0]?.delta?.content || target.choices?.[0]?.text || '';
+            } catch {
+              return '';
+            }
+          })
+          .join('');
+      } else {
+        try {
+          const respBody = JSON.parse(response.response_body || '{}');
+          completion = respBody.choices?.[0]?.message?.content || respBody.choices?.[0]?.text || response.response_body;
+        } catch {
+          completion = response.response_body;
+        }
+      }
+    }
+
+    return { prompt, completion };
+  }, [request, response]);
 
   if (!request) {
     return (
@@ -23,88 +82,150 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
   return (
     <div className="h-full overflow-y-auto bg-zinc-950">
       {/* Summary */}
-      <div className="px-4 py-3 border-b border-zinc-800">
-        <div className="flex items-center gap-2 mb-2">
-          <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-900/50 text-blue-400">
-            {request.method}
-          </span>
-          <span className="text-xs text-zinc-300 font-mono break-all">{request.url}</span>
-          <span className="text-xs text-zinc-600 ml-auto">#{request.index}</span>
+      <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/20">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-900/50 text-blue-400 border border-blue-500/20">
+              {request.method}
+            </span>
+            <span className="text-xs text-zinc-300 font-mono break-all">{request.url}</span>
+          </div>
+          <div className="flex items-center gap-3 text-[10px] text-zinc-500 font-medium">
+            <span>{formatTimestamp(request.ts)}</span>
+            <span className="w-1 h-1 rounded-full bg-zinc-800" />
+            <span className={getEndpointColor(request.endpoint_type)}>{getEndpointLabel(request.endpoint_type)}</span>
+            {request.is_encoded && (
+              <>
+                <span className="w-1 h-1 rounded-full bg-zinc-800" />
+                <span className="text-amber-400">{t('detailpanel.encoded')}</span>
+              </>
+            )}
+            {response && response.status > 0 && (
+              <>
+                <span className="w-1 h-1 rounded-full bg-zinc-800" />
+                <span className={response.status < 400 ? 'text-green-400' : 'text-red-400'}>
+                  {response.status_text || response.status}
+                </span>
+              </>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-4 text-xs text-zinc-500">
-          <span>{formatTimestamp(request.ts)}</span>
-          <span className="text-zinc-600">|</span>
-          <span>{getEndpointLabel(request.endpoint_type)}</span>
-          {request.is_encoded && (
-            <>
-              <span className="text-zinc-600">|</span>
-              <span className="text-amber-400">{t('detailpanel.encoded')}</span>
-            </>
-          )}
-          {response && response.status > 0 && (
-            <>
-              <span className="text-zinc-600">|</span>
-              <span className={response.status < 400 ? 'text-green-400' : 'text-red-400'}>
-                {response.status} {response.status_text}
-              </span>
-            </>
-          )}
-          <span className="text-zinc-600">|</span>
-          <span>{t('detailpanel.session')}: {request.session}</span>
+
+        <div className="flex bg-zinc-900/50 rounded-lg p-0.5 border border-zinc-800">
+          <button
+            onClick={() => setViewMode('friendly')}
+            className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+              viewMode === 'friendly'
+                ? 'bg-zinc-800 text-blue-400 shadow-sm'
+                : 'text-zinc-500 hover:text-zinc-400'
+            }`}
+          >
+            <MessageSquare className="w-3 h-3" />
+            CHAT
+          </button>
+          <button
+            onClick={() => setViewMode('standard')}
+            className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+              viewMode === 'standard'
+                ? 'bg-zinc-800 text-zinc-200 shadow-sm'
+                : 'text-zinc-500 hover:text-zinc-400'
+            }`}
+          >
+            <Code className="w-3 h-3" />
+            STANDARD
+          </button>
         </div>
       </div>
 
-      {/* Request Headers */}
-      {request.request_headers && Object.keys(request.request_headers).length > 0 && (
-        <Section title={t('detailpanel.request_headers')}>
-          <HeadersTable headers={request.request_headers} />
-        </Section>
-      )}
+      {viewMode === 'friendly' && chatContent ? (
+        <div className="p-4 space-y-4">
+          {/* Prompt */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
+              <User className="w-3 h-3" />
+              User Prompt
+            </div>
+            <div className="bg-zinc-900/30 border border-zinc-800/50 rounded-xl p-4 text-sm text-zinc-300 leading-relaxed font-sans shadow-inner whitespace-pre-wrap">
+              {chatContent.prompt || 'No prompt content'}
+            </div>
+          </div>
 
-      {/* Request Body */}
-      <Section title={`${t('detailpanel.request_body')}${request.is_encoded ? ` (${t('detailpanel.request_body_decoded')})` : ''}`}>
-        {request.request_body ? (
-          <JsonViewer data={request.request_body} maxHeight="500px" />
-        ) : (
-          <p className="text-zinc-600 text-xs">{t('detailpanel.empty_body')}</p>
-        )}
-      </Section>
-
-      {/* Raw encoded body (if different from decoded) */}
-      {request.is_encoded && request.request_body_raw && request.request_body_raw !== request.request_body && (
-        <Section title={t('detailpanel.request_body_raw')}>
-          <pre className="p-3 bg-zinc-900 rounded text-xs font-mono text-zinc-400 whitespace-pre-wrap break-all max-h-[200px] overflow-y-auto">
-            {request.request_body_raw.slice(0, 2000)}
-            {request.request_body_raw.length > 2000 ? '...' : ''}
-          </pre>
-        </Section>
-      )}
-
-      {/* Response section */}
-      {response ? (
-        <>
-          {/* Response Headers */}
-          {response.response_headers && Object.keys(response.response_headers).length > 0 && (
-            <Section title={t('detailpanel.response_headers')}>
-              <HeadersTable headers={response.response_headers} />
+          {/* Assistant */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-[10px] font-bold text-blue-400 uppercase tracking-widest">
+                <Bot className="w-3 h-3" />
+                Assistant Response
+              </div>
+              {response?.is_sse && (
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20 text-[9px] font-bold text-purple-400">
+                  <Sparkles className="w-2.5 h-2.5" />
+                  STREAMING
+                </div>
+              )}
+            </div>
+            <div className="bg-blue-500/5 border border-blue-500/10 rounded-xl p-4 text-sm text-zinc-200 leading-relaxed font-sans shadow-inner min-h-[100px] whitespace-pre-wrap">
+              {chatContent.completion || (response ? 'Processing...' : 'Waiting for response...')}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="divide-y divide-zinc-900">
+          {/* Metadata/Headers */}
+          {request.request_headers && Object.keys(request.request_headers).length > 0 && (
+            <Section title={t('detailpanel.request_headers')}>
+              <HeadersTable headers={request.request_headers} />
             </Section>
           )}
 
-          {/* Response Body */}
-          <Section title={t('detailpanel.response_body')}>
-            {response.is_sse && response.sse_events && response.sse_events.length > 0 ? (
-              <SseEventList events={response.sse_events} />
-            ) : response.response_body ? (
-              <JsonViewer data={response.response_body} maxHeight="500px" />
+          {/* Request Body */}
+          <Section title={t('detailpanel.request_body') + (request.is_encoded ? ` (${t('detailpanel.request_body_decoded')})` : '')}>
+            {request.request_body ? (
+              <JsonViewer data={request.request_body} maxHeight="500px" />
             ) : (
               <p className="text-zinc-600 text-xs">{t('detailpanel.empty_body')}</p>
             )}
           </Section>
-        </>
-      ) : (
-        <Section title={t('detailpanel.response')}>
-          <p className="text-zinc-600 text-xs">{t('detailpanel.waiting')}</p>
-        </Section>
+
+          {/* Raw Request Body (if different) */}
+          {request.is_encoded && request.request_body_raw && request.request_body_raw !== request.request_body && (
+            <Section title={t('detailpanel.request_body_raw')}>
+              <JsonViewer data={request.request_body_raw} maxHeight="500px" />
+            </Section>
+          )}
+
+          {/* Response section */}
+          {response ? (
+            <>
+              {/* Response Headers */}
+              {response.response_headers && Object.keys(response.response_headers).length > 0 && (
+                <Section title={t('detailpanel.response_headers')}>
+                  <HeadersTable headers={response.response_headers} />
+                </Section>
+              )}
+
+              {/* SSE Events */}
+              {response.is_sse && response.sse_events && response.sse_events.length > 0 && (
+                <Section title={t('detailpanel.response_body') + ' (SSE Events)'}>
+                  <SseEventList events={response.sse_events} />
+                </Section>
+              )}
+
+              {/* Response Body */}
+              <Section title={t('detailpanel.response_body')}>
+                {response.response_body ? (
+                  <JsonViewer data={response.response_body} maxHeight="500px" />
+                ) : (
+                  <p className="text-zinc-600 text-xs">{t('detailpanel.empty_body')}</p>
+                )}
+              </Section>
+            </>
+          ) : (
+            <Section title={t('detailpanel.response')}>
+              <p className="text-zinc-600 text-xs">{t('detailpanel.waiting')}</p>
+            </Section>
+          )}
+        </div>
       )}
     </div>
   );
@@ -125,16 +246,30 @@ function HeadersTable({ headers }: { headers: Record<string, string> }) {
   const entries = Object.entries(headers);
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-xs">
+      <table className="w-full text-[11px]">
         <tbody>
           {entries.map(([key, value]) => (
-            <tr key={key} className="border-b border-zinc-900">
-              <td className="py-1 pr-3 text-zinc-400 font-medium whitespace-nowrap align-top">{key}</td>
-              <td className="py-1 text-zinc-300 font-mono break-all">{value}</td>
+            <tr key={key} className="border-b border-zinc-900 last:border-0">
+              <td className="py-1.5 pr-4 text-zinc-500 font-bold whitespace-nowrap align-top uppercase tracking-wider">{key}</td>
+              <td className="py-1.5 text-zinc-300 font-mono break-all">{value}</td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
   );
+}
+
+function getEndpointColor(endpoint: string): string {
+  switch (endpoint) {
+    case 'chat':
+    case 'finish':
+      return 'text-blue-400';
+    case 'embedding':
+      return 'text-purple-400';
+    case 'tracking':
+      return 'text-yellow-400';
+    default:
+      return 'text-zinc-500';
+  }
 }
