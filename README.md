@@ -53,6 +53,8 @@ Lingma Tap 是一个专为 Lingma API 设计的数据包可视化与抓取工具
 
 由于本项目目前未加入 Apple Developer Program，因此导出的 DMG 在下载安装后可能会被 macOS 提示“无法打开”或“开发者身份不明”。
 
+![alt text](assets/image.png)
+
 请按照以下步骤操作：
 1. 将应用拖入 **Applications** 目录。
 2. 在 **Applications** 中找到 **Lingma Tap**。
