@@ -59,9 +59,10 @@ Lingma Tap 是一个专为 Lingma API 设计的数据包可视化与抓取工具
 3. **右键点击**应用图标，选择 **打开 (Open)**。
 4. 在弹出的对话框中再次点击 **打开 (Open)**。
 
-或者，你可以在终端中运行以下命令来手动清除隔离标记：
+或者，你可以在终端中运行以下命令来手动清除隔离标记并重新签名：
 ```bash
 xattr -cr /Applications/Lingma\ Tap.app
+codesign --force --deep --sign - /Applications/Lingma\ Tap.app
 ```
 
 ## 许可证
