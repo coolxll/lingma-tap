@@ -5,7 +5,7 @@ Lingma Tap 是一个专为 Lingma API 设计的数据包可视化与抓取工具
 ## 功能特性
 
 - **流量抓取**：内置 MITM (Man-in-the-Middle) 代理，支持拦截和解析 HTTPS 流量。
-- **自动解密**：集成 `QoderEncoding` 逻辑，自动解码 Lingma 特有的 Base64 混淆载荷（当 URL 中包含 `Encode=1` 时）。
+- **自动解密**：集成 `QoderEncoding` 逻辑，自动解码 Lingma 特有的 Base64 混淆载荷（参考并感谢 [qoder2api](https://github.com/cubk1/qoder2api/) 的实现）。
 - **实时监控**：基于 WebSocket 的实时数据流展示。
 - **持久化存储**：使用 SQLite 存储抓取记录，支持历史回溯。
 - **跨平台界面**：基于 Wails v2 + React + TypeScript 构建，提供原生应用体验。
@@ -82,6 +82,11 @@ codesign --force --deep --sign - /Applications/Lingma\ Tap.app
   GATEWAY_DEBUG=1 /Applications/Lingma\ Tap.app/Contents/MacOS/Lingma\ Tap
   ```
 - **UI 容错**：前端集成了全局错误边界（Error Boundary）。如果界面发生崩溃，会显示红色错误页面并自动将堆栈信息记录到上述日志文件中。
+
+## 致谢
+
+- **[qoder2api](https://github.com/cubk1/qoder2api/)**: 感谢该项目提供的 `QoderEncoding` 解码思路，使本项目能够解析 Lingma 的加密数据包。
+- **[cursor-tap](https://github.com/chengazhen/cursor-tap)**: 感谢该项目带来的灵感。
 
 ## 许可证
 
