@@ -65,6 +65,21 @@ xattr -cr /Applications/Lingma\ Tap.app
 codesign --force --deep --sign - /Applications/Lingma\ Tap.app
 ```
 
+## 调试与日志
+
+为了方便排查问题，本项目内置了完善的日志和调试机制：
+
+- **日志文件**：所有后端日志以及前端渲染错误都会实时持久化到 `~/.lingma-tap/app.log`。你可以使用 `tail -f ~/.lingma-tap/app.log` 实时查看。
+- **Debug 模式**：启动时设置环境变量 `GATEWAY_DEBUG=1` 可以开启详细的网关协议调试日志（包括原始 SSE 数据流）：
+  ```bash
+  # 开发模式
+  GATEWAY_DEBUG=1 wails dev
+  
+  # 运行打包后的应用 (macOS)
+  GATEWAY_DEBUG=1 /Applications/Lingma\ Tap.app/Contents/MacOS/Lingma\ Tap
+  ```
+- **UI 容错**：前端集成了全局错误边界（Error Boundary）。如果界面发生崩溃，会显示红色错误页面并自动将堆栈信息记录到上述日志文件中。
+
 ## 许可证
 
 [MIT License](LICENSE) (如果适用)
