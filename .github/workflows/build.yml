@@ -53,7 +53,31 @@ jobs:
       - name: Build Wails App
         shell: bash
         run: |
+          # 确保图标目录存在
+          mkdir -p build/darwin build/windows
+          
+          # macOS: Wails 默认使用 build/appicon.png，但同步一份到 build/darwin/icon.png 更稳妥
+          cp build/appicon.png build/darwin/icon.png || true
+          
+          # Windows: 需要 .ico 文件。如果没有，Wails 会使用默认图标。
+          # 我们在 macOS/Ubuntu 环境下可以用 ImageMagick 生成它
+          if [ "${{ matrix.os }}" == "macos-latest" ] || [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
+            brew install imagemagick || sudo apt-get install -y imagemagick || true
+            magick build/appicon.png -define icon:auto-resize=256,128,64,48,32,16 build/windows/icon.ico || true
+          fi
+
+          # 执行构建
           wails build -platform ${{ matrix.platform }} -clean
+
+      - name: Ad-hoc Sign macOS App
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          APP_BUNDLE=$(ls -d build/bin/*.app | head -n 1)
+          if [ -n "$APP_BUNDLE" ]; then
+            echo "Signing $APP_BUNDLE..."
+            codesign --force --deep --sign - "$APP_BUNDLE"
+          fi
 
       - name: Package Windows
         if: matrix.os == 'windows-latest'

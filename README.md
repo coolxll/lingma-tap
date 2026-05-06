@@ -49,6 +49,21 @@ Lingma Tap 是一个专为 Lingma API 设计的数据包可视化与抓取工具
 - 每次推送代码会自动触发编译。
 - 推送 `v*` 格式的标签（如 `v0.1.0`）会自动创建 GitHub Release，并附带 Windows (zip) 和 macOS (dmg) 的安装包。
 
+## macOS 安装说明
+
+由于本项目目前未加入 Apple Developer Program，因此导出的 DMG 在下载安装后可能会被 macOS 提示“无法打开”或“开发者身份不明”。
+
+请按照以下步骤操作：
+1. 将应用拖入 **Applications** 目录。
+2. 在 **Applications** 中找到 **Lingma Tap**。
+3. **右键点击**应用图标，选择 **打开 (Open)**。
+4. 在弹出的对话框中再次点击 **打开 (Open)**。
+
+或者，你可以在终端中运行以下命令来手动清除隔离标记：
+```bash
+xattr -cr /Applications/Lingma\ Tap.app
+```
+
 ## 许可证
 
 [MIT License](LICENSE) (如果适用)
