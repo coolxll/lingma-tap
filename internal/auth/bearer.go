@@ -154,9 +154,7 @@ func extractPathWithoutAlgo(rawURL string) string {
 		return rawURL
 	}
 	path := u.Path
-	if strings.HasPrefix(path, "/algo") {
-		path = path[len("/algo"):]
-	}
+	path = strings.TrimPrefix(u.Path, "/algo")
 	return path
 }
 
