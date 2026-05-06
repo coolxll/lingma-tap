@@ -66,11 +66,46 @@ func responsesInputToMessages(input any) []map[string]any {
 	case []any:
 		var messages []map[string]any
 		for _, item := range v {
-			if m, ok := item.(map[string]any); ok {
-				msg := map[string]any{"role": "user"}
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			itemType, _ := m["type"].(string)
+			switch itemType {
+			case "function_call":
+				// Convert function_call to assistant message with tool_calls
+				id, _ := m["call_id"].(string)
+				name, _ := m["name"].(string)
+				args, _ := m["arguments"].(string)
+				if id == "" {
+					id = "call_" + newUUID()[:24]
+				}
+				messages = append(messages, map[string]any{
+					"role": "assistant",
+					"content": nil,
+					"tool_calls": []map[string]any{
+						{"id": id, "type": "function", "function": map[string]any{"name": name, "arguments": args}},
+					},
+				})
+			case "function_call_output":
+				// Convert function_call_output to tool message
+				callID, _ := m["call_id"].(string)
+				output, _ := m["output"].(string)
+				messages = append(messages, map[string]any{
+					"role":         "tool",
+					"tool_call_id": callID,
+					"content":      output,
+				})
+			default:
+				// Handle message and other types, respecting the role
+				role := "user"
+				if r, ok := m["role"].(string); ok {
+					role = r
+				}
+				msg := map[string]any{"role": role}
 				if content, ok := m["content"]; ok {
 					msg["content"] = content
-				} else if text, ok := m["text"]; ok {
+				} else if text, ok := m["text"].(string); ok {
 					msg["content"] = text
 				}
 				messages = append(messages, msg)
@@ -116,41 +151,46 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 		flusher.Flush()
 	}
 
-	blockIndex := 0
-	blockStarted := false
+	// State tracking
+	textBlockStarted := false
+	textBlockIndex := -1
+	toolCalls := make(map[int]*toolCallState)
+	toolCallIndices := make(map[string]int) // call_id → output item index
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
 		case "data":
+			// Handle text content
 			if event.Content != "" {
-				if !blockStarted {
+				if !textBlockStarted {
+					textBlockIndex = len(toolCallIndices)
 					// Start a text output block
 					writeSSE(w, "", map[string]any{
 						"type":  "response.output_item.added",
-						"index": blockIndex,
+						"index": textBlockIndex,
 						"item": map[string]any{
 							"id":     "msg_" + newUUID()[:24],
 							"type":   "message",
 							"role":   "assistant",
 							"status": "in_progress",
 							"content": []map[string]any{{
-								"type": "output_text",
+								"type": "text",
 								"text": "",
 							}},
 						},
 					})
 					writeSSE(w, "", map[string]any{
 						"type":       "response.content_part.added",
-						"item_index": blockIndex,
-						"part":       map[string]any{"type": "output_text", "text": ""},
+						"item_index": textBlockIndex,
+						"part":       map[string]any{"type": "text", "text": ""},
 					})
-					blockStarted = true
+					textBlockStarted = true
 				}
 
 				// Stream text delta
 				writeSSE(w, "", map[string]any{
 					"type":       "response.output_text.delta",
-					"item_index": blockIndex,
+					"item_index": textBlockIndex,
 					"delta":      event.Content,
 				})
 				if canFlush {
@@ -158,22 +198,81 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 				}
 			}
 
-			if event.FinishReason != "" {
-				// Finish the text block
-				if blockStarted {
+			// Handle tool calls
+			for _, tc := range event.ToolCalls {
+				state, ok := toolCalls[tc.Index]
+				if !ok {
+					id := tc.ID
+					if id == "" {
+						id = "call_" + newUUID()[:24]
+					}
+					state = &toolCallState{id: id}
+					toolCalls[tc.Index] = state
+				}
+				if tc.ID != "" {
+					state.id = tc.ID
+				}
+				if tc.Name != "" {
+					state.name = tc.Name
+				}
+				state.args.WriteString(tc.Arguments)
+
+				// Emit function_call output item
+				callIndex := len(toolCallIndices)
+				toolCallIndices[state.id] = callIndex
+
+				writeSSE(w, "", map[string]any{
+					"type":  "response.output_item.added",
+					"index": callIndex,
+					"item": map[string]any{
+						"type":      "function_call",
+						"id":        state.id,
+						"name":      state.name,
+						"arguments": state.args.String(),
+						"status":    "in_progress",
+					},
+				})
+
+				// Emit argument delta
+				if tc.Arguments != "" {
 					writeSSE(w, "", map[string]any{
-						"type":       "response.content_part.done",
-						"item_index": blockIndex,
-						"part":       map[string]any{"type": "output_text", "text": ""},
-					})
-					writeSSE(w, "", map[string]any{
-						"type":       "response.output_item.done",
-						"item_index": blockIndex,
+						"type":  "response.function_call_arguments.delta",
+						"item_id": state.id,
+						"delta":   tc.Arguments,
 					})
 				}
 			}
 
+			// Handle finish reason for text block
+			if event.FinishReason != "" && textBlockStarted {
+				writeSSE(w, "", map[string]any{
+					"type":       "response.content_part.done",
+					"item_index": textBlockIndex,
+					"part":       map[string]any{"type": "text", "text": ""},
+				})
+				writeSSE(w, "", map[string]any{
+					"type":       "response.output_item.done",
+					"item_index": textBlockIndex,
+				})
+				textBlockStarted = false
+			}
+
 		case "finish":
+			// Complete any open function calls
+			for _, state := range toolCalls {
+				writeSSE(w, "", map[string]any{
+					"type":  "response.output_item.done",
+					"index": toolCallIndices[state.id],
+					"item": map[string]any{
+						"type":      "function_call",
+						"id":        state.id,
+						"name":      state.name,
+						"arguments": state.args.String(),
+						"status":    "completed",
+					},
+				})
+			}
+
 			// Send response.completed
 			writeSSE(w, "", map[string]any{
 				"type": "response.completed",
@@ -202,10 +301,25 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 
 func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseWriter, respID, modelKey string, body map[string]any) {
 	var fullContent strings.Builder
+	toolCalls := make(map[int]*toolCallState)
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
-		if event.Type == "data" && event.Content != "" {
-			fullContent.WriteString(event.Content)
+		if event.Type == "data" {
+			if event.Content != "" {
+				fullContent.WriteString(event.Content)
+			}
+			for _, tc := range event.ToolCalls {
+				if toolCalls[tc.Index] == nil {
+					toolCalls[tc.Index] = &toolCallState{id: tc.ID}
+				}
+				if tc.ID != "" {
+					toolCalls[tc.Index].id = tc.ID
+				}
+				if tc.Name != "" {
+					toolCalls[tc.Index].name = tc.Name
+				}
+				toolCalls[tc.Index].args.WriteString(tc.Arguments)
+			}
 		}
 		return nil
 	})
@@ -215,21 +329,43 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 		return
 	}
 
-	resp := map[string]any{
-		"id":     respID,
-		"object": "response",
-		"status": "completed",
-		"model":  modelKey,
-		"output": []map[string]any{{
+	// Build output array
+	output := []map[string]any{}
+
+	// Add text message if there's text content
+	if fullContent.Len() > 0 {
+		output = append(output, map[string]any{
 			"id":     "msg_" + newUUID()[:24],
 			"type":   "message",
 			"role":   "assistant",
 			"status": "completed",
 			"content": []map[string]any{{
-				"type": "output_text",
+				"type": "text",
 				"text": fullContent.String(),
 			}},
-		}},
+		})
+	}
+
+	// Add function_call items
+	for _, tc := range toolCalls {
+		if tc.id == "" {
+			tc.id = "call_" + newUUID()[:24]
+		}
+		output = append(output, map[string]any{
+			"type":      "function_call",
+			"id":        tc.id,
+			"name":      tc.name,
+			"arguments": tc.args.String(),
+			"status":    "completed",
+		})
+	}
+
+	resp := map[string]any{
+		"id":     respID,
+		"object": "response",
+		"status": "completed",
+		"model":  modelKey,
+		"output": output,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

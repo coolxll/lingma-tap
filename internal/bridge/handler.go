@@ -9,17 +9,27 @@ import (
 // BridgeHandler serves OpenAI-compatible and Anthropic-compatible API endpoints
 // that translate requests to the Lingma API.
 type BridgeHandler struct {
-	client   *LingmaClient
-	session  *auth.Session
-	recorder func(*proto.GatewayLog)
+	client       *LingmaClient
+	session      *auth.Session
+	recorder     func(*proto.GatewayLog)
+	modelMapping map[string]string
+	defaultModel string
 }
 
 func NewBridgeHandler(session *auth.Session, recorder func(*proto.GatewayLog)) *BridgeHandler {
 	return &BridgeHandler{
-		client:   NewLingmaClient(session),
-		session:  session,
-		recorder: recorder,
+		client:       NewLingmaClient(session),
+		session:      session,
+		recorder:     recorder,
+		modelMapping: make(map[string]string),
+		defaultModel: "dashscope_qmodel",
 	}
+}
+
+// UpdateAnthropicMapping updates the internal model mapping for Anthropic models.
+func (h *BridgeHandler) UpdateAnthropicMapping(mapping map[string]string, defaultModel string) {
+	h.modelMapping = mapping
+	h.defaultModel = defaultModel
 }
 
 // GetModels fetches the model list from the Lingma API with friendly names applied.

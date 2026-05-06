@@ -3,6 +3,8 @@ package proto
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/tmaxmax/go-sse"
 )
 
 // ParseSSEEvents parses a text/event-stream response body into structured SSE events.
@@ -13,39 +15,27 @@ import (
 // The inner "body" field is a JSON string that gets parsed separately.
 func ParseSSEEvents(body string) []SSEEvent {
 	var events []SSEEvent
-	chunks := strings.Split(body, "\n\n")
+	r := strings.NewReader(body)
 
-	for _, chunk := range chunks {
-		chunk = strings.TrimSpace(chunk)
-		if chunk == "" {
-			continue
+	for ev, err := range sse.Read(r, nil) {
+		if err != nil {
+			break
 		}
 
-		var eventType, data string
-		lines := strings.Split(chunk, "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "event:") {
-				eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-			} else if strings.HasPrefix(line, "data:") {
-				data = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			}
-		}
-
-		if data == "" {
+		if len(ev.Data) == 0 {
 			continue
 		}
 
 		evt := SSEEvent{
-			EventType: eventType,
-			Data:      data,
+			EventType: ev.Type,
+			Data:      ev.Data,
 		}
 
 		// Try to parse the outer JSON envelope
 		var envelope struct {
 			Body string `json:"body"`
 		}
-		if err := json.Unmarshal([]byte(data), &envelope); err == nil && envelope.Body != "" {
+		if err := json.Unmarshal([]byte(ev.Data), &envelope); err == nil && envelope.Body != "" {
 			// Try to pretty-print the inner body as JSON
 			var inner interface{}
 			if err := json.Unmarshal([]byte(envelope.Body), &inner); err == nil {

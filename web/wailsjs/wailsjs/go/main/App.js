@@ -14,6 +14,10 @@ export function ClearTraffic() {
   return window['go']['main']['App']['ClearTraffic']();
 }
 
+export function GetAnthropicMapping() {
+  return window['go']['main']['App']['GetAnthropicMapping']();
+}
+
 export function GetCACertPath() {
   return window['go']['main']['App']['GetCACertPath']();
 }
@@ -40,6 +44,10 @@ export function OpenExternal(arg1) {
 
 export function RecentRecords(arg1) {
   return window['go']['main']['App']['RecentRecords'](arg1);
+}
+
+export function SaveAnthropicMapping(arg1, arg2) {
+  return window['go']['main']['App']['SaveAnthropicMapping'](arg1, arg2);
 }
 
 export function SetLogging(arg1) {

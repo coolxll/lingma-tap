@@ -9,19 +9,23 @@ export function ClearRecordsBefore(arg1:number):Promise<number>;
 
 export function ClearTraffic():Promise<void>;
 
+export function GetAnthropicMapping():Promise<Record<string, any>>;
+
 export function GetCACertPath():Promise<string>;
 
-export function GetGatewayLogs(arg1:number,arg2:Array<number>):Promise<Array<proto.GatewayLog>>;
+export function GetGatewayLogs(arg1:number,arg2:number):Promise<Array<proto.GatewayLog>>;
 
 export function GetModels():Promise<Array<bridge.ModelInfo>>;
 
-export function GetRecords(arg1:number,arg2:Array<number>):Promise<Array<proto.Record>>;
+export function GetRecords(arg1:number,arg2:number):Promise<Array<proto.Record>>;
 
 export function GetStatus():Promise<Record<string, any>>;
 
 export function OpenExternal(arg1:string):Promise<void>;
 
 export function RecentRecords(arg1:number):Promise<Array<proto.Record>>;
+
+export function SaveAnthropicMapping(arg1:Record<string, string>,arg2:string):Promise<void>;
 
 export function SetLogging(arg1:boolean):Promise<void>;
 

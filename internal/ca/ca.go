@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/lqqyt2423/go-mitmproxy/cert"
 )
 
 // CA manages a self-signed root CA that can issue per-host leaf certificates.
@@ -24,6 +26,18 @@ type CA struct {
 	caKey     *ecdsa.PrivateKey
 	certMu    sync.Mutex
 	certCache map[string]*tls.Certificate
+}
+
+func (ca *CA) GetGoMitmproxyCA() cert.CA {
+	return ca
+}
+
+func (ca *CA) GetRootCA() *x509.Certificate {
+	return ca.caCert
+}
+
+func (ca *CA) GetCert(commonName string) (*tls.Certificate, error) {
+	return ca.GetOrCreateCert(commonName)
 }
 
 func New(certDir string) (*CA, error) {

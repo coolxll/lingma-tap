@@ -19,8 +19,8 @@ interface WailsWindow extends Window {
         StopProxy: () => Promise<void>;
         StartGateway: (port: number) => Promise<void>;
         StopGateway: () => Promise<void>;
-        GetRecords: (limit: number, offset?: number) => Promise<TrafficRecord[]>;
-        GetGatewayLogs: (limit: number) => Promise<any[]>;
+        GetRecords: (limit: number, offset: number) => Promise<TrafficRecord[]>;
+        GetGatewayLogs: (limit: number, offset: number) => Promise<any[]>;
         ClearRecords: () => Promise<void>;
         ClearRecordsBefore: (days: number) => Promise<number>;
         GetCACertPath: () => Promise<string>;
@@ -140,8 +140,8 @@ export default function App() {
     if (!wails) return;
 
     Promise.all([
-      wails.GetRecords(200),
-      wails.GetGatewayLogs ? wails.GetGatewayLogs(200) : Promise.resolve([]),
+      wails.GetRecords(200, 0),
+      wails.GetGatewayLogs ? wails.GetGatewayLogs(200, 0) : Promise.resolve([]),
     ]).then(([proxyRecs, gatewayLogs]) => {
       const allRecords: TrafficRecord[] = [...(proxyRecs || [])];
 
@@ -220,8 +220,8 @@ export default function App() {
         // On reconnect, fetch latest records including gateway logs
         if (!wails) return;
         Promise.all([
-          wails.GetRecords(200),
-          wails.GetGatewayLogs ? wails.GetGatewayLogs(200) : Promise.resolve([]),
+          wails.GetRecords(200, 0),
+          wails.GetGatewayLogs ? wails.GetGatewayLogs(200, 0) : Promise.resolve([]),
         ]).then(([proxyRecs, gatewayLogs]) => {
           const allRecords: TrafficRecord[] = [...(proxyRecs || [])];
           if (gatewayLogs && gatewayLogs.length > 0) {

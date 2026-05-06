@@ -1,15 +1,16 @@
 package bridge
 
 import (
-	"bufio"
 	"context"
-	crypto_rand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/tmaxmax/go-sse"
 
 	"github.com/coolxll/lingma-tap/internal/auth"
 	"github.com/coolxll/lingma-tap/internal/encoding"
@@ -113,37 +114,28 @@ func (c *LingmaClient) ChatStream(ctx context.Context, body map[string]any, cb f
 }
 
 func (c *LingmaClient) readSSE(body io.Reader, cb func(SSEEvent) error) error {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 256*1024), 256*1024)
+	for ev, err := range sse.Read(body, nil) {
+		if err != nil {
+			return err
+		}
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
+		if len(ev.Data) == 0 {
 			continue
 		}
 
-		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimPrefix(line, "data:")
-			data = strings.TrimSpace(data)
+		if ev.Data == "[DONE]" {
+			return cb(SSEEvent{Type: "done"})
+		}
 
-			if data == "[DONE]" {
-				return cb(SSEEvent{Type: "done"})
-			}
-
-			event, err := c.parseSSEData(data)
-			if err != nil {
-				continue // skip unparseable events
-			}
-			if err := cb(event); err != nil {
-				return err
-			}
-		} else if strings.HasPrefix(line, "event:") {
-			// event:finish is followed by a data: line with timing info
-			// We handle it when we see the data line
+		event, err := c.parseSSEData(ev.Data)
+		if err != nil {
+			continue // skip unparseable events
+		}
+		if err := cb(event); err != nil {
+			return err
 		}
 	}
-
-	return scanner.Err()
+	return nil
 }
 
 func (c *LingmaClient) parseSSEData(data string) (SSEEvent, error) {
@@ -390,9 +382,5 @@ func (c *LingmaClient) FetchModels(ctx context.Context) ([]ModelInfo, error) {
 }
 
 func newUUID() string {
-	b := make([]byte, 16)
-	_, _ = crypto_rand.Read(b)
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+	return uuid.New().String()
 }

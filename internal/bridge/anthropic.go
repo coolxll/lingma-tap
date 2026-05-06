@@ -15,57 +15,93 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var req struct {
-		Model       string           `json:"model"`
-		System      any              `json:"system"` // string or array of content blocks
-		Messages    []map[string]any `json:"messages"`
-		Tools       []map[string]any `json:"tools"`
-		Stream      bool             `json:"stream"`
-		Temperature *float64         `json:"temperature"`
-		MaxTokens   int              `json:"max_tokens"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Decode into map first for sanitization flexibility
+	var rawReq map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&rawReq); err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
 
-	if len(req.Messages) == 0 {
+	// Sanitize request: strip thinking blocks, signatures, billing headers
+	rawReq = sanitizeAnthropicRequest(rawReq)
+
+	// Extract fields
+	model, _ := rawReq["model"].(string)
+
+	var system any
+	if s, ok := rawReq["system"]; ok {
+		system = s
+	}
+
+	var messages []map[string]any
+	if m, ok := rawReq["messages"].([]any); ok {
+		for _, item := range m {
+			if msg, ok := item.(map[string]any); ok {
+				messages = append(messages, msg)
+			}
+		}
+	}
+
+	var tools []map[string]any
+	if t, ok := rawReq["tools"].([]any); ok {
+		for _, item := range t {
+			if tool, ok := item.(map[string]any); ok {
+				tools = append(tools, tool)
+			}
+		}
+	}
+
+	stream, _ := rawReq["stream"].(bool)
+
+	var maxTokens int
+	switch v := rawReq["max_tokens"].(type) {
+	case float64:
+		maxTokens = int(v)
+	case int:
+		maxTokens = v
+	}
+
+	var temperature *float64
+	if t, ok := rawReq["temperature"].(float64); ok {
+		temperature = &t
+	}
+
+	if len(messages) == 0 {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "messages is required")
 		return
 	}
 
-	if req.MaxTokens == 0 {
+	if maxTokens == 0 {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "max_tokens is required")
 		return
 	}
 
-	modelKey := mapAnthropicModelToLingma(req.Model)
+	modelKey := h.mapAnthropicModelToLingma(model)
 
 	// Convert Anthropic messages to OpenAI format
-	messages := anthropicToOpenAIMessages(req.System, req.Messages)
+	messages = anthropicToOpenAIMessages(system, messages)
 
 	// Convert Anthropic tools to OpenAI format
-	var tools []map[string]any
-	if len(req.Tools) > 0 {
-		tools = anthropicToOpenAITools(req.Tools)
+	var openAITools []map[string]any
+	if len(tools) > 0 {
+		openAITools = anthropicToOpenAITools(tools)
 	}
 
 	params := map[string]any{
-		"max_tokens": req.MaxTokens,
+		"max_tokens": maxTokens,
 	}
-	if req.Temperature != nil {
-		params["temperature"] = *req.Temperature
+	if temperature != nil {
+		params["temperature"] = *temperature
 	}
 
-	body := BuildLingmaBody(messages, tools, modelKey, params)
+	body := BuildLingmaBody(messages, openAITools, modelKey, params)
 
 	msgID := "msg_" + newUUID()[:24]
 
-	if req.Stream {
-		h.streamAnthropic(r.Context(), w, msgID, modelKey, body, req.MaxTokens)
+	if stream {
+		h.streamAnthropic(r.Context(), w, msgID, modelKey, body, maxTokens)
 	} else {
-		h.nonStreamAnthropic(r.Context(), w, msgID, modelKey, body, req.MaxTokens)
+		h.nonStreamAnthropic(r.Context(), w, msgID, modelKey, body, maxTokens)
 	}
 }
 
@@ -100,69 +136,117 @@ func anthropicToOpenAIMessages(system any, messages []map[string]any) []map[stri
 		role, _ := msg["role"].(string)
 		content := msg["content"]
 
-		openaiMsg := map[string]any{"role": role}
-
 		switch v := content.(type) {
 		case string:
-			openaiMsg["content"] = v
-			result = append(result, openaiMsg)
+			result = append(result, map[string]any{"role": role, "content": v})
 		case []any:
-			// Array of content blocks
-			var textParts []string
-			var toolResults []map[string]any
-			for _, block := range v {
-				if m, ok := block.(map[string]any); ok {
-					blockType, _ := m["type"].(string)
-					switch blockType {
-					case "text":
-						if text, ok := m["text"].(string); ok {
-							textParts = append(textParts, text)
-						}
-					case "tool_use":
-						// Anthropic tool use → OpenAI assistant tool_calls
-						// This will be handled separately
-					case "tool_result":
-						toolUseID, _ := m["tool_use_id"].(string)
-						var resultContent string
-						if rc, ok := m["content"].(string); ok {
-							resultContent = rc
-						} else if rcBlocks, ok := m["content"].([]any); ok {
-							for _, rb := range rcBlocks {
-								if rm, ok := rb.(map[string]any); ok {
-									if text, ok := rm["text"].(string); ok {
-										resultContent += text
-									}
-								}
-							}
-						}
-						toolResults = append(toolResults, map[string]any{
-							"role":         "tool",
-							"tool_call_id": toolUseID,
-							"content":      resultContent,
-						})
-					}
-				}
-			}
-
-			if len(toolResults) > 0 {
-				// Add text part first if any
+			// Array of content blocks - need to handle text, tool_use, tool_result
+			switch role {
+			case "assistant":
+				result = append(result, convertAssistantMessage(v)...)
+			case "user":
+				textParts, toolResults := convertUserMessage(v)
 				if len(textParts) > 0 {
-					openaiMsg["content"] = strings.Join(textParts, "\n")
-					result = append(result, openaiMsg)
+					result = append(result, map[string]any{"role": "user", "content": strings.Join(textParts, "\n")})
 				}
-				// Add tool results as separate messages
 				result = append(result, toolResults...)
-			} else if len(textParts) > 0 {
-				openaiMsg["content"] = strings.Join(textParts, "\n")
-				result = append(result, openaiMsg)
+			default:
+				// Unknown role, just pass through
+				result = append(result, map[string]any{"role": role, "content": content})
 			}
 		default:
-			openaiMsg["content"] = fmt.Sprintf("%v", content)
-			result = append(result, openaiMsg)
+			result = append(result, map[string]any{"role": role, "content": fmt.Sprintf("%v", content)})
 		}
 	}
 
 	return result
+}
+
+// convertAssistantMessage converts an assistant message with content blocks to OpenAI format.
+// Returns one or more messages (may include tool_calls).
+func convertAssistantMessage(contentBlocks []any) []map[string]any {
+	var textParts []string
+	var toolCalls []map[string]any
+
+	for _, block := range contentBlocks {
+		m, ok := block.(map[string]any)
+		if !ok {
+			continue
+		}
+		blockType, _ := m["type"].(string)
+		switch blockType {
+		case "text":
+			if text, ok := m["text"].(string); ok {
+				textParts = append(textParts, text)
+			}
+		case "tool_use":
+			id, _ := m["id"].(string)
+			name, _ := m["name"].(string)
+			input, _ := m["input"].(map[string]any)
+			inputJSON, _ := json.Marshal(input)
+			toolCalls = append(toolCalls, map[string]any{
+				"id":   id,
+				"type": "function",
+				"function": map[string]any{
+					"name":      name,
+					"arguments": string(inputJSON),
+				},
+			})
+		}
+	}
+
+	// Build the assistant message
+	msg := map[string]any{"role": "assistant"}
+	if len(textParts) > 0 {
+		msg["content"] = strings.Join(textParts, "\n")
+	} else {
+		msg["content"] = nil
+	}
+	if len(toolCalls) > 0 {
+		msg["tool_calls"] = toolCalls
+	}
+	return []map[string]any{msg}
+}
+
+// convertUserMessage converts a user message with content blocks to OpenAI format.
+// Returns text parts and tool result messages separately.
+func convertUserMessage(contentBlocks []any) ([]string, []map[string]any) {
+	var textParts []string
+	var toolResults []map[string]any
+
+	for _, block := range contentBlocks {
+		m, ok := block.(map[string]any)
+		if !ok {
+			continue
+		}
+		blockType, _ := m["type"].(string)
+		switch blockType {
+		case "text":
+			if text, ok := m["text"].(string); ok {
+				textParts = append(textParts, text)
+			}
+		case "tool_result":
+			toolUseID, _ := m["tool_use_id"].(string)
+			var resultContent string
+			if rc, ok := m["content"].(string); ok {
+				resultContent = rc
+			} else if rcBlocks, ok := m["content"].([]any); ok {
+				for _, rb := range rcBlocks {
+					if rm, ok := rb.(map[string]any); ok {
+						if text, ok := rm["text"].(string); ok {
+							resultContent += text
+						}
+					}
+				}
+			}
+			toolResults = append(toolResults, map[string]any{
+				"role":         "tool",
+				"tool_call_id": toolUseID,
+				"content":      resultContent,
+			})
+		}
+	}
+	return textParts, toolResults
 }
 
 func anthropicToOpenAITools(tools []map[string]any) []map[string]any {
@@ -184,17 +268,118 @@ func anthropicToOpenAITools(tools []map[string]any) []map[string]any {
 	return result
 }
 
-func mapAnthropicModelToLingma(model string) string {
-	switch {
-	case strings.Contains(model, "sonnet"):
-		return "dashscope_qwen3_coder"
-	case strings.Contains(model, "haiku"):
-		return "dashscope_qmodel"
-	case strings.Contains(model, "opus"):
-		return "dashscope_qwen_max_latest"
-	default:
-		return "org_auto"
+func (h *BridgeHandler) mapAnthropicModelToLingma(model string) string {
+	for keyword, target := range h.modelMapping {
+		if strings.Contains(strings.ToLower(model), strings.ToLower(keyword)) {
+			return target
+		}
 	}
+	return h.defaultModel
+}
+
+// sanitizeAnthropicRequest removes fields that may cause upstream rejection:
+// - thinking content blocks
+// - signature fields in tool_use blocks
+// - x-anthropic-billing-header in system messages
+// - adjusts budget_tokens if needed
+func sanitizeAnthropicRequest(req map[string]any) map[string]any {
+	// Sanitize system field
+	if system, ok := req["system"]; ok {
+		req["system"] = sanitizeSystem(system)
+	}
+
+	// Sanitize messages: strip thinking blocks, signatures
+	if msgs, ok := req["messages"].([]any); ok {
+		var sanitized []any
+		for _, m := range msgs {
+			if msg, ok := m.(map[string]any); ok {
+				sanitized = append(sanitized, sanitizeMessage(msg))
+			} else {
+				sanitized = append(sanitized, m)
+			}
+		}
+		req["messages"] = sanitized
+	}
+
+	// Adjust budget_tokens if present (cap at 2048 to avoid upstream rejection)
+	if thinking, ok := req["thinking"].(map[string]any); ok {
+		if bt, ok := thinking["budget_tokens"].(float64); ok && bt > 2048 {
+			thinking["budget_tokens"] = float64(2048)
+		}
+	}
+
+	return req
+}
+
+// sanitizeSystem strips x-anthropic-billing-header prefix from system messages
+func sanitizeSystem(system any) any {
+	switch v := system.(type) {
+	case string:
+		return stripBillingHeader(v)
+	case []any:
+		var result []any
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				if m["type"] == "text" {
+					if text, ok := m["text"].(string); ok {
+						m["text"] = stripBillingHeader(text)
+					}
+				}
+				result = append(result, m)
+			} else {
+				result = append(result, item)
+			}
+		}
+		return result
+	default:
+		return system
+	}
+}
+
+// stripBillingHeader removes the x-anthropic-billing-header line from text
+func stripBillingHeader(text string) string {
+	prefix := "x-anthropic-billing-header:"
+	for strings.Contains(text, prefix) {
+		idx := strings.Index(text, prefix)
+		if idx == -1 {
+			break
+		}
+		// Find the end of the line
+		lineEnd := strings.Index(text[idx:], "\n")
+		if lineEnd == -1 {
+			// Header goes to end of text
+			text = text[:idx]
+			break
+		}
+		// Remove the header line
+		text = text[:idx] + text[idx+lineEnd+1:]
+	}
+	return strings.TrimSpace(text)
+}
+
+// sanitizeMessage removes thinking blocks and signature fields from a message
+func sanitizeMessage(msg map[string]any) map[string]any {
+	if content, ok := msg["content"].([]any); ok {
+		var sanitized []any
+		for _, item := range content {
+			if m, ok := item.(map[string]any); ok {
+				blockType, _ := m["type"].(string)
+				switch blockType {
+				case "thinking":
+					// Strip thinking blocks entirely
+					continue
+				case "tool_use":
+					// Strip signature field
+					delete(m, "signature")
+				}
+				sanitized = append(sanitized, m)
+			} else {
+				sanitized = append(sanitized, item)
+			}
+		}
+		msg["content"] = sanitized
+	}
+	return msg
 }
 
 func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, _ int) {
@@ -225,51 +410,123 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 		flusher.Flush()
 	}
 
-	// Start a content block
-	blockIndex := 0
-	blockStarted := false
-	outputTokens := 0
+	// Streaming state
+	state := &anthropicStreamState{
+		toolBlocks: make(map[int]*toolBlockState),
+	}
+	usage := &Usage{}
+	stopReason := "end_turn"
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
 		case "data":
+			// Handle text content
 			if event.Content != "" {
-				if !blockStarted {
-					// Start text content block
+				if !state.textBlockStarted {
 					writeAnthropicSSE(w, "content_block_start", map[string]any{
 						"type":          "content_block_start",
-						"index":         blockIndex,
+						"index":         state.nextIndex(),
 						"content_block": map[string]any{"type": "text", "text": ""},
 					})
-					blockStarted = true
+					state.textBlockStarted = true
+					state.textBlockIndex = state.currentIndex
 				}
 
 				writeAnthropicSSE(w, "content_block_delta", map[string]any{
 					"type":  "content_block_delta",
-					"index": blockIndex,
+					"index": state.textBlockIndex,
 					"delta": map[string]any{
 						"type": "text_delta",
 						"text": event.Content,
 					},
 				})
-				outputTokens++
 				if canFlush {
 					flusher.Flush()
 				}
 			}
 
+			// Handle tool calls
+			for _, tc := range event.ToolCalls {
+				toolState, ok := state.toolBlocks[tc.Index]
+				if !ok {
+					// New tool call
+					id := tc.ID
+					if id == "" {
+						id = "toolu_" + newUUID()[:24]
+					}
+					state.toolBlockCounter++
+					toolState = &toolBlockState{
+						id:         id,
+						name:       tc.Name,
+						blockIndex: state.nextIndex(),
+					}
+					state.toolBlocks[tc.Index] = toolState
+				}
+
+				if tc.Name != "" {
+					toolState.name = tc.Name
+				}
+
+				// Send content_block_start if not started
+				if !toolState.started {
+					startEvent := map[string]any{
+						"type":  "content_block_start",
+						"index": toolState.blockIndex,
+						"content_block": map[string]any{
+							"type": "tool_use",
+							"id":   toolState.id,
+							"name": toolState.name,
+							"input": map[string]any{},
+						},
+					}
+					writeAnthropicSSE(w, "content_block_start", startEvent)
+					toolState.started = true
+				}
+
+				// Send input_json_delta
+				if tc.Arguments != "" {
+					writeAnthropicSSE(w, "content_block_delta", map[string]any{
+						"type":  "content_block_delta",
+						"index": toolState.blockIndex,
+						"delta": map[string]any{
+							"type":        "input_json_delta",
+							"partial_json": tc.Arguments,
+						},
+					})
+					toolState.inputAccum.WriteString(tc.Arguments)
+					if canFlush {
+						flusher.Flush()
+					}
+				}
+			}
+
+			// Handle finish reason
 			if event.FinishReason != "" {
-				if blockStarted {
+				stopReason = mapFinishReason(event.FinishReason)
+			}
+
+			// Handle usage
+			if event.Usage != nil {
+				usage = event.Usage
+			}
+
+		case "finish":
+			// Stop all open content blocks
+			if state.textBlockStarted {
+				writeAnthropicSSE(w, "content_block_stop", map[string]any{
+					"type":  "content_block_stop",
+					"index": state.textBlockIndex,
+				})
+			}
+			for _, ts := range state.toolBlocks {
+				if ts.started {
 					writeAnthropicSSE(w, "content_block_stop", map[string]any{
 						"type":  "content_block_stop",
-						"index": blockIndex,
+						"index": ts.blockIndex,
 					})
 				}
 			}
 
-		case "finish":
-			// Determine stop reason
-			stopReason := "end_turn"
 			// message_delta with usage
 			writeAnthropicSSE(w, "message_delta", map[string]any{
 				"type": "message_delta",
@@ -278,7 +535,7 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 					"stop_sequence": nil,
 				},
 				"usage": map[string]any{
-					"output_tokens": outputTokens,
+					"output_tokens": usage.CompletionTokens,
 				},
 			})
 			writeAnthropicSSE(w, "message_stop", map[string]any{
@@ -305,14 +562,72 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	}
 }
 
+// anthropicStreamState tracks the state of an Anthropic streaming response
+type anthropicStreamState struct {
+	textBlockStarted  bool
+	textBlockIndex    int
+	toolBlockCounter int
+	currentIndex     int // Tracks the next content block index
+	toolBlocks       map[int]*toolBlockState // key: OpenAI tool call index
+	usage            *Usage
+}
+
+type toolBlockState struct {
+	id         string
+	name       string
+	inputAccum strings.Builder
+	started    bool
+	blockIndex int
+}
+
+// nextIndex returns the next content block index and increments the counter
+func (s *anthropicStreamState) nextIndex() int {
+	idx := s.currentIndex
+	s.currentIndex++
+	return idx
+}
+
+// mapFinishReason converts OpenAI finish reasons to Anthropic stop reasons
+func mapFinishReason(reason string) string {
+	switch reason {
+	case "stop":
+		return "end_turn"
+	case "length":
+		return "max_tokens"
+	case "tool_calls":
+		return "tool_use"
+	case "content_filter":
+		return "stop_sequence"
+	default:
+		return "end_turn"
+	}
+}
+
 func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, _ int) {
 	var fullContent strings.Builder
-	outputTokens := 0
+	var usage Usage
+	toolCalls := make(map[int]*toolCallState)
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
-		if event.Type == "data" && event.Content != "" {
-			fullContent.WriteString(event.Content)
-			outputTokens++
+		if event.Type == "data" {
+			if event.Content != "" {
+				fullContent.WriteString(event.Content)
+			}
+			for _, tc := range event.ToolCalls {
+				if toolCalls[tc.Index] == nil {
+					toolCalls[tc.Index] = &toolCallState{id: tc.ID}
+				}
+				if tc.ID != "" {
+					toolCalls[tc.Index].id = tc.ID
+				}
+				if tc.Name != "" {
+					toolCalls[tc.Index].name = tc.Name
+				}
+				toolCalls[tc.Index].args.WriteString(tc.Arguments)
+			}
+			if event.Usage != nil {
+				usage = *event.Usage
+			}
 		}
 		return nil
 	})
@@ -322,20 +637,56 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 		return
 	}
 
+	// Build content array
+	var content []map[string]any
+
+	// Add text content if any
+	if fullContent.Len() > 0 {
+		content = append(content, map[string]any{
+			"type": "text",
+			"text": fullContent.String(),
+		})
+	}
+
+	// Add tool_use content blocks
+	for _, tc := range toolCalls {
+		if tc.id == "" {
+			tc.id = "toolu_" + newUUID()[:24]
+		}
+		var input map[string]any
+		if tc.args.Len() > 0 {
+			if err := json.Unmarshal([]byte(tc.args.String()), &input); err != nil {
+				input = map[string]any{}
+			}
+		} else {
+			input = map[string]any{}
+		}
+		content = append(content, map[string]any{
+			"type": "tool_use",
+			"id":   tc.id,
+			"name": tc.name,
+			"input": input,
+		})
+	}
+
+	// Determine stop reason
+	stopReason := "end_turn"
+	// If we have tool calls, the stop reason should be tool_use
+	if len(toolCalls) > 0 {
+		stopReason = "tool_use"
+	}
+
 	resp := map[string]any{
 		"id":            msgID,
 		"type":          "message",
 		"role":          "assistant",
 		"model":         modelKey,
-		"stop_reason":   "end_turn",
+		"stop_reason":   stopReason,
 		"stop_sequence": nil,
-		"content": []map[string]any{{
-			"type": "text",
-			"text": fullContent.String(),
-		}},
+		"content":       content,
 		"usage": map[string]any{
-			"input_tokens":  0,
-			"output_tokens": outputTokens,
+			"input_tokens":  usage.PromptTokens,
+			"output_tokens": usage.CompletionTokens,
 		},
 	}
 

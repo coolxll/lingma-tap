@@ -2,17 +2,27 @@ package storage
 
 import (
 	"database/sql"
+	"embed"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
 
 	"github.com/coolxll/lingma-tap/internal/proto"
+	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
+
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/sqlite"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
 type DB struct {
-	db      *sql.DB
+	db      *sqlx.DB
 	writeMu sync.Mutex
 }
 
@@ -24,7 +34,7 @@ func Open(path string) (*DB, error) {
 	db.SetMaxOpenConns(8)
 	db.SetMaxIdleConns(4)
 
-	d := &DB{db: db}
+	d := &DB{db: sqlx.NewDb(db, "sqlite")}
 	if err := d.migrate(); err != nil {
 		db.Close()
 		return nil, err
@@ -37,9 +47,9 @@ func (d *DB) Close() error {
 }
 
 func (d *DB) migrate() error {
-	// 1. Migrate legacy 'records' table if it exists
+	// 1. Migrate legacy 'records' table if it exists (legacy compatibility)
 	var count int
-	_ = d.db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='records'").Scan(&count)
+	_ = d.db.Get(&count, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='records'")
 	if count > 0 {
 		log.Println("[sqlite] Migrating 'records' table to 'proxy_records'...")
 		_, err := d.db.Exec("ALTER TABLE records RENAME TO proxy_records")
@@ -52,77 +62,27 @@ func (d *DB) migrate() error {
 		}
 	}
 
-	_, err := d.db.Exec(`
-		CREATE TABLE IF NOT EXISTS proxy_records (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			ts         TEXT NOT NULL,
-			session    TEXT NOT NULL,
-			idx        INTEGER NOT NULL,
-			direction  TEXT NOT NULL,
-			method     TEXT,
-			url        TEXT,
-			host       TEXT,
-			path       TEXT,
-			is_encoded INTEGER DEFAULT 0,
-			endpoint_type TEXT,
-			req_headers_json TEXT,
-			req_body   TEXT,
-			req_body_raw TEXT,
-			req_mime   TEXT,
-			req_size   INTEGER DEFAULT 0,
-			status     INTEGER,
-			status_text TEXT,
-			resp_headers_json TEXT,
-			resp_body  TEXT,
-			resp_mime  TEXT,
-			resp_size  INTEGER DEFAULT 0,
-			is_sse     INTEGER DEFAULT 0,
-			sse_events_json TEXT,
-			error      TEXT,
-			source     TEXT DEFAULT 'proxy',
-			raw_json   TEXT NOT NULL,
-			UNIQUE(session, idx)
-		);
-		CREATE INDEX IF NOT EXISTS idx_proxy_records_session ON proxy_records(session, idx);
-		CREATE INDEX IF NOT EXISTS idx_proxy_records_ts ON proxy_records(ts);
+	// 2. Run standard migrations using golang-migrate
+	sourceDriver, err := iofs.New(migrationsFS, "migrations")
+	if err != nil {
+		return fmt.Errorf("create migration source: %w", err)
+	}
 
-		CREATE TABLE IF NOT EXISTS sessions (
-			id           TEXT PRIMARY KEY,
-			host         TEXT,
-			path         TEXT,
-			endpoint_type TEXT,
-			record_count INTEGER DEFAULT 0,
-			first_ts     TEXT,
-			last_ts      TEXT,
-			req_size     INTEGER DEFAULT 0,
-			resp_size    INTEGER DEFAULT 0,
-			preview      TEXT
-		);
-		CREATE INDEX IF NOT EXISTS idx_sessions_last_ts ON sessions(last_ts);
+	dbDriver, err := sqlite.WithInstance(d.db.DB, &sqlite.Config{})
+	if err != nil {
+		return fmt.Errorf("create migration db driver: %w", err)
+	}
 
-		CREATE TABLE IF NOT EXISTS gateway_logs (
-			id            INTEGER PRIMARY KEY AUTOINCREMENT,
-			ts            TEXT NOT NULL,
-			session       TEXT NOT NULL,
-			model         TEXT,
-			method        TEXT,
-			path          TEXT,
-			request_body  TEXT,
-			response_body TEXT,
-			input_tokens  INTEGER DEFAULT 0,
-			output_tokens INTEGER DEFAULT 0,
-			status        INTEGER,
-			latency       INTEGER, -- in milliseconds
-			error         TEXT,
-			is_sse        INTEGER DEFAULT 0,
-			sse_events_json TEXT,
-			finish_reason TEXT,
-			UNIQUE(session)
-		);
-		CREATE INDEX IF NOT EXISTS idx_gateway_logs_ts ON gateway_logs(ts);
-		CREATE INDEX IF NOT EXISTS idx_gateway_logs_model ON gateway_logs(model);
-	`)
-	return err
+	m, err := migrate.NewWithInstance("iofs", sourceDriver, "sqlite", dbDriver)
+	if err != nil {
+		return fmt.Errorf("create migration instance: %w", err)
+	}
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("run migrations: %w", err)
+	}
+
+	return nil
 }
 
 // SaveRecord persists a record and upserts its session aggregate.
@@ -130,37 +90,36 @@ func (d *DB) SaveRecord(rec *proto.Record) error {
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
 
-	tx, err := d.db.Begin()
+	// Prepare helper fields
+	reqHeadersJSON, _ := json.Marshal(rec.ReqHeaders)
+	respHeadersJSON, _ := json.Marshal(rec.RespHeaders)
+	sseEventsJSON, _ := json.Marshal(rec.SSEEvents)
+
+	rec.ReqHeadersJSON = string(reqHeadersJSON)
+	rec.RespHeadersJSON = string(respHeadersJSON)
+	rec.SSEEventsJSON = string(sseEventsJSON)
+	rec.RawJSON = string(rec.ToJSON())
+
+	tx, err := d.db.Beginx()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	rawJSON := rec.ToJSON()
-
-	reqHeadersJSON, _ := json.Marshal(rec.ReqHeaders)
-	respHeadersJSON, _ := json.Marshal(rec.RespHeaders)
-	sseEventsJSON, _ := json.Marshal(rec.SSEEvents)
-
-	_, err = tx.Exec(`
-		INSERT INTO proxy_records (ts, session, idx, direction, method, url, host, path, is_encoded, endpoint_type,
-			req_headers_json, req_body, req_body_raw, req_mime, req_size,
+	// Insert record
+	_, err = tx.NamedExec(`
+		INSERT INTO proxy_records (
+			ts, session, idx, direction, method, url, host, path, is_encoded,
+			endpoint_type, req_headers_json, req_body, req_body_raw, req_mime, req_size,
 			status, status_text, resp_headers_json, resp_body, resp_mime, resp_size,
-			is_sse, sse_events_json, error, source, raw_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(session, idx) DO UPDATE SET
-			status = excluded.status, status_text = excluded.status_text,
-			resp_headers_json = excluded.resp_headers_json, resp_body = excluded.resp_body,
-			resp_mime = excluded.resp_mime, resp_size = excluded.resp_size,
-			is_sse = excluded.is_sse, sse_events_json = excluded.sse_events_json,
-			raw_json = excluded.raw_json
-	`,
-		rec.Ts, rec.Session, rec.Index, rec.Direction, rec.Method, rec.URL, rec.Host, rec.Path,
-		boolToInt(rec.IsEncoded), rec.EndpointType,
-		string(reqHeadersJSON), rec.ReqBody, rec.ReqBodyRaw, rec.ReqMime, rec.ReqSize,
-		rec.Status, rec.StatusText, string(respHeadersJSON), rec.RespBody, rec.RespMime, rec.RespSize,
-		boolToInt(rec.IsSSE), string(sseEventsJSON), rec.Error, rec.Source, string(rawJSON),
-	)
+			is_sse, sse_events_json, error, source, raw_json
+		) VALUES (
+			:ts, :session, :idx, :direction, :method, :url, :host, :path, :is_encoded,
+			:endpoint_type, :req_headers_json, :req_body, :req_body_raw, :req_mime, :req_size,
+			:status, :status_text, :resp_headers_json, :resp_body, :resp_mime, :resp_size,
+			:is_sse, :sse_events_json, :error, :source, :raw_json
+		)
+	`, rec)
 	if err != nil {
 		return err
 	}
@@ -192,20 +151,14 @@ func (d *DB) RecentRecords(limit int, offset ...int) ([]proto.Record, error) {
 		off = offset[0]
 	}
 
-	rows, err := d.db.Query(`
-		SELECT raw_json FROM proxy_records ORDER BY id DESC LIMIT ? OFFSET ?
-	`, limit, off)
+	var raws []string
+	err := d.db.Select(&raws, "SELECT raw_json FROM proxy_records ORDER BY id DESC LIMIT ? OFFSET ?", limit, off)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var records []proto.Record
-	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
-			continue
-		}
+	for _, raw := range raws {
 		var rec proto.Record
 		if err := json.Unmarshal([]byte(raw), &rec); err != nil {
 			continue
@@ -221,7 +174,7 @@ func (d *DB) ClearTraffic() error {
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
 
-	tx, err := d.db.Begin()
+	tx, err := d.db.Beginx()
 	if err != nil {
 		return err
 	}
@@ -239,7 +192,7 @@ func (d *DB) ClearTrafficBefore(beforeDate string) (int, error) {
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
 
-	tx, err := d.db.Begin()
+	tx, err := d.db.Beginx()
 	if err != nil {
 		return 0, err
 	}
@@ -271,32 +224,15 @@ func (d *DB) ClearTrafficBefore(beforeDate string) (int, error) {
 
 // ListSessions returns sessions ordered by last_ts descending.
 func (d *DB) ListSessions(limit int) ([]proto.Session, error) {
-	rows, err := d.db.Query(`
+	var sessions []proto.Session
+	err := d.db.Select(&sessions, `
 		SELECT id, host, path, endpoint_type, record_count, first_ts, last_ts, req_size, resp_size, preview
 		FROM sessions ORDER BY last_ts DESC LIMIT ?
 	`, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var sessions []proto.Session
-	for rows.Next() {
-		var s proto.Session
-		if err := rows.Scan(&s.ID, &s.Host, &s.Path, &s.EndpointType,
-			&s.RecordCount, &s.FirstTs, &s.LastTs, &s.ReqSize, &s.RespSize, &s.Preview); err != nil {
-			continue
-		}
-		sessions = append(sessions, s)
-	}
 	return sessions, nil
-}
-
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 func previewText(rec *proto.Record) string {
@@ -313,14 +249,14 @@ func previewText(rec *proto.Record) string {
 // RecordCount returns the total number of records.
 func (d *DB) RecordCount() int {
 	var count int
-	d.db.QueryRow("SELECT COUNT(*) FROM proxy_records").Scan(&count)
+	_ = d.db.Get(&count, "SELECT COUNT(*) FROM proxy_records")
 	return count
 }
 
 // SessionCount returns the total number of sessions.
 func (d *DB) SessionCount() int {
 	var count int
-	d.db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&count)
+	_ = d.db.Get(&count, "SELECT COUNT(*) FROM sessions")
 	return count
 }
 
@@ -335,10 +271,10 @@ type StorageStats struct {
 // Stats returns storage statistics.
 func (d *DB) Stats() StorageStats {
 	var s StorageStats
-	d.db.QueryRow("SELECT COUNT(*) FROM proxy_records").Scan(&s.Records)
-	d.db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&s.Sessions)
-	d.db.QueryRow("SELECT MIN(ts) FROM proxy_records").Scan(&s.OldestTs)
-	d.db.QueryRow("SELECT MAX(ts) FROM proxy_records").Scan(&s.NewestTs)
+	_ = d.db.Get(&s.Records, "SELECT COUNT(*) FROM proxy_records")
+	_ = d.db.Get(&s.Sessions, "SELECT COUNT(*) FROM sessions")
+	_ = d.db.Get(&s.OldestTs, "SELECT MIN(ts) FROM proxy_records")
+	_ = d.db.Get(&s.NewestTs, "SELECT MAX(ts) FROM proxy_records")
 	return s
 }
 
@@ -361,11 +297,13 @@ func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
 	defer d.writeMu.Unlock()
 
 	sseEventsJSON, _ := json.Marshal(log.SSEEvents)
+	log.SSEEventsJSON = string(sseEventsJSON)
 
-	_, err := d.db.Exec(`
+	_, err := d.db.NamedExec(`
 		INSERT INTO gateway_logs (ts, session, model, method, path, request_body, response_body,
 			input_tokens, output_tokens, status, latency, error, is_sse, sse_events_json, finish_reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (:ts, :session, :model, :method, :path, :request_body, :response_body,
+			:input_tokens, :output_tokens, :status, :latency, :error, :is_sse, :sse_events_json, :finish_reason)
 		ON CONFLICT(session) DO UPDATE SET
 			response_body = excluded.response_body,
 			output_tokens = excluded.output_tokens,
@@ -375,11 +313,7 @@ func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
 			is_sse = excluded.is_sse,
 			sse_events_json = excluded.sse_events_json,
 			finish_reason = excluded.finish_reason
-	`,
-		log.Ts, log.Session, log.Model, log.Method, log.Path, log.RequestBody, log.ResponseBody,
-		log.InputTokens, log.OutputTokens, log.Status, log.Latency, log.Error,
-		boolToInt(log.IsSSE), string(sseEventsJSON), log.FinishReason,
-	)
+	`, log)
 	return err
 }
 
@@ -390,7 +324,8 @@ func (d *DB) RecentGatewayLogs(limit int, offset ...int) ([]proto.GatewayLog, er
 		off = offset[0]
 	}
 
-	rows, err := d.db.Query(`
+	var logs []proto.GatewayLog
+	err := d.db.Select(&logs, `
 		SELECT id, ts, session, model, method, path, request_body, response_body,
 			input_tokens, output_tokens, status, latency, error, is_sse, sse_events_json, finish_reason
 		FROM gateway_logs ORDER BY id DESC LIMIT ? OFFSET ?
@@ -398,22 +333,31 @@ func (d *DB) RecentGatewayLogs(limit int, offset ...int) ([]proto.GatewayLog, er
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var logs []proto.GatewayLog
-	for rows.Next() {
-		var l proto.GatewayLog
-		var sseJSON string
-		if err := rows.Scan(&l.ID, &l.Ts, &l.Session, &l.Model, &l.Method, &l.Path,
-			&l.RequestBody, &l.ResponseBody, &l.InputTokens, &l.OutputTokens,
-			&l.Status, &l.Latency, &l.Error, &l.IsSSE, &sseJSON, &l.FinishReason); err != nil {
-			continue
-		}
-		json.Unmarshal([]byte(sseJSON), &l.SSEEvents)
-		logs = append(logs, l)
+	for i := range logs {
+		json.Unmarshal([]byte(logs[i].SSEEventsJSON), &logs[i].SSEEvents)
 	}
 
 	return logs, nil
+}
+
+// GetSetting retrieves a setting value by key.
+func (d *DB) GetSetting(key string) (string, error) {
+	var value string
+	err := d.db.Get(&value, "SELECT value FROM settings WHERE key = ?", key)
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+// SaveSetting persists a setting value.
+func (d *DB) SaveSetting(key, value string) error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	_, err := d.db.Exec("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", key, value)
+	return err
 }
 
 // Now returns the current time in RFC3339Nano format.

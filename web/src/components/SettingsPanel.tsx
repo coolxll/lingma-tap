@@ -10,6 +10,8 @@ interface WailsWindow extends Window {
         GetModels: () => Promise<any[]>;
         ClearRecords: () => Promise<void>;
         ClearRecordsBefore: (days: number) => Promise<number>;
+        GetAnthropicMapping: () => Promise<any>;
+        SaveAnthropicMapping: (mapping: Record<string, string>, defaultModel: string) => Promise<void>;
       };
     };
   };
@@ -68,6 +70,9 @@ export function SettingsPanel({
   const [clearDays, setClearDays] = useState(30);
   const [clearMsg, setClearMsg] = useState('');
   const [clearLoading, setClearLoading] = useState(false);
+  const [anthropicMapping, setAnthropicMapping] = useState<Record<string, string>>({});
+  const [anthropicDefault, setAnthropicDefault] = useState('dashscope_qmodel');
+  const [savingMapping, setSavingMapping] = useState(false);
 
   const ENDPOINTS = [
     { method: 'GET', path: '/v1/models', desc: t('settings.models') },
@@ -99,9 +104,60 @@ export function SettingsPanel({
     }
   }, []);
 
+  const fetchAnthropicMapping = useCallback(async () => {
+    try {
+      const w = (window as unknown as WailsWindow).go;
+      const result = await w?.main?.App?.GetAnthropicMapping();
+      if (result) {
+        setAnthropicMapping(result.mapping || {});
+        setAnthropicDefault(result.default_model || 'dashscope_qmodel');
+      }
+    } catch (err) {
+      console.error('Failed to fetch Anthropic mapping', err);
+    }
+  }, []);
+
   useEffect(() => {
     fetchModels();
-  }, [fetchModels]);
+    fetchAnthropicMapping();
+  }, [fetchModels, fetchAnthropicMapping]);
+
+  const handleSaveMapping = async () => {
+    setSavingMapping(true);
+    try {
+      const w = (window as unknown as WailsWindow).go;
+      await w?.main?.App?.SaveAnthropicMapping(anthropicMapping, anthropicDefault);
+      setClearMsg(t('settings.mapping_saved'));
+      setTimeout(() => setClearMsg(''), 3000);
+    } catch (err) {
+      setClearMsg(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setSavingMapping(false);
+    }
+  };
+
+  const addMappingItem = () => {
+    setAnthropicMapping({ ...anthropicMapping, [`new_keyword_${Object.keys(anthropicMapping).length}`]: 'dashscope_qmodel' });
+  };
+
+  const updateMappingKey = (oldKey: string, newKey: string) => {
+    if (oldKey === newKey) return;
+    const newMapping = { ...anthropicMapping };
+    const value = newMapping[oldKey];
+    delete newMapping[oldKey];
+    newMapping[newKey] = value;
+    setAnthropicMapping(newMapping);
+  };
+
+  const updateMappingValue = (key: string, newValue: string) => {
+    setAnthropicMapping({ ...anthropicMapping, [key]: newValue });
+  };
+
+  const removeMappingItem = (key: string) => {
+    const newMapping = { ...anthropicMapping };
+    delete newMapping[key];
+    setAnthropicMapping(newMapping);
+  };
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -339,6 +395,98 @@ export function SettingsPanel({
                 </div>
               );
             })}
+          </div>
+        </section>
+
+        {/* Anthropic Mapping */}
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-200">{t('settings.anthropic_mapping')}</h2>
+              <p className="text-[10px] text-zinc-500">{t('settings.anthropic_mapping_hint')}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={addMappingItem}
+                className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-[10px] font-bold transition-colors"
+              >
+                {t('settings.add_mapping')}
+              </button>
+              <button
+                onClick={handleSaveMapping}
+                disabled={savingMapping}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-[10px] font-bold transition-colors"
+              >
+                {t('settings.save_mapping')}
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-zinc-900/50 rounded-xl border border-zinc-800 overflow-hidden">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-zinc-800 bg-zinc-900/80">
+                  <th className="text-left px-4 py-3 text-zinc-400 font-medium w-1/3">{t('settings.keyword')}</th>
+                  <th className="text-left px-4 py-3 text-zinc-400 font-medium">{t('settings.target_model')}</th>
+                  <th className="w-10"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-800/50">
+                {Object.entries(anthropicMapping).map(([keyword, target]) => (
+                  <tr key={keyword} className="hover:bg-zinc-800/30 group">
+                    <td className="px-4 py-2">
+                      <input
+                        type="text"
+                        defaultValue={keyword}
+                        onBlur={(e) => updateMappingKey(keyword, e.target.value)}
+                        className="w-full bg-transparent border-none focus:ring-0 text-zinc-200 font-mono text-xs placeholder-zinc-700"
+                        placeholder="e.g. sonnet"
+                      />
+                    </td>
+                    <td className="px-4 py-2">
+                      <select
+                        value={target}
+                        onChange={(e) => updateMappingValue(keyword, e.target.value)}
+                        className="w-full bg-transparent border-none focus:ring-0 text-zinc-300 text-xs appearance-none cursor-pointer"
+                      >
+                        {models.map(m => (
+                          <option key={m.id} value={m.id} className="bg-zinc-900 text-zinc-200">{m.display_name || m.id}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-2">
+                      <button
+                        onClick={() => removeMappingItem(keyword)}
+                        className="p-1 text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                
+                {/* Fallback Model */}
+                <tr className="bg-zinc-900/30 border-t border-zinc-800">
+                  <td className="px-4 py-3 italic text-zinc-500">
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-bold text-zinc-400">{t('settings.anthropic_fallback')}</span>
+                      <span className="text-[9px] opacity-60">{t('settings.anthropic_fallback_hint')}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3" colSpan={2}>
+                    <select
+                      value={anthropicDefault}
+                      onChange={(e) => setAnthropicDefault(e.target.value)}
+                      className="w-full bg-transparent border-none focus:ring-0 text-zinc-200 text-xs font-bold appearance-none cursor-pointer"
+                    >
+                      {models.map(m => (
+                        <option key={m.id} value={m.id} className="bg-zinc-900 text-zinc-200">{m.display_name || m.id}</option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </section>
         {/* Data Management */}

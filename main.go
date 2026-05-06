@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -125,6 +126,24 @@ func (a *App) startup(ctx context.Context) {
 		})
 		bridgeHandler = a.bridgeHandlerField
 		log.Printf("[app] Bridge initialized for user %s", creds.Name)
+
+		// Load Anthropic model mapping from settings
+		mappingJSON, _ := a.db.GetSetting("anthropic_model_mapping")
+		defaultModel, _ := a.db.GetSetting("default_anthropic_model")
+		if mappingJSON != "" {
+			var mapping map[string]string
+			if err := json.Unmarshal([]byte(mappingJSON), &mapping); err == nil {
+				a.bridgeHandlerField.UpdateAnthropicMapping(mapping, defaultModel)
+			}
+		} else {
+			// Fallback to hardcoded defaults if DB migration didn't run or something
+			defaults := map[string]string{
+				"sonnet": "dashscope_qwen3_coder",
+				"haiku":  "dashscope_qmodel",
+				"opus":   "dashscope_qwen_max_latest",
+			}
+			a.bridgeHandlerField.UpdateAnthropicMapping(defaults, "dashscope_qmodel")
+		}
 	}
 
 	handler := api.NewHandler(a.hub, a, bridgeHandler)
@@ -248,35 +267,27 @@ func (a *App) StopGateway() {
 	}
 }
 
-// GetRecords returns recent proxy traffic records, optionally skipping the first `offset` records.
-func (a *App) GetRecords(limit int, offset ...int) []proto.Record {
+// GetRecords returns recent proxy traffic records, skipping the first `offset` records.
+func (a *App) GetRecords(limit int, offset int) []proto.Record {
 	if a.db == nil {
 		return nil
 	}
 	if limit <= 0 {
 		limit = 500
 	}
-	off := 0
-	if len(offset) > 0 {
-		off = offset[0]
-	}
-	records, _ := a.db.RecentRecords(limit, off)
+	records, _ := a.db.RecentRecords(limit, offset)
 	return records
 }
 
-// GetGatewayLogs returns recent AI Gateway logs, optionally skipping the first `offset` records.
-func (a *App) GetGatewayLogs(limit int, offset ...int) []proto.GatewayLog {
+// GetGatewayLogs returns recent AI Gateway logs, skipping the first `offset` records.
+func (a *App) GetGatewayLogs(limit int, offset int) []proto.GatewayLog {
 	if a.db == nil {
 		return nil
 	}
 	if limit <= 0 {
 		limit = 500
 	}
-	off := 0
-	if len(offset) > 0 {
-		off = offset[0]
-	}
-	logs, _ := a.db.RecentGatewayLogs(limit, off)
+	logs, _ := a.db.RecentGatewayLogs(limit, offset)
 	return logs
 }
 
@@ -340,6 +351,44 @@ func (a *App) GetModels() ([]bridge.ModelInfo, error) {
 // OpenExternal opens a URL in the default browser.
 func (a *App) OpenExternal(url string) {
 	runtime.BrowserOpenURL(a.ctx, url)
+}
+
+// GetAnthropicMapping returns the current Anthropic model mapping.
+func (a *App) GetAnthropicMapping() map[string]interface{} {
+	if a.db == nil {
+		return nil
+	}
+	mappingJSON, _ := a.db.GetSetting("anthropic_model_mapping")
+	defaultModel, _ := a.db.GetSetting("default_anthropic_model")
+
+	var mapping map[string]string
+	if mappingJSON != "" {
+		json.Unmarshal([]byte(mappingJSON), &mapping)
+	}
+
+	return map[string]interface{}{
+		"mapping":       mapping,
+		"default_model": defaultModel,
+	}
+}
+
+// SaveAnthropicMapping saves the Anthropic model mapping.
+func (a *App) SaveAnthropicMapping(mapping map[string]string, defaultModel string) error {
+	if a.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	mappingBytes, _ := json.Marshal(mapping)
+	if err := a.db.SaveSetting("anthropic_model_mapping", string(mappingBytes)); err != nil {
+		return err
+	}
+	if err := a.db.SaveSetting("default_anthropic_model", defaultModel); err != nil {
+		return err
+	}
+
+	if a.bridgeHandlerField != nil {
+		a.bridgeHandlerField.UpdateAnthropicMapping(mapping, defaultModel)
+	}
+	return nil
 }
 
 // Implement api.RecordStore interface
