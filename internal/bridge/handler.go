@@ -6,6 +6,9 @@ import (
 	"github.com/coolxll/lingma-tap/internal/proto"
 )
 
+// MaxTokensLimit is the maximum tokens allowed to avoid upstream rejection.
+const MaxTokensLimit = 16384
+
 // BridgeHandler serves OpenAI-compatible and Anthropic-compatible API endpoints
 // that translate requests to the Lingma API.
 type BridgeHandler struct {
@@ -14,15 +17,25 @@ type BridgeHandler struct {
 	recorder     func(*proto.GatewayLog)
 	modelMapping map[string]string
 	defaultModel string
+	Debug        bool
 }
 
 func NewBridgeHandler(session *auth.Session, recorder func(*proto.GatewayLog)) *BridgeHandler {
-	return &BridgeHandler{
+	h := &BridgeHandler{
 		client:       NewLingmaClient(session),
 		session:      session,
 		recorder:     recorder,
 		modelMapping: make(map[string]string),
 		defaultModel: "dashscope_qmodel",
+	}
+	return h
+}
+
+// SetDebug enables or disables debug logging for the bridge and its client.
+func (h *BridgeHandler) SetDebug(debug bool) {
+	h.Debug = debug
+	if h.client != nil {
+		h.client.Debug = debug
 	}
 }
 

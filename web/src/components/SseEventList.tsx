@@ -131,7 +131,7 @@ export function SseEventList({ events }: SseEventListProps) {
                     {evt.event_type || 'data'}
                   </span>
                   <span className="text-zinc-500 truncate">
-                    {isDone ? '[DONE]' : evt.body ? evt.body.slice(0, 80) + (evt.body.length > 80 ? '...' : '') : evt.data.slice(0, 80)}
+                    {isDone ? '[DONE]' : evt.body ? evt.body.slice(0, 80) + (evt.body.length > 80 ? '...' : '') : (evt.data || '').slice(0, 80)}
                   </span>
                 </button>
                 {isExpanded && (

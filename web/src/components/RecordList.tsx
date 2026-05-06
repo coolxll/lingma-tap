@@ -182,7 +182,7 @@ export const RecordList = memo(function RecordList({
                         <ChevronDown className="w-3 h-3 shrink-0" />
                       )}
                       <span className="text-zinc-600">{t('recordlist.session')}</span>
-                      <span className="text-zinc-500 font-mono">{group.session.slice(0, 8)}</span>
+                      <span className="text-zinc-500 font-mono">{(group.session || '').slice(0, 8)}</span>
                       <span className="text-zinc-600 ml-auto">{group.pairs.length} {t('recordlist.requests')}</span>
                     </div>
                   </button>

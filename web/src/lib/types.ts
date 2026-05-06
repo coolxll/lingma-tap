@@ -123,3 +123,60 @@ export function getStatusColor(status: number): string {
 export function recordKey(r: TrafficRecord): string {
   return `${r.session}-${r.index}`;
 }
+
+export function formatFriendlyMessage(message: any): string {
+  if (!message) return "";
+  if (typeof message === "string") return message;
+
+  let result = "";
+
+  // 1. Text content
+  if (typeof message.content === "string") {
+    result += message.content;
+  } else if (Array.isArray(message.content)) {
+    result += message.content.map(formatContentBlock).join("\n");
+  }
+
+  // 2. OpenAI Tool Calls
+  if (message.tool_calls && Array.isArray(message.tool_calls)) {
+    result += message.tool_calls.map(formatOpenAIToolCall).join("\n");
+  }
+
+  // Fallback for direct blocks
+  if (!result && message.content === undefined && message.tool_calls === undefined) {
+    if (message.type === "text") return message.text;
+    if (message.type === "tool_use") return formatAnthropicToolUse(message);
+    result = JSON.stringify(message);
+  }
+
+  return result.trim();
+}
+
+function formatContentBlock(c: any): string {
+  if (typeof c === "string") return c;
+  if (c.type === "text") return c.text || "";
+  if (c.type === "tool_use") return formatAnthropicToolUse(c);
+  if (c.type === "tool_result") {
+    const resContent = typeof c.content === "string" ? c.content : JSON.stringify(c.content);
+    return `\n\n[✅ Tool Result: ${c.tool_use_id}]\n${resContent}`;
+  }
+  return JSON.stringify(c);
+}
+
+function formatAnthropicToolUse(block: any): string {
+  const input = typeof block.input === "object" ? JSON.stringify(block.input, null, 2) : block.input;
+  return `\n\n[🛠️ Tool Call: ${block.name}]\nArguments: ${input}`;
+}
+
+function formatOpenAIToolCall(tc: any): string {
+  if (tc.type === "function" && tc.function) {
+    let args = tc.function.arguments;
+    try {
+      args = JSON.stringify(JSON.parse(args), null, 2);
+    } catch {
+      // Keep raw if not valid JSON
+    }
+    return `\n\n[🛠️ Tool Call: ${tc.function.name}]\nArguments: ${args}`;
+  }
+  return JSON.stringify(tc);
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -132,6 +133,11 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Sanitize messages (e.g., strip billing headers from Claude Code)
+	for i, m := range req.Messages {
+		req.Messages[i] = sanitizeMessage(m)
+	}
+
 	// Dynamically map model name to Lingma model key
 	modelKey := h.resolveModelKey(r.Context(), req.Model)
 
@@ -141,7 +147,11 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 		params["temperature"] = *req.Temperature
 	}
 	if req.MaxTokens != nil {
-		params["max_tokens"] = *req.MaxTokens
+		maxTokens := *req.MaxTokens
+		if maxTokens > MaxTokensLimit {
+			maxTokens = MaxTokensLimit
+		}
+		params["max_tokens"] = maxTokens
 	}
 
 	// Build Lingma body
@@ -182,6 +192,9 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 	// Track tool call state for proper ID management
 	toolCallIDs := make(map[int]string)
+	toolCallNames := make(map[int]string)
+	toolCallArgs := make(map[int]*strings.Builder)
+	toolCallInitialized := make(map[int]bool)
 	var fullContent strings.Builder
 	var usage *Usage
 	var finishReason string
@@ -189,6 +202,11 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 	finishSent := false
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+		if h.Debug {
+			fmt.Printf("[debug] SSE Event: Type=%s, ContentLen=%d, ToolCalls=%d, FinishReason=%s\n",
+				event.Type, len(event.Content), len(event.ToolCalls), event.FinishReason)
+		}
+
 		switch event.Type {
 		case "data":
 			// Skip empty data events (no content, no tool calls, no finish reason)
@@ -244,17 +262,37 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 						tcID = "call_" + newUUID()[:24]
 						toolCallIDs[tc.Index] = tcID
 					}
+					if toolCallArgs[tc.Index] == nil {
+						toolCallArgs[tc.Index] = &strings.Builder{}
+					}
+					if tc.Name != "" {
+						toolCallNames[tc.Index] = tc.Name
+					}
+					if tc.Arguments != "" {
+						toolCallArgs[tc.Index].WriteString(tc.Arguments)
+					}
 
 					tcObj := map[string]any{
 						"index": tc.Index,
-						"id":    tcID,
-						"type":  "function",
 					}
-					if tc.Name != "" {
-						tcObj["function"] = map[string]any{
-							"name":      tc.Name,
-							"arguments": tc.Arguments,
+					
+					isNew := false
+					if !toolCallInitialized[tc.Index] {
+						isNew = true
+						toolCallInitialized[tc.Index] = true
+						tcObj["id"] = tcID
+						tcObj["type"] = "function"
+					}
+
+					if tc.Name != "" || isNew {
+						fn := map[string]any{}
+						if tc.Name != "" {
+							fn["name"] = tc.Name
 						}
+						if tc.Arguments != "" || isNew {
+							fn["arguments"] = tc.Arguments
+						}
+						tcObj["function"] = fn
 					} else if tc.Arguments != "" {
 						tcObj["function"] = map[string]any{
 							"arguments": tc.Arguments,
@@ -295,7 +333,16 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 			}
 
 		case "finish":
+			if event.Usage != nil {
+				usage = event.Usage
+				gLog.InputTokens = event.Usage.PromptTokens
+				gLog.OutputTokens = event.Usage.CompletionTokens
+			}
 			if !finishSent {
+				fReason := "stop"
+				if len(toolCallIDs) > 0 {
+					fReason = "tool_calls"
+				}
 				chunk := map[string]any{
 					"id":      reqID,
 					"object":  "chat.completion.chunk",
@@ -304,10 +351,13 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 					"choices": []map[string]any{{
 						"index":         0,
 						"delta":         map[string]any{},
-						"finish_reason": "stop",
+						"finish_reason": fReason,
 					}},
 				}
 				writeSSE(w, "data: ", chunk)
+				if finishReason == "" {
+					finishReason = fReason
+				}
 			}
 			io.WriteString(w, "data: [DONE]\n\n")
 			if canFlush {
@@ -340,12 +390,21 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 			// Add tool calls if we tracked them
 			if len(toolCallIDs) > 0 {
 				var tcList []map[string]any
-				for idx, id := range toolCallIDs {
+				var keys []int
+				for idx := range toolCallIDs {
+					keys = append(keys, idx)
+				}
+				sort.Ints(keys)
+
+				for _, idx := range keys {
 					tcList = append(tcList, map[string]any{
-						"id":    id,
+						"id":    toolCallIDs[idx],
 						"type":  "function",
 						"index": idx,
-						// We'd need to reconstruct args if we wanted a perfect structure, but this is a summary
+						"function": map[string]any{
+							"name":      toolCallNames[idx],
+							"arguments": toolCallArgs[idx].String(),
+						},
 					})
 				}
 				choice["message"].(map[string]any)["tool_calls"] = tcList
@@ -390,6 +449,10 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 	var toolCalls map[int]*toolCallState
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+		if h.Debug {
+			fmt.Printf("[debug] SSE Event (Non-Stream): Type=%s, ContentLen=%d, ToolCalls=%d, FinishReason=%s\n", 
+				event.Type, len(event.Content), len(event.ToolCalls), event.FinishReason)
+		}
 		switch event.Type {
 		case "data":
 			if event.Content != "" {
@@ -431,7 +494,11 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 	}
 
 	if finishReason == "" {
-		finishReason = "stop"
+		if len(toolCalls) > 0 {
+			finishReason = "tool_calls"
+		} else {
+			finishReason = "stop"
+		}
 	}
 
 	resp := map[string]any{
@@ -448,7 +515,14 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 
 	if len(toolCalls) > 0 {
 		var tcList []map[string]any
-		for idx, tc := range toolCalls {
+		var keys []int
+		for idx := range toolCalls {
+			keys = append(keys, idx)
+		}
+		sort.Ints(keys)
+
+		for _, idx := range keys {
+			tc := toolCalls[idx]
 			tcList = append(tcList, map[string]any{
 				"id":   tc.id,
 				"type": "function",
@@ -513,9 +587,18 @@ func (h *BridgeHandler) resolveModelKey(ctx context.Context, model string) strin
 		return "org_auto"
 	}
 
+	modelLower := strings.ToLower(model)
+
+	// 1. Check manual mapping first
+	for keyword, target := range h.modelMapping {
+		if strings.Contains(modelLower, strings.ToLower(keyword)) {
+			return target
+		}
+	}
+
+	// 2. Try to find in fetched models
 	models, err := h.fetchModelsWithCache(ctx)
 	if err == nil {
-		modelLower := strings.ToLower(model)
 		for _, m := range models {
 			if strings.ToLower(m.Key) == modelLower {
 				return m.Key
@@ -526,8 +609,7 @@ func (h *BridgeHandler) resolveModelKey(ctx context.Context, model string) strin
 		}
 	}
 
-	// Fallback logic if not found or fetch fails
-	modelLower := strings.ToLower(model)
+	// 3. Fallback logic
 	if modelLower == "org_auto" || modelLower == "auto" {
 		return "org_auto"
 	}

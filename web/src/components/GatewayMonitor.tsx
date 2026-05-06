@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Search, X, Activity, CheckCircle, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { TrafficRecord, formatTimestamp } from '@/lib/types';
+import { TrafficRecord, formatTimestamp, formatFriendlyMessage } from '@/lib/types';
 import { JsonViewer } from './JsonViewer';
 
 interface GatewayMonitorProps {
@@ -27,8 +27,9 @@ export function GatewayMonitor({
 
   // Filter and Limit to 500
   const processedRows = useMemo(() => {
+    if (!records) return [];
     const filtered = records
-      .filter(r => r.source === 'gateway')
+      .filter(r => r && r.source === 'gateway')
       .map(row => ({ 
         req: row, 
         resp: row,
@@ -43,7 +44,7 @@ export function GatewayMonitor({
         if (!filter) return true;
         const search = filter.toLowerCase();
         return (
-          row.details.model.toLowerCase().includes(search) ||
+          (row.details.model || '').toLowerCase().includes(search) ||
           (row.req.session && row.req.session.toLowerCase().includes(search)) ||
           (row.req.request_body && row.req.request_body.toLowerCase().includes(search))
         );
@@ -145,7 +146,7 @@ export function GatewayMonitor({
                 <td className="px-6 py-4">
                   <div className="flex flex-col">
                     <span className="text-sm font-bold text-zinc-200 group-hover:text-blue-400 transition-colors">{row.details.model}</span>
-                    <span className="text-[10px] text-zinc-600 font-mono">{row.req.session.slice(0, 8)}...</span>
+                    <span className="text-[10px] text-zinc-600 font-mono">{(row.req.session || '').slice(0, 8)}...</span>
                   </div>
                 </td>
                 <td className="px-4 py-4">
@@ -154,7 +155,10 @@ export function GatewayMonitor({
                       try {
                         const body = JSON.parse(row.req.request_body || '{}');
                         const lastMsg = body.messages?.slice(-1)[0];
-                        return lastMsg?.content || '-';
+                        if (lastMsg) {
+                          return formatFriendlyMessage(lastMsg);
+                        }
+                        return '-';
                       } catch {
                         return '-';
                       }
@@ -239,7 +243,10 @@ export function GatewayMonitor({
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-zinc-100">{t('monitor.details.title')}</h3>
-                  <p className="text-[10px] text-zinc-500 font-mono">{selectedRow.req.session}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[10px] text-zinc-500 font-mono bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">{selectedRow.req.session}</span>
+                    <span className="text-[10px] text-blue-400 font-mono bg-blue-900/20 px-1.5 py-0.5 rounded border border-blue-500/20">{selectedRow.req.path}</span>
+                  </div>
                 </div>
               </div>
               <button 
@@ -342,7 +349,8 @@ export function GatewayMonitor({
                         try {
                           const body = JSON.parse(selectedRow.req.request_body || '{}');
                           const lastMsg = body.messages?.slice(-1)[0];
-                          return lastMsg?.content || 'No prompt content';
+                          if (!lastMsg) return 'No prompt content';
+                          return formatFriendlyMessage(lastMsg);
                         } catch {
                           return selectedRow.req.request_body;
                         }
@@ -388,7 +396,12 @@ export function GatewayMonitor({
                       (() => {
                         try {
                           const body = JSON.parse(selectedRow.req.response_body || '{}');
-                          return body.choices?.[0]?.message?.content || body.choices?.[0]?.delta?.content || selectedRow.req.response_body || 'Waiting for response...';
+                          const message = body.choices?.[0]?.message || body.choices?.[0]?.delta;
+                          if (message) {
+                            return formatFriendlyMessage(message) || 'Waiting for response...';
+                          }
+                          const content = body.choices?.[0]?.text || selectedRow.req.response_body;
+                          return typeof content === 'string' ? content : JSON.stringify(content || 'Waiting for response...');
                         } catch {
                           return selectedRow.req.response_body || 'Waiting for response...';
                         }

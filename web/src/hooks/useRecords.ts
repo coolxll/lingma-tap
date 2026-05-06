@@ -12,22 +12,30 @@ export function useRecords() {
   const isPausedRef = useRef(false);
 
   const appendRecord = useCallback((record: TrafficRecord) => {
-    if (isPausedRef.current) return;
+    if (isPausedRef.current || !record) return;
 
-    setRecords((prev) => {
-      const key = recordKey(record);
-      const index = prev.findIndex((r) => recordKey(r) === key);
-      if (index >= 0) {
-        const next = [...prev];
-        next[index] = record;
+    try {
+      setRecords((prev) => {
+        const key = recordKey(record);
+        if (!key) return prev;
+
+        const index = prev.findIndex((r) => r && recordKey(r) === key);
+        if (index >= 0) {
+          const next = [...prev];
+          next[index] = record;
+          return next;
+        }
+        const next = [record, ...prev];
+        if (next.length > MAX_RECORDS) {
+          return next.slice(0, MAX_RECORDS);
+        }
         return next;
-      }
-      const next = [record, ...prev];
-      if (next.length > MAX_RECORDS) {
-        return next.slice(0, MAX_RECORDS);
-      }
-      return next;
-    });
+      });
+    } catch (err) {
+      const msg = `Error in appendRecord: ${err}`;
+      console.error(msg);
+      (window as any).go?.main?.App?.LogError(msg);
+    }
   }, []);
 
   const updateRecords = useCallback((newRecords: TrafficRecord[]) => {

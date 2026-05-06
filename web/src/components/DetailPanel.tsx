@@ -1,5 +1,5 @@
 import { memo, useState, useMemo } from 'react';
-import { TrafficRecord, formatTimestamp, getEndpointLabel } from '@/lib/types';
+import { TrafficRecord, formatTimestamp, getEndpointLabel, formatFriendlyMessage, getEndpointColor } from '@/lib/types';
 import { JsonViewer } from './JsonViewer';
 import { SseEventList } from './SseEventList';
 import { useTranslation } from 'react-i18next';
@@ -15,60 +15,75 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
   const [viewMode, setViewMode] = useState<'friendly' | 'standard'>('standard');
 
   const chatContent = useMemo(() => {
-    if (!request || (request.endpoint_type !== 'chat' && request.endpoint_type !== 'finish')) return null;
-
-    let prompt = '';
-    let completion = '';
-
-    // Extract prompt
     try {
-      const reqBody = JSON.parse(request.request_body || '{}');
-      if (reqBody.messages && Array.isArray(reqBody.messages)) {
-        const lastMsg = reqBody.messages[reqBody.messages.length - 1];
-        prompt = lastMsg.content || '';
-      } else if (reqBody.prompt) {
-        prompt = reqBody.prompt;
+      if (!request || (request.endpoint_type !== 'chat' && request.endpoint_type !== 'finish')) return null;
+
+      let prompt = '';
+      let completion = '';
+
+      // Extract prompt
+      try {
+        const reqBody = JSON.parse(request.request_body || '{}');
+        if (reqBody.messages && Array.isArray(reqBody.messages) && reqBody.messages.length > 0) {
+          const lastMsg = reqBody.messages[reqBody.messages.length - 1];
+          prompt = formatFriendlyMessage(lastMsg);
+        } else if (reqBody.prompt) {
+          prompt = typeof reqBody.prompt === 'string' ? reqBody.prompt : JSON.stringify(reqBody.prompt);
+        }
+      } catch (e) {
+        prompt = request.request_body;
       }
-    } catch (e) {
-      prompt = request.request_body;
-    }
 
-    // Extract completion
-    if (response) {
-      if (response.is_sse && response.sse_events) {
-        completion = response.sse_events
-          .map((e: any) => {
-            try {
-              if (!e.data || e.data === '[DONE]') return '';
-              const data = JSON.parse(e.data);
-              
-              // Handle nested structure if 'body' exists
-              let target = data;
-              if (data.body && typeof data.body === 'string') {
-                try {
-                  target = JSON.parse(data.body);
-                } catch {
-                  // If body is not JSON, use it as is or fallback
+      // Extract completion
+      if (response) {
+        if (response?.is_sse && response?.sse_events) {
+          completion = response.sse_events
+            .map((e: any) => {
+              try {
+                if (!e.data || e.data === '[DONE]') return '';
+                const data = JSON.parse(e.data);
+                
+                // Handle nested structure if 'body' exists
+                let target = data;
+                if (data.body && typeof data.body === 'string') {
+                  try {
+                    target = JSON.parse(data.body);
+                  } catch {
+                    // If body is not JSON, use it as is or fallback
+                  }
                 }
-              }
 
-              return target.choices?.[0]?.delta?.content || target.choices?.[0]?.text || '';
-            } catch {
-              return '';
+                const delta = target.choices?.[0]?.delta;
+                if (delta) return formatFriendlyMessage(delta);
+                const content = target.choices?.[0]?.text || '';
+                return typeof content === 'string' ? content : JSON.stringify(content);
+              } catch {
+                return '';
+              }
+            })
+            .join('');
+        } else {
+          try {
+            const respBody = JSON.parse(response.response_body || '{}');
+            const message = respBody.choices?.[0]?.message || respBody.choices?.[0]?.delta;
+            if (message) {
+              completion = formatFriendlyMessage(message);
+            } else {
+              const content = respBody.choices?.[0]?.text || response.response_body;
+              completion = typeof content === 'string' ? content : JSON.stringify(content || '');
             }
-          })
-          .join('');
-      } else {
-        try {
-          const respBody = JSON.parse(response.response_body || '{}');
-          completion = respBody.choices?.[0]?.message?.content || respBody.choices?.[0]?.text || response.response_body;
-        } catch {
-          completion = response.response_body;
+          } catch {
+            completion = typeof response.response_body === 'string' ? response.response_body : JSON.stringify(response.response_body || '');
+          }
         }
       }
-    }
 
-    return { prompt, completion };
+      return { prompt, completion };
+    } catch (err) {
+      console.error("Error in chatContent useMemo:", err);
+      (window as any).go?.main?.App?.LogError(`chatContent error: ${err}`);
+      return { prompt: 'Error extracting prompt', completion: 'Error extracting completion' };
+    }
   }, [request, response]);
 
   if (!request) {
@@ -94,6 +109,8 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
             <span>{formatTimestamp(request.ts)}</span>
             <span className="w-1 h-1 rounded-full bg-zinc-800" />
             <span className={getEndpointColor(request.endpoint_type)}>{getEndpointLabel(request.endpoint_type)}</span>
+            <span className="w-1 h-1 rounded-full bg-zinc-800" />
+            <span className="text-zinc-400 font-mono bg-zinc-800/50 px-1.5 py-0.5 rounded">{request.path}</span>
             {request.is_encoded && (
               <>
                 <span className="w-1 h-1 rounded-full bg-zinc-800" />
@@ -172,7 +189,7 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
       ) : (
         <div className="divide-y divide-zinc-900">
           {/* Metadata/Headers */}
-          {request.request_headers && Object.keys(request.request_headers).length > 0 && (
+          {request.request_headers && Object.keys(request.request_headers || {}).length > 0 && (
             <Section title={t('detailpanel.request_headers')}>
               <HeadersTable headers={request.request_headers} />
             </Section>
@@ -198,14 +215,14 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
           {response ? (
             <>
               {/* Response Headers */}
-              {response.response_headers && Object.keys(response.response_headers).length > 0 && (
+              {response.response_headers && Object.keys(response.response_headers || {}).length > 0 && (
                 <Section title={t('detailpanel.response_headers')}>
                   <HeadersTable headers={response.response_headers} />
                 </Section>
               )}
 
               {/* SSE Events */}
-              {response.is_sse && response.sse_events && response.sse_events.length > 0 && (
+              {response?.is_sse && response?.sse_events && response.sse_events.length > 0 && (
                 <Section title={t('detailpanel.response_body') + ' (SSE Events)'}>
                   <SseEventList events={response.sse_events} />
                 </Section>
@@ -243,7 +260,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function HeadersTable({ headers }: { headers: Record<string, string> }) {
-  const entries = Object.entries(headers);
+  const entries = Object.entries(headers || {});
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-[11px]">
@@ -260,16 +277,3 @@ function HeadersTable({ headers }: { headers: Record<string, string> }) {
   );
 }
 
-function getEndpointColor(endpoint: string): string {
-  switch (endpoint) {
-    case 'chat':
-    case 'finish':
-      return 'text-blue-400';
-    case 'embedding':
-      return 'text-purple-400';
-    case 'tracking':
-      return 'text-yellow-400';
-    default:
-      return 'text-zinc-500';
-  }
-}

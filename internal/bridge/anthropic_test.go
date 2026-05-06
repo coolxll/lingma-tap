@@ -106,6 +106,24 @@ func TestSanitizeAnthropicRequest(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "strips billing header from string message",
+			input: map[string]any{
+				"messages": []any{
+					map[string]any{
+						"role":    "user",
+						"content": "x-anthropic-billing-header: test\nHello",
+					},
+				},
+			},
+			check: func(t *testing.T, result map[string]any) {
+				msgs := result["messages"].([]any)
+				msg := msgs[0].(map[string]any)
+				if msg["content"] != "Hello" {
+					t.Errorf("expected content 'Hello', got %v", msg["content"])
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

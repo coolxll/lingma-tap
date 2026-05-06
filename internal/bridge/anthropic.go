@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/coolxll/lingma-tap/internal/proto"
 )
 
 // HandleAnthropicMessages handles POST /v1/messages (Anthropic Messages API)
@@ -76,6 +79,11 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Cap max_tokens to MaxTokensLimit to avoid upstream rejection (Claude Code defaults to 64000)
+	if maxTokens > MaxTokensLimit {
+		maxTokens = MaxTokensLimit
+	}
+
 	modelKey := h.mapAnthropicModelToLingma(model)
 
 	// Convert Anthropic messages to OpenAI format
@@ -98,10 +106,22 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 
 	msgID := "msg_" + newUUID()[:24]
 
+	// Initialize Gateway Log
+	gLog := &proto.GatewayLog{
+		Ts:          time.Now().Format(time.RFC3339Nano),
+		Session:     msgID,
+		Model:       modelKey,
+		Method:      r.Method,
+		Path:        r.URL.Path,
+		RequestBody: func() string { b, _ := json.Marshal(body); return string(b) }(),
+	}
+	startTime := time.Now()
+	h.recorder(gLog)
+
 	if stream {
-		h.streamAnthropic(r.Context(), w, msgID, modelKey, body, maxTokens)
+		h.streamAnthropic(r.Context(), w, msgID, modelKey, body, gLog, startTime)
 	} else {
-		h.nonStreamAnthropic(r.Context(), w, msgID, modelKey, body, maxTokens)
+		h.nonStreamAnthropic(r.Context(), w, msgID, modelKey, body, gLog, startTime)
 	}
 }
 
@@ -339,29 +359,37 @@ func sanitizeSystem(system any) any {
 // stripBillingHeader removes the x-anthropic-billing-header line from text
 func stripBillingHeader(text string) string {
 	prefix := "x-anthropic-billing-header:"
-	for strings.Contains(text, prefix) {
-		idx := strings.Index(text, prefix)
-		if idx == -1 {
-			break
-		}
-		// Find the end of the line
-		lineEnd := strings.Index(text[idx:], "\n")
-		if lineEnd == -1 {
-			// Header goes to end of text
-			text = text[:idx]
-			break
-		}
-		// Remove the header line
-		text = text[:idx] + text[idx+lineEnd+1:]
+	if !strings.Contains(text, prefix) {
+		return text
 	}
-	return strings.TrimSpace(text)
+
+	lines := strings.Split(text, "\n")
+	var result strings.Builder
+	result.Grow(len(text))
+
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			continue
+		}
+		result.WriteString(line)
+		if i < len(lines)-1 {
+			result.WriteByte('\n')
+		}
+	}
+
+	return strings.TrimSpace(result.String())
 }
 
-// sanitizeMessage removes thinking blocks and signature fields from a message
+// sanitizeMessage removes thinking blocks and signature fields from a message,
+// and also strips billing headers from text content.
 func sanitizeMessage(msg map[string]any) map[string]any {
-	if content, ok := msg["content"].([]any); ok {
+	content := msg["content"]
+	switch v := content.(type) {
+	case string:
+		msg["content"] = stripBillingHeader(v)
+	case []any:
 		var sanitized []any
-		for _, item := range content {
+		for _, item := range v {
 			if m, ok := item.(map[string]any); ok {
 				blockType, _ := m["type"].(string)
 				switch blockType {
@@ -371,6 +399,11 @@ func sanitizeMessage(msg map[string]any) map[string]any {
 				case "tool_use":
 					// Strip signature field
 					delete(m, "signature")
+				case "text":
+					// Strip billing header from text blocks
+					if text, ok := m["text"].(string); ok {
+						m["text"] = stripBillingHeader(text)
+					}
 				}
 				sanitized = append(sanitized, m)
 			} else {
@@ -382,7 +415,7 @@ func sanitizeMessage(msg map[string]any) map[string]any {
 	return msg
 }
 
-func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, _ int) {
+func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -414,22 +447,26 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	state := &anthropicStreamState{
 		toolBlocks: make(map[int]*toolBlockState),
 	}
-	usage := &Usage{}
+	var usage *Usage
 	stopReason := "end_turn"
+	var fullContent strings.Builder
+	toolCalls := make(map[int]*toolCallState)
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
 		case "data":
 			// Handle text content
 			if event.Content != "" {
+				fullContent.WriteString(event.Content)
 				if !state.textBlockStarted {
+					idx := state.nextIndex()
 					writeAnthropicSSE(w, "content_block_start", map[string]any{
 						"type":          "content_block_start",
-						"index":         state.nextIndex(),
+						"index":         idx,
 						"content_block": map[string]any{"type": "text", "text": ""},
 					})
 					state.textBlockStarted = true
-					state.textBlockIndex = state.currentIndex
+					state.textBlockIndex = idx
 				}
 
 				writeAnthropicSSE(w, "content_block_delta", map[string]any{
@@ -461,10 +498,15 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 						blockIndex: state.nextIndex(),
 					}
 					state.toolBlocks[tc.Index] = toolState
+					toolCalls[tc.Index] = &toolCallState{id: id, name: tc.Name}
 				}
 
 				if tc.Name != "" {
 					toolState.name = tc.Name
+					toolCalls[tc.Index].name = tc.Name
+				}
+				if tc.Arguments != "" {
+					toolCalls[tc.Index].args.WriteString(tc.Arguments)
 				}
 
 				// Send content_block_start if not started
@@ -511,6 +553,9 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			}
 
 		case "finish":
+			if event.Usage != nil {
+				usage = event.Usage
+			}
 			// Stop all open content blocks
 			if state.textBlockStarted {
 				writeAnthropicSSE(w, "content_block_stop", map[string]any{
@@ -527,6 +572,13 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 				}
 			}
 
+			outTokens := 0
+			if usage != nil {
+				outTokens = usage.CompletionTokens
+				gLog.InputTokens = usage.PromptTokens
+				gLog.OutputTokens = usage.CompletionTokens
+			}
+
 			// message_delta with usage
 			writeAnthropicSSE(w, "message_delta", map[string]any{
 				"type": "message_delta",
@@ -535,7 +587,7 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 					"stop_sequence": nil,
 				},
 				"usage": map[string]any{
-					"output_tokens": usage.CompletionTokens,
+					"output_tokens": outTokens,
 				},
 			})
 			writeAnthropicSSE(w, "message_stop", map[string]any{
@@ -544,11 +596,48 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			if canFlush {
 				flusher.Flush()
 			}
+
+			// Finalize Log
+			gLog.Status = 200
+			gLog.FinishReason = stopReason
+			gLog.Latency = time.Since(startTime).Milliseconds()
+
+			// Build a summary of the response for the log
+			var content []map[string]any
+			if fullContent.Len() > 0 {
+				content = append(content, map[string]any{"type": "text", "text": fullContent.String()})
+			}
+			for _, tc := range toolCalls {
+				var input map[string]any
+				if err := json.Unmarshal([]byte(tc.args.String()), &input); err != nil {
+					input = map[string]any{"_error": "failed to parse arguments", "raw": tc.args.String()}
+				}
+				content = append(content, map[string]any{
+					"type": "tool_use",
+					"id":   tc.id,
+					"name": tc.name,
+					"input": input,
+				})
+			}
+			respSummary := map[string]any{
+				"id":      msgID,
+				"role":    "assistant",
+				"model":   modelKey,
+				"content": content,
+				"usage":   usage,
+			}
+			respBytes, _ := json.Marshal(respSummary)
+			gLog.ResponseBody = string(respBytes)
+			h.recorder(gLog)
 		}
 		return nil
 	})
 
 	if err != nil {
+		gLog.Error = err.Error()
+		gLog.Status = 500
+		h.recorder(gLog)
+
 		writeAnthropicSSE(w, "error", map[string]any{
 			"type": "error",
 			"error": map[string]any{
@@ -603,15 +692,19 @@ func mapFinishReason(reason string) string {
 	}
 }
 
-func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, _ int) {
+func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
 	var fullContent strings.Builder
 	var usage Usage
+	var finishReason string
 	toolCalls := make(map[int]*toolCallState)
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		if event.Type == "data" {
 			if event.Content != "" {
 				fullContent.WriteString(event.Content)
+			}
+			if event.FinishReason != "" {
+				finishReason = event.FinishReason
 			}
 			for _, tc := range event.ToolCalls {
 				if toolCalls[tc.Index] == nil {
@@ -633,6 +726,9 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 	})
 
 	if err != nil {
+		gLog.Error = err.Error()
+		gLog.Status = 500
+		h.recorder(gLog)
 		writeAnthropicError(w, http.StatusInternalServerError, "api_error", err.Error())
 		return
 	}
@@ -670,9 +766,9 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 	}
 
 	// Determine stop reason
-	stopReason := "end_turn"
-	// If we have tool calls, the stop reason should be tool_use
-	if len(toolCalls) > 0 {
+	stopReason := mapFinishReason(finishReason)
+	// If we have tool calls and no explicit finish reason, ensure it's tool_use
+	if len(toolCalls) > 0 && finishReason == "" {
 		stopReason = "tool_use"
 	}
 
@@ -690,8 +786,19 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 		},
 	}
 
+	respBytes, _ := json.Marshal(resp)
+
+	// Finalize Log
+	gLog.Status = 200
+	gLog.ResponseBody = string(respBytes)
+	gLog.InputTokens = usage.PromptTokens
+	gLog.OutputTokens = usage.CompletionTokens
+	gLog.Latency = time.Since(startTime).Milliseconds()
+	gLog.FinishReason = stopReason
+	h.recorder(gLog)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	w.Write(respBytes)
 }
 
 func writeAnthropicSSE(w http.ResponseWriter, event string, data any) {

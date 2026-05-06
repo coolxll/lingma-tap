@@ -1,14 +1,20 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { TrafficRecord, StorageStats } from '@/lib/types';
-import { WSClient } from '@/lib/ws-client';
-import { useRecords } from '@/hooks/useRecords';
-import { TitleBar, TabId } from '@/components/TitleBar';
-import { RecordList } from '@/components/RecordList';
-import { DetailPanel } from '@/components/DetailPanel';
-import { ResizablePanels } from '@/components/ResizablePanels';
-import { BottomDock } from '@/components/BottomDock';
-import { SettingsPanel } from '@/components/SettingsPanel';
-import { GatewayMonitor } from '@/components/GatewayMonitor';
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+} from "react";
+import { TrafficRecord, StorageStats } from "@/lib/types";
+import { WSClient } from "@/lib/ws-client";
+import { useRecords } from "@/hooks/useRecords";
+import { TitleBar, TabId } from "@/components/TitleBar";
+import { RecordList } from "@/components/RecordList";
+import { DetailPanel } from "@/components/DetailPanel";
+import { ResizablePanels } from "@/components/ResizablePanels";
+import { BottomDock } from "@/components/BottomDock";
+import { SettingsPanel } from "@/components/SettingsPanel";
+import { GatewayMonitor } from "@/components/GatewayMonitor";
 
 // Wails window type
 interface WailsWindow extends Window {
@@ -21,6 +27,7 @@ interface WailsWindow extends Window {
         StopGateway: () => Promise<void>;
         GetRecords: (limit: number, offset: number) => Promise<TrafficRecord[]>;
         GetGatewayLogs: (limit: number, offset: number) => Promise<any[]>;
+        LogError: (message: string) => Promise<void>;
         ClearRecords: () => Promise<void>;
         ClearRecordsBefore: (days: number) => Promise<number>;
         GetCACertPath: () => Promise<string>;
@@ -43,7 +50,59 @@ const WS_PORT = 9091;
 const PROXY_PORT = 9528;
 const DEFAULT_GATEWAY_PORT = 9090;
 
-export default function App() {
+class GlobalErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: any }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Global Error:", error, errorInfo);
+    const msg = `Global Error: ${error} ${JSON.stringify(errorInfo)}`;
+    (window as any).go?.main?.App?.LogError(msg);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-10 bg-zinc-950 text-red-400 h-screen overflow-auto font-mono">
+          <h1 className="text-2xl font-bold mb-4 text-red-500 flex items-center gap-2">
+            ⚠️ UI CRASH DETECTED
+          </h1>
+          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6 mb-6">
+            <p className="text-zinc-300 mb-4">
+              The application encountered a fatal rendering error.
+            </p>
+            <pre className="text-xs bg-black/50 p-4 rounded border border-zinc-800 whitespace-pre-wrap break-all">
+              {this.state.error?.toString()}
+            </pre>
+          </div>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-6 py-2 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg transition-colors"
+          >
+            RELOAD APPLICATION
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export default function AppWrapper() {
+  return (
+    <GlobalErrorBoundary>
+      <App />
+    </GlobalErrorBoundary>
+  );
+}
+
+function App() {
   const {
     records,
     selectedRecord,
@@ -55,83 +114,113 @@ export default function App() {
     clearRecords,
     togglePause,
     toggleLiveTail,
-    appendRecords,  } = useRecords();
+    appendRecords,
+  } = useRecords();
 
-  const [activeTab, setActiveTab] = useState<TabId>('proxy');
+  const [activeTab, setActiveTab] = useState<TabId>("proxy");
   const [connected, setConnected] = useState(false);
   const [proxyRunning, setProxyRunning] = useState(false);
   const [proxyPort, setProxyPort] = useState(PROXY_PORT);
   const [gatewayRunning, setGatewayRunning] = useState(false);
   const [gatewayPort, setGatewayPort] = useState(DEFAULT_GATEWAY_PORT);
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [stats, setStats] = useState<StorageStats | null>(null);
-  const [caCertPath, setCaCertPath] = useState('');
+  const [caCertPath, setCaCertPath] = useState("");
   const [gatewayLoggingEnabled, setGatewayLoggingEnabled] = useState(true);
   const [displayCount, setDisplayCount] = useState(200);
   const [canLoadMore, setCanLoadMore] = useState(true);
-  const [proxyTypeFilter, setProxyTypeFilter] = useState<'all' | 'chat' | 'embedding' | 'other'>('all');
+  const [proxyTypeFilter, setProxyTypeFilter] = useState<
+    "all" | "chat" | "embedding" | "other"
+  >("all");
   const liveTailRef = useRef(liveTail);
   const selectedRef = useRef(selectedRecord);
   const recordsRef = useRef(records);
 
   // Computed records for active tab
   const displayedRecords = useMemo(() => {
-    let result: TrafficRecord[];
-    if (activeTab === 'proxy') {
-      result = records.filter(r => {
-        if (r.source !== 'proxy') return false;
-        if (proxyTypeFilter === 'all') return true;
-        if (proxyTypeFilter === 'chat') return r.endpoint_type === 'chat' || r.endpoint_type === 'finish';
-        if (proxyTypeFilter === 'embedding') return r.endpoint_type === 'embedding';
-        if (proxyTypeFilter === 'other') return r.endpoint_type === 'other' || r.endpoint_type === 'tracking';
-        return true;
-      });
-    } else if (activeTab === 'gateway') {
-      result = records.filter(r => (r as any).source === 'gateway');
-    } else {
-      result = records;
+    let result: TrafficRecord[] = [];
+    try {
+      if (activeTab === "proxy") {
+        result = records.filter((r) => {
+          if (!r || r.source !== "proxy") return false;
+          if (proxyTypeFilter === "all") return true;
+          if (proxyTypeFilter === "chat")
+            return r.endpoint_type === "chat" || r.endpoint_type === "finish";
+          if (proxyTypeFilter === "embedding")
+            return r.endpoint_type === "embedding";
+          if (proxyTypeFilter === "other")
+            return (
+              r.endpoint_type === "other" || r.endpoint_type === "tracking"
+            );
+          return true;
+        });
+      } else if (activeTab === "gateway") {
+        result = records.filter((r) => r && (r as any).source === "gateway");
+      } else {
+        result = records || [];
+      }
+      return result.slice(0, displayCount);
+    } catch (err) {
+      console.error("Error calculating displayedRecords:", err);
+      return [];
     }
-    return result.slice(0, displayCount);
   }, [records, activeTab, displayCount, proxyTypeFilter]);
 
-  useEffect(() => { liveTailRef.current = liveTail; }, [liveTail]);
-  useEffect(() => { selectedRef.current = selectedRecord; }, [selectedRecord]);
-  useEffect(() => { recordsRef.current = records; }, [records]);
+  useEffect(() => {
+    liveTailRef.current = liveTail;
+  }, [liveTail]);
+  useEffect(() => {
+    selectedRef.current = selectedRecord;
+  }, [selectedRecord]);
+  useEffect(() => {
+    recordsRef.current = records;
+  }, [records]);
 
   // Wails bindings
   const wails = (window as unknown as WailsWindow).go?.main?.App;
 
   const handleLoadMore = useCallback(async () => {
     if (!wails || !canLoadMore) return;
-    // Count only proxy records for the offset
-    const offset = recordsRef.current.filter(r => r.source === 'proxy').length;
-    const newRecords = await wails.GetRecords(200, offset);
-    if (newRecords && newRecords.length > 0) {
-      appendRecords(newRecords);
-      setDisplayCount(prev => prev + 200);
-      if (newRecords.length < 200) {
+    try {
+      // Count only proxy records for the offset
+      const offset = recordsRef.current.filter(
+        (r) => r.source === "proxy",
+      ).length;
+      const newRecords = await wails.GetRecords(200, offset);
+      if (newRecords && newRecords.length > 0) {
+        appendRecords(newRecords);
+        setDisplayCount((prev) => prev + 200);
+        if (newRecords.length < 200) {
+          setCanLoadMore(false);
+        }
+      } else {
         setCanLoadMore(false);
       }
-    } else {
-      setCanLoadMore(false);
+    } catch (err) {
+      console.error("Failed to load more records:", err);
+      wails?.LogError(`Failed to load more records: ${err}`);
     }
   }, [wails, canLoadMore, appendRecords]);
 
   // Find response record for the selected request
-   const responseRecord = useMemo(() => {
-    if (!selectedRecord || selectedRecord.direction === 'S2C') return null;
+  const responseRecord = useMemo(() => {
+    if (!selectedRecord || selectedRecord.direction === "S2C") return null;
     // Don't assume the response is the immediate next record (interleaving possible)
-    return records.find(r => r.session === selectedRecord.session && r.direction === 'S2C') || null;
+    return (
+      records.find(
+        (r) => r.session === selectedRecord.session && r.direction === "S2C",
+      ) || null
+    );
   }, [selectedRecord, records]);
 
   // Apply theme
   useEffect(() => {
-    if (theme === 'light') {
-      document.documentElement.classList.remove('dark');
-      document.documentElement.classList.add('light');
+    if (theme === "light") {
+      document.documentElement.classList.remove("dark");
+      document.documentElement.classList.add("light");
     } else {
-      document.documentElement.classList.remove('light');
-      document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove("light");
+      document.documentElement.classList.add("dark");
     }
   }, [theme]);
 
@@ -151,41 +240,43 @@ export default function App() {
           ts: log.ts,
           id: log.id || 0,
           session: log.session,
-          direction: 'C2S' as const,
-          source: 'gateway',
+          direction: "C2S" as const,
+          source: "gateway",
           method: log.method,
           path: log.path,
-          endpoint_type: 'chat' as const,
-          request_body: log.request_body || '',
-          response_body: log.response_body || '',
+          endpoint_type: "chat" as const,
+          request_body: log.request_body || "",
+          response_body: log.response_body || "",
           status: log.status || 0,
           is_sse: log.is_sse || false,
           sse_events: log.sse_events || [],
-          model: log.model || '',
+          model: log.model || "",
           input_tokens: log.input_tokens || 0,
           output_tokens: log.output_tokens || 0,
           latency: log.latency || 0,
-          error: log.error || '',
-          finish_reason: log.finish_reason || '',
+          error: log.error || "",
+          finish_reason: log.finish_reason || "",
           // Defaults for required fields
           index: 0,
-          url: '',
-          host: '',
+          url: "",
+          host: "",
           is_encoded: false,
           request_headers: {},
-          request_body_raw: '',
-          request_mime: '',
+          request_body_raw: "",
+          request_mime: "",
           request_size: 0,
-          status_text: '',
+          status_text: "",
           response_headers: {},
-          response_mime: '',
+          response_mime: "",
           response_size: 0,
         }));
         allRecords.push(...gatewayRecords);
       }
 
       // Sort by timestamp (newest first)
-      allRecords.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
+      allRecords.sort(
+        (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime(),
+      );
 
       if (allRecords.length > 0) {
         updateRecords(allRecords);
@@ -197,9 +288,12 @@ export default function App() {
     wails.GetStatus().then((s) => {
       const st = s?.stats as StorageStats | null;
       if (st) setStats(st);
-      if (s?.proxy_running !== undefined) setProxyRunning(s.proxy_running as boolean);
-      if (s?.gateway_running !== undefined) setGatewayRunning(s.gateway_running as boolean);
-      if (s?.gateway_logging !== undefined) setGatewayLoggingEnabled(s.gateway_logging as boolean);
+      if (s?.proxy_running !== undefined)
+        setProxyRunning(s.proxy_running as boolean);
+      if (s?.gateway_running !== undefined)
+        setGatewayRunning(s.gateway_running as boolean);
+      if (s?.gateway_logging !== undefined)
+        setGatewayLoggingEnabled(s.gateway_logging as boolean);
     });
   }, [wails, updateRecords, setSelectedRecord]);
 
@@ -209,10 +303,17 @@ export default function App() {
     const client = new WSClient(
       wsUrl,
       (record) => {
-        const rec = record as unknown as TrafficRecord;
-        appendRecord(rec);
-        if (liveTailRef.current) {
-          setSelectedRecord(rec);
+        try {
+          if (!record) return;
+          const rec = record as unknown as TrafficRecord;
+          appendRecord(rec);
+          if (liveTailRef.current) {
+            setSelectedRecord(rec);
+          }
+        } catch (err) {
+          const msg = `Failed to append record from WS: ${err}`;
+          console.error(msg);
+          wails?.LogError(msg);
         }
       },
       setConnected,
@@ -221,46 +322,52 @@ export default function App() {
         if (!wails) return;
         Promise.all([
           wails.GetRecords(200, 0),
-          wails.GetGatewayLogs ? wails.GetGatewayLogs(200, 0) : Promise.resolve([]),
+          wails.GetGatewayLogs
+            ? wails.GetGatewayLogs(200, 0)
+            : Promise.resolve([]),
         ]).then(([proxyRecs, gatewayLogs]) => {
           const allRecords: TrafficRecord[] = [...(proxyRecs || [])];
           if (gatewayLogs && gatewayLogs.length > 0) {
-            const gatewayRecords: TrafficRecord[] = gatewayLogs.map((log: any) => ({
-              ts: log.ts,
-          id: log.id || 0,
-              session: log.session,
-              direction: 'C2S' as const,
-              source: 'gateway',
-              method: log.method,
-              path: log.path,
-              endpoint_type: 'chat' as const,
-              request_body: log.request_body || '',
-              response_body: log.response_body || '',
-              status: log.status || 0,
-              is_sse: log.is_sse || false,
-              sse_events: log.sse_events || [],
-              model: log.model || '',
-              input_tokens: log.input_tokens || 0,
-              output_tokens: log.output_tokens || 0,
-              latency: log.latency || 0,
-              error: log.error || '',
-              finish_reason: log.finish_reason || '',
-              index: 0,
-              url: '',
-              host: '',
-              is_encoded: false,
-              request_headers: {},
-              request_body_raw: '',
-              request_mime: '',
-              request_size: 0,
-              status_text: '',
-              response_headers: {},
-              response_mime: '',
-              response_size: 0,
-            }));
+            const gatewayRecords: TrafficRecord[] = gatewayLogs.map(
+              (log: any) => ({
+                ts: log.ts,
+                id: log.id || 0,
+                session: log.session,
+                direction: "C2S" as const,
+                source: "gateway",
+                method: log.method,
+                path: log.path,
+                endpoint_type: "chat" as const,
+                request_body: log.request_body || "",
+                response_body: log.response_body || "",
+                status: log.status || 0,
+                is_sse: log.is_sse || false,
+                sse_events: log.sse_events || [],
+                model: log.model || "",
+                input_tokens: log.input_tokens || 0,
+                output_tokens: log.output_tokens || 0,
+                latency: log.latency || 0,
+                error: log.error || "",
+                finish_reason: log.finish_reason || "",
+                index: 0,
+                url: "",
+                host: "",
+                is_encoded: false,
+                request_headers: {},
+                request_body_raw: "",
+                request_mime: "",
+                request_size: 0,
+                status_text: "",
+                response_headers: {},
+                response_mime: "",
+                response_size: 0,
+              }),
+            );
             allRecords.push(...gatewayRecords);
           }
-          allRecords.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
+          allRecords.sort(
+            (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime(),
+          );
           updateRecords(allRecords);
         });
       },
@@ -275,9 +382,12 @@ export default function App() {
       wails?.GetStatus().then((s) => {
         const st = s?.stats as StorageStats | null;
         if (st) setStats(st);
-        if (s?.proxy_running !== undefined) setProxyRunning(s.proxy_running as boolean);
-        if (s?.gateway_running !== undefined) setGatewayRunning(s.gateway_running as boolean);
-        if (s?.gateway_logging !== undefined) setGatewayLoggingEnabled(s.gateway_logging as boolean);
+        if (s?.proxy_running !== undefined)
+          setProxyRunning(s.proxy_running as boolean);
+        if (s?.gateway_running !== undefined)
+          setGatewayRunning(s.gateway_running as boolean);
+        if (s?.gateway_logging !== undefined)
+          setGatewayLoggingEnabled(s.gateway_logging as boolean);
       });
     }, 5000);
     return () => clearInterval(interval);
@@ -294,7 +404,7 @@ export default function App() {
         await wails.StartProxy(proxyPort);
         setProxyRunning(true);
       } catch (err) {
-        console.error('Failed to start proxy:', err);
+        console.error("Failed to start proxy:", err);
       }
     }
   }, [wails, proxyRunning, proxyPort]);
@@ -309,7 +419,7 @@ export default function App() {
         if (wails.StartGateway) await wails.StartGateway(gatewayPort);
         setGatewayRunning(true);
       } catch (err) {
-        console.error('Failed to start gateway:', err);
+        console.error("Failed to start gateway:", err);
       }
     }
   }, [wails, gatewayRunning]);
@@ -318,19 +428,29 @@ export default function App() {
     const newState = !gatewayLoggingEnabled;
     setGatewayLoggingEnabled(newState);
     if (wails?.SetLogging) {
-      await wails.SetLogging(newState);
+      try {
+        await wails.SetLogging(newState);
+      } catch (err) {
+        console.error("Failed to toggle gateway logging:", err);
+        wails?.LogError(`Failed to toggle gateway logging: ${err}`);
+      }
     }
   }, [wails, gatewayLoggingEnabled]);
 
   const handleClear = useCallback(async () => {
     if (wails) {
-      await wails.ClearRecords();
+      try {
+        await wails.ClearRecords();
+      } catch (err) {
+        console.error("Failed to clear records:", err);
+        wails?.LogError(`Failed to clear records: ${err}`);
+      }
     }
     clearRecords();
   }, [wails, clearRecords]);
 
   const handleToggleTheme = useCallback(() => {
-    setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
   }, []);
 
   return (
@@ -350,7 +470,7 @@ export default function App() {
       />
 
       <div className="flex-1 overflow-hidden">
-        {activeTab === 'proxy' ? (
+        {activeTab === "proxy" ? (
           <ResizablePanels defaultSizes={[35, 65]} minSizes={[250, 300]}>
             <RecordList
               records={displayedRecords}
@@ -364,15 +484,15 @@ export default function App() {
             />
             <DetailPanel request={selectedRecord} response={responseRecord} />
           </ResizablePanels>
-        ) : activeTab === 'gateway' ? (
+        ) : activeTab === "gateway" ? (
           <GatewayMonitor
             records={displayedRecords}
             onClear={handleClear}
             loggingEnabled={gatewayLoggingEnabled}
             onToggleLogging={handleToggleGatewayLogging}
-/>
+          />
         ) : (
-          <SettingsPanel 
+          <SettingsPanel
             proxyRunning={proxyRunning}
             proxyPort={proxyPort}
             onToggleProxy={handleToggleProxy}
@@ -385,8 +505,9 @@ export default function App() {
             onToggleLogging={handleToggleGatewayLogging}
             stats={stats || null}
             onClearAll={handleClear}
-            onClearBefore={(days) => wails?.ClearRecordsBefore?.(days) || Promise.resolve(0)}
-
+            onClearBefore={(days) =>
+              wails?.ClearRecordsBefore?.(days) || Promise.resolve(0)
+            }
           />
         )}
       </div>
@@ -399,9 +520,7 @@ export default function App() {
       />
 
       {/* CA cert path hint */}
-      {caCertPath && (
-        <div className="hidden">{caCertPath}</div>
-      )}
+      {caCertPath && <div className="hidden">{caCertPath}</div>}
     </div>
   );
 }

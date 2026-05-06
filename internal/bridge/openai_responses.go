@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/coolxll/lingma-tap/internal/proto"
 )
 
 // HandleOpenAIResponses handles POST /v1/responses (OpenAI Responses API)
@@ -42,17 +45,33 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 		params["temperature"] = *req.Temperature
 	}
 	if req.MaxTokens != nil {
-		params["max_tokens"] = *req.MaxTokens
+		maxTokens := *req.MaxTokens
+		if maxTokens > MaxTokensLimit {
+			maxTokens = MaxTokensLimit
+		}
+		params["max_tokens"] = maxTokens
 	}
 
 	body := BuildLingmaBody(messages, req.Tools, modelKey, params)
 
 	respID := "resp_" + newUUID()[:24]
 
+	// Initialize Gateway Log
+	gLog := &proto.GatewayLog{
+		Ts:          time.Now().Format(time.RFC3339Nano),
+		Session:     respID,
+		Model:       modelKey,
+		Method:      r.Method,
+		Path:        r.URL.Path,
+		RequestBody: func() string { b, _ := json.Marshal(body); return string(b) }(),
+	}
+	startTime := time.Now()
+	h.recorder(gLog)
+
 	if req.Stream {
-		h.streamResponses(r.Context(), w, respID, modelKey, body)
+		h.streamResponses(r.Context(), w, respID, modelKey, body, gLog, startTime)
 	} else {
-		h.nonStreamResponses(r.Context(), w, respID, modelKey, body)
+		h.nonStreamResponses(r.Context(), w, respID, modelKey, body, gLog, startTime)
 	}
 }
 
@@ -116,7 +135,7 @@ func responsesInputToMessages(input any) []map[string]any {
 	return nil
 }
 
-func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWriter, respID, modelKey string, body map[string]any) {
+func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWriter, respID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -156,12 +175,18 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 	textBlockIndex := -1
 	toolCalls := make(map[int]*toolCallState)
 	toolCallIndices := make(map[string]int) // call_id → output item index
+	var usage *Usage
+	var fullContent strings.Builder
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
 		case "data":
+			if event.Usage != nil {
+				usage = event.Usage
+			}
 			// Handle text content
 			if event.Content != "" {
+				fullContent.WriteString(event.Content)
 				if !textBlockStarted {
 					textBlockIndex = len(toolCallIndices)
 					// Start a text output block
@@ -258,6 +283,9 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 			}
 
 		case "finish":
+			if event.Usage != nil {
+				usage = event.Usage
+			}
 			// Complete any open function calls
 			for _, state := range toolCalls {
 				writeSSE(w, "", map[string]any{
@@ -279,16 +307,61 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 				"response": map[string]any{
 					"id":     respID,
 					"status": "completed",
+					"model":  modelKey,
+					"usage":  usage,
 				},
 			})
 			if canFlush {
 				flusher.Flush()
 			}
+
+			// Finalize Log
+			gLog.Status = 200
+			gLog.Latency = time.Since(startTime).Milliseconds()
+			if usage != nil {
+				gLog.InputTokens = usage.PromptTokens
+				gLog.OutputTokens = usage.CompletionTokens
+			}
+
+			// Build output array for log
+			output := []map[string]any{}
+			if fullContent.Len() > 0 {
+				output = append(output, map[string]any{
+					"type": "message",
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "text", "text": fullContent.String()},
+					},
+				})
+			}
+			for _, tc := range toolCalls {
+				output = append(output, map[string]any{
+					"type":      "function_call",
+					"id":        tc.id,
+					"name":      tc.name,
+					"arguments": tc.args.String(),
+				})
+			}
+			respSummary := map[string]any{
+				"id":     respID,
+				"object": "response",
+				"status": "completed",
+				"model":  modelKey,
+				"output": output,
+				"usage":  usage,
+			}
+			respBytes, _ := json.Marshal(respSummary)
+			gLog.ResponseBody = string(respBytes)
+			h.recorder(gLog)
 		}
 		return nil
 	})
 
 	if err != nil {
+		gLog.Error = err.Error()
+		gLog.Status = 500
+		h.recorder(gLog)
+
 		writeSSE(w, "", map[string]any{
 			"type":  "response.failed",
 			"error": map[string]any{"message": err.Error()},
@@ -299,8 +372,9 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 	}
 }
 
-func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseWriter, respID, modelKey string, body map[string]any) {
+func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseWriter, respID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
 	var fullContent strings.Builder
+	var usage *Usage
 	toolCalls := make(map[int]*toolCallState)
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
@@ -320,11 +394,17 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 				}
 				toolCalls[tc.Index].args.WriteString(tc.Arguments)
 			}
+			if event.Usage != nil {
+				usage = event.Usage
+			}
 		}
 		return nil
 	})
 
 	if err != nil {
+		gLog.Error = err.Error()
+		gLog.Status = 500
+		h.recorder(gLog)
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -366,8 +446,21 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 		"status": "completed",
 		"model":  modelKey,
 		"output": output,
+		"usage":  usage,
 	}
 
+	respBytes, _ := json.Marshal(resp)
+
+	// Finalize Log
+	gLog.Status = 200
+	gLog.ResponseBody = string(respBytes)
+	if usage != nil {
+		gLog.InputTokens = usage.PromptTokens
+		gLog.OutputTokens = usage.CompletionTokens
+	}
+	gLog.Latency = time.Since(startTime).Milliseconds()
+	h.recorder(gLog)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	w.Write(respBytes)
 }

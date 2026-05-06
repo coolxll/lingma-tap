@@ -22,6 +22,7 @@ const lingmaModelListURL = "https://lingma-api.tongyi.aliyun.com/algo/api/v2/mod
 type LingmaClient struct {
 	session *auth.Session
 	client  *http.Client
+	Debug   bool
 }
 
 func NewLingmaClient(session *auth.Session) *LingmaClient {
@@ -66,6 +67,9 @@ type Usage struct {
 }
 
 func (u *Usage) Consolidate() {
+	if u == nil {
+		return
+	}
 	if u.PromptTokens == 0 && u.InputTokens != 0 {
 		u.PromptTokens = u.InputTokens
 	}
@@ -123,6 +127,10 @@ func (c *LingmaClient) readSSE(body io.Reader, cb func(SSEEvent) error) error {
 			continue
 		}
 
+		if c.Debug {
+			fmt.Printf("[debug] Raw SSE Data: %s\n", ev.Data)
+		}
+
 		if ev.Data == "[DONE]" {
 			return cb(SSEEvent{Type: "done"})
 		}
@@ -139,7 +147,7 @@ func (c *LingmaClient) readSSE(body io.Reader, cb func(SSEEvent) error) error {
 }
 
 func (c *LingmaClient) parseSSEData(data string) (SSEEvent, error) {
-	// Try to parse as the double-JSON envelope: {"headers":{...},"body":"...","statusCodeValue":200,"statusCode":"OK"}
+	// 1. Try to parse as the double-JSON envelope: {"headers":{...},"body":"...","statusCodeValue":200,"statusCode":"OK"}
 	var envelope struct {
 		Headers       map[string]any `json:"headers"`
 		Body          string         `json:"body"`
@@ -153,7 +161,23 @@ func (c *LingmaClient) parseSSEData(data string) (SSEEvent, error) {
 		return c.parseInnerJSON(envelope.Body)
 	}
 
-	// Try to parse as direct OpenAI format (what Lingma actually returns)
+	// 2. Try to parse as finish event: {"firstTokenDuration":...,"totalDuration":...,"serverDuration":...,"usage":...}
+	var finish struct {
+		FirstTokenDuration int    `json:"firstTokenDuration"`
+		TotalDuration      int    `json:"totalDuration"`
+		ServerDuration     int    `json:"serverDuration"`
+		Usage              *Usage `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(data), &finish); err == nil && finish.TotalDuration > 0 {
+		event := SSEEvent{Type: "finish", Raw: []byte(data)}
+		if finish.Usage != nil {
+			finish.Usage.Consolidate()
+			event.Usage = finish.Usage
+		}
+		return event, nil
+	}
+
+	// 3. Try to parse as direct OpenAI format (what Lingma actually returns)
 	var direct struct {
 		Choices []struct {
 			Delta struct {
@@ -195,16 +219,6 @@ func (c *LingmaClient) parseSSEData(data string) (SSEEvent, error) {
 			event.Usage = direct.Usage
 		}
 		return event, nil
-	}
-
-	// Try to parse as finish event: {"firstTokenDuration":...,"totalDuration":...,"serverDuration":...}
-	var finish struct {
-		FirstTokenDuration int `json:"firstTokenDuration"`
-		TotalDuration      int `json:"totalDuration"`
-		ServerDuration     int `json:"serverDuration"`
-	}
-	if err := json.Unmarshal([]byte(data), &finish); err == nil && finish.TotalDuration > 0 {
-		return SSEEvent{Type: "finish"}, nil
 	}
 
 	return SSEEvent{}, fmt.Errorf("unrecognized SSE data format")
@@ -381,6 +395,10 @@ func (c *LingmaClient) FetchModels(ctx context.Context) ([]ModelInfo, error) {
 	return result.Chat, nil
 }
 
-func newUUID() string {
+var uuidGenerator = func() string {
 	return uuid.New().String()
+}
+
+func newUUID() string {
+	return uuidGenerator()
 }

@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -39,8 +40,11 @@ type App struct {
 	sink               *storage.AsyncSink
 	hub                *api.Hub
 	proxy              *proxy.Server
-	apiLn              net.Listener
 	bridgeHandlerField *bridge.BridgeHandler
+	apiLn              net.Listener
+	proxyRunning       bool
+	proxyPort          int
+	gatewayRunning     bool
 	gatewayServer      *http.Server
 	gatewayLogging     bool
 }
@@ -68,6 +72,8 @@ func convertGatewayLogToRecord(l *proto.GatewayLog) *proto.Record {
 		InputTokens:  l.InputTokens,
 		OutputTokens: l.OutputTokens,
 		Latency:      l.Latency,
+		ReqHeaders:   make(map[string]string),
+		RespHeaders:  make(map[string]string),
 	}
 }
 
@@ -77,6 +83,13 @@ func (a *App) startup(ctx context.Context) {
 	home, _ := os.UserHomeDir()
 	dataDir := filepath.Join(home, ".lingma-tap")
 	os.MkdirAll(dataDir, 0755)
+
+	// Persist logs to file
+	logFile, err := os.OpenFile(filepath.Join(dataDir, "app.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err == nil {
+		log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+		log.Println("--- App Started ---")
+	}
 
 	// Initialize CA
 	c, err := ca.New(dataDir)
@@ -124,6 +137,9 @@ func (a *App) startup(ctx context.Context) {
 				a.hub.Broadcast(rec)
 			}
 		})
+		if os.Getenv("GATEWAY_DEBUG") == "1" {
+			a.bridgeHandlerField.SetDebug(true)
+		}
 		bridgeHandler = a.bridgeHandlerField
 		log.Printf("[app] Bridge initialized for user %s", creds.Name)
 
@@ -326,6 +342,9 @@ func (a *App) SetLogging(enabled bool) {
 
 // GetStatus returns the current status.
 func (a *App) GetStatus() map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	status := map[string]interface{}{
 		"proxy_running":   a.proxy != nil,
 		"gateway_running": a.gatewayServer != nil,
@@ -411,6 +430,14 @@ func (a *App) Stats() interface{} {
 		return nil
 	}
 	return a.db.Stats()
+}
+
+// LogError logs an error message from the frontend to the backend logs.
+func (a *App) LogError(message string) {
+	if a.ctx != nil {
+		runtime.LogError(a.ctx, message)
+	}
+	log.Printf("[frontend-error] %s", message)
 }
 
 func main() {

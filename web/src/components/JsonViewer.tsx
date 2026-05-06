@@ -20,7 +20,7 @@ export function JsonViewer({ data, maxHeight = '400px' }: JsonViewerProps) {
   }, [data]);
 
   const highlighted = useMemo(() => {
-    return formatted
+    return (formatted || '')
       .replace(/"([^"]+)":/g, '<span class="text-purple-400">"$1"</span>:')
       .replace(/: "([^"]*)"/g, ': <span class="text-green-400">"$1"</span>')
       .replace(/: (-?\d+\.?\d*)/g, ': <span class="text-blue-400">$1</span>')

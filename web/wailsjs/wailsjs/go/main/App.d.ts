@@ -21,6 +21,8 @@ export function GetRecords(arg1:number,arg2:number):Promise<Array<proto.Record>>
 
 export function GetStatus():Promise<Record<string, any>>;
 
+export function LogError(arg1:string):Promise<void>;
+
 export function OpenExternal(arg1:string):Promise<void>;
 
 export function RecentRecords(arg1:number):Promise<Array<proto.Record>>;
