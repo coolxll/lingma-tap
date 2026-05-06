@@ -5,7 +5,7 @@ import React, {
   useRef,
   useMemo,
 } from "react";
-import { TrafficRecord, StorageStats } from "@/lib/types";
+import { TrafficRecord, StorageStats, mapGatewayLogToRecord } from "@/lib/types";
 import { WSClient } from "@/lib/ws-client";
 import { useRecords } from "@/hooks/useRecords";
 import { TitleBar, TabId } from "@/components/TitleBar";
@@ -182,18 +182,25 @@ function App() {
   const handleLoadMore = useCallback(async () => {
     if (!wails || !canLoadMore) return;
     try {
-      // Count only proxy records for the offset
-      const offset = recordsRef.current.filter(
-        (r) => r.source === "proxy",
-      ).length;
-      const newRecords = await wails.GetRecords(200, offset);
-      if (newRecords && newRecords.length > 0) {
+      const proxyOffset = recordsRef.current.filter((r) => r.source === "proxy").length;
+      const gatewayOffset = recordsRef.current.filter((r) => r.source === "gateway").length;
+
+      const [newProxyRecs, newGatewayLogs] = await Promise.all([
+        wails.GetRecords(200, proxyOffset),
+        wails.GetGatewayLogs ? wails.GetGatewayLogs(200, gatewayOffset) : Promise.resolve([])
+      ]);
+
+      const newRecords: TrafficRecord[] = [...(newProxyRecs || [])];
+      if (newGatewayLogs && newGatewayLogs.length > 0) {
+        newRecords.push(...newGatewayLogs.map(mapGatewayLogToRecord));
+      }
+
+      if (newRecords.length > 0) {
         appendRecords(newRecords);
         setDisplayCount((prev) => prev + 200);
-        if (newRecords.length < 200) {
-          setCanLoadMore(false);
-        }
-      } else {
+      }
+      
+      if ((!newProxyRecs || newProxyRecs.length < 200) && (!newGatewayLogs || newGatewayLogs.length < 200)) {
         setCanLoadMore(false);
       }
     } catch (err) {
@@ -236,41 +243,7 @@ function App() {
 
       // Convert gateway logs to TrafficRecord format
       if (gatewayLogs && gatewayLogs.length > 0) {
-        const gatewayRecords: TrafficRecord[] = gatewayLogs.map((log: any) => ({
-          ts: log.ts,
-          id: log.id || 0,
-          session: log.session,
-          direction: "C2S" as const,
-          source: "gateway",
-          method: log.method,
-          path: log.path,
-          endpoint_type: "chat" as const,
-          request_body: log.request_body || "",
-          response_body: log.response_body || "",
-          status: log.status || 0,
-          is_sse: log.is_sse || false,
-          sse_events: log.sse_events || [],
-          model: log.model || "",
-          input_tokens: log.input_tokens || 0,
-          output_tokens: log.output_tokens || 0,
-          latency: log.latency || 0,
-          error: log.error || "",
-          finish_reason: log.finish_reason || "",
-          // Defaults for required fields
-          index: 0,
-          url: "",
-          host: "",
-          is_encoded: false,
-          request_headers: {},
-          request_body_raw: "",
-          request_mime: "",
-          request_size: 0,
-          status_text: "",
-          response_headers: {},
-          response_mime: "",
-          response_size: 0,
-        }));
-        allRecords.push(...gatewayRecords);
+        allRecords.push(...gatewayLogs.map(mapGatewayLogToRecord));
       }
 
       // Sort by timestamp (newest first)
@@ -328,42 +301,7 @@ function App() {
         ]).then(([proxyRecs, gatewayLogs]) => {
           const allRecords: TrafficRecord[] = [...(proxyRecs || [])];
           if (gatewayLogs && gatewayLogs.length > 0) {
-            const gatewayRecords: TrafficRecord[] = gatewayLogs.map(
-              (log: any) => ({
-                ts: log.ts,
-                id: log.id || 0,
-                session: log.session,
-                direction: "C2S" as const,
-                source: "gateway",
-                method: log.method,
-                path: log.path,
-                endpoint_type: "chat" as const,
-                request_body: log.request_body || "",
-                response_body: log.response_body || "",
-                status: log.status || 0,
-                is_sse: log.is_sse || false,
-                sse_events: log.sse_events || [],
-                model: log.model || "",
-                input_tokens: log.input_tokens || 0,
-                output_tokens: log.output_tokens || 0,
-                latency: log.latency || 0,
-                error: log.error || "",
-                finish_reason: log.finish_reason || "",
-                index: 0,
-                url: "",
-                host: "",
-                is_encoded: false,
-                request_headers: {},
-                request_body_raw: "",
-                request_mime: "",
-                request_size: 0,
-                status_text: "",
-                response_headers: {},
-                response_mime: "",
-                response_size: 0,
-              }),
-            );
-            allRecords.push(...gatewayRecords);
+            allRecords.push(...gatewayLogs.map(mapGatewayLogToRecord));
           }
           allRecords.sort(
             (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime(),
@@ -490,6 +428,8 @@ function App() {
             onClear={handleClear}
             loggingEnabled={gatewayLoggingEnabled}
             onToggleLogging={handleToggleGatewayLogging}
+            onLoadMore={handleLoadMore}
+            canLoadMore={canLoadMore}
           />
         ) : (
           <SettingsPanel

@@ -120,21 +120,25 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("[app] LocalAuth not available (bridge disabled): %v", err)
 	} else {
 		session := auth.NewSession(creds)
-		a.bridgeHandlerField = bridge.NewBridgeHandler(session, func(log *proto.GatewayLog) {
+		a.bridgeHandlerField = bridge.NewBridgeHandler(session, func(gLog *proto.GatewayLog) {
 			a.mu.Lock()
 			logging := a.gatewayLogging
 			a.mu.Unlock()
 
-			if logging && a.sink != nil {
-				a.db.SaveGatewayLog(log) // Use direct DB call for now or update sink
-			}
-			if a.hub != nil {
-				// We need to broadcast as a general record for the UI to show it?
-				// Actually, the UI GatewayMonitor expects TrafficRecord.
-				// I'll convert it or update the UI.
-				// For now, I'll convert it to a TrafficRecord for the real-time feed.
-				rec := convertGatewayLogToRecord(log)
-				a.hub.Broadcast(rec)
+			if logging {
+				if a.sink != nil {
+					if err := a.db.SaveGatewayLog(gLog); err != nil {
+						log.Printf("[app] SaveGatewayLog error: %v", err)
+					}
+				}
+				if a.hub != nil {
+					// We need to broadcast as a general record for the UI to show it?
+					// Actually, the UI GatewayMonitor expects TrafficRecord.
+					// I'll convert it or update the UI.
+					// For now, I'll convert it to a TrafficRecord for the real-time feed.
+					rec := convertGatewayLogToRecord(gLog)
+					a.hub.Broadcast(rec)
+				}
 			}
 		})
 		if os.Getenv("GATEWAY_DEBUG") == "1" {
@@ -173,7 +177,13 @@ func (a *App) startup(ctx context.Context) {
 	}
 	go http.Serve(a.apiLn, mux)
 	log.Printf("[app] Management API server on %s", a.apiLn.Addr())
-	a.gatewayLogging = true
+	
+	loggingSetting, _ := a.db.GetSetting("gateway_logging")
+	if loggingSetting == "false" {
+		a.gatewayLogging = false
+	} else {
+		a.gatewayLogging = true
+	}
 
 	a.proxy = proxy.NewServer(a.ca, func(rec *proto.Record) {
 		rec.Source = "proxy"
@@ -181,11 +191,13 @@ func (a *App) startup(ctx context.Context) {
 		logging := a.gatewayLogging
 		a.mu.Unlock()
 
-		if logging && a.sink != nil {
-			a.sink.SaveRecord(rec)
-		}
-		if a.hub != nil {
-			a.hub.Broadcast(rec)
+		if logging {
+			if a.sink != nil {
+				a.sink.SaveRecord(rec)
+			}
+			if a.hub != nil {
+				a.hub.Broadcast(rec)
+			}
 		}
 	})
 
@@ -336,8 +348,16 @@ func (a *App) GetCACertPath() string {
 // SetLogging enables or disables traffic logging to SQLite.
 func (a *App) SetLogging(enabled bool) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.gatewayLogging = enabled
+	a.mu.Unlock()
+
+	if a.db != nil {
+		val := "false"
+		if enabled {
+			val = "true"
+		}
+		a.db.SaveSetting("gateway_logging", val)
+	}
 }
 
 // GetStatus returns the current status.

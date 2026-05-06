@@ -60,6 +60,43 @@ export interface GatewayLog {
   error?: string;
   is_sse: boolean;
   sse_events?: SSEEvent[];
+  finish_reason?: string;
+}
+
+export function mapGatewayLogToRecord(log: any): TrafficRecord {
+  return {
+    ts: log.ts,
+    id: log.id || 0,
+    session: log.session,
+    direction: "C2S",
+    source: "gateway",
+    method: log.method,
+    path: log.path,
+    endpoint_type: "chat",
+    request_body: log.request_body || "",
+    response_body: log.response_body || "",
+    status: log.status || 0,
+    is_sse: log.is_sse || false,
+    sse_events: log.sse_events || [],
+    model: log.model || "",
+    input_tokens: log.input_tokens || 0,
+    output_tokens: log.output_tokens || 0,
+    latency: log.latency || 0,
+    error: log.error || "",
+    finish_reason: log.finish_reason || "",
+    index: 0,
+    url: "",
+    host: "",
+    is_encoded: false,
+    request_headers: {},
+    request_body_raw: "",
+    request_mime: "",
+    request_size: 0,
+    status_text: "",
+    response_headers: {},
+    response_mime: "",
+    response_size: 0,
+  };
 }
 
 export interface StorageStats {
