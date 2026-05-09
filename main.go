@@ -366,7 +366,7 @@ func (a *App) GetStatus() map[string]interface{} {
 	defer a.mu.Unlock()
 
 	status := map[string]interface{}{
-		"proxy_running":   a.proxy != nil,
+		"proxy_running":   a.proxy != nil && a.proxy.Port() != 0,
 		"gateway_running": a.gatewayServer != nil,
 		"gateway_logging": a.gatewayLogging,
 	}
