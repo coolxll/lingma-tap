@@ -1,0 +1,9 @@
+web/
+build/
+assets/
+docs/
+.git/
+.github/
+*.md
+.gitignore
+wails.json

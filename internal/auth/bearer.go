@@ -82,14 +82,13 @@ func NewSessionWithFreshKey(creds *Credentials) (*Session, error) {
 // SignRequest computes the Bearer signature for a Lingma API request.
 // encodedBody: QoderEncoding-encoded request body
 // fullURL: the full request URL (used to extract pathWithoutAlgo)
-func (s *Session) SignRequest(encodedBody, fullURL string) (payloadB64, sig string, err error) {
+func (s *Session) SignRequest(encodedBody, fullURL, cosyDate string) (payloadB64, sig string, err error) {
 	payloadB64, err = s.buildPayloadB64()
 	if err != nil {
 		return "", "", fmt.Errorf("build payload b64: %w", err)
 	}
 
 	pathWithoutAlgo := extractPathWithoutAlgo(fullURL)
-	cosyDate := fmt.Sprintf("%d", time.Now().Unix())
 
 	sigInput := payloadB64 + "\n" + s.CosyKey + "\n" + cosyDate + "\n" + encodedBody + "\n" + pathWithoutAlgo
 	sig = md5Hex(sigInput)
@@ -98,18 +97,19 @@ func (s *Session) SignRequest(encodedBody, fullURL string) (payloadB64, sig stri
 }
 
 // BuildBearer returns the full Authorization header value.
-func (s *Session) BuildBearer(encodedBody, fullURL string) (string, string, error) {
-	payloadB64, sig, err := s.SignRequest(encodedBody, fullURL)
+func (s *Session) BuildBearer(encodedBody, fullURL, cosyDate string) (string, error) {
+	payloadB64, sig, err := s.SignRequest(encodedBody, fullURL, cosyDate)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	bearer := "Bearer COSY." + payloadB64 + "." + sig
-	return bearer, fmt.Sprintf("%d", time.Now().Unix()), nil
+	return bearer, nil
 }
 
 // BuildHeaders returns all required headers for a Lingma API request.
 func (s *Session) BuildHeaders(encodedBody, fullURL string) (map[string]string, error) {
-	bearer, cosyDate, err := s.BuildBearer(encodedBody, fullURL)
+	cosyDate := fmt.Sprintf("%d", time.Now().Unix())
+	bearer, err := s.BuildBearer(encodedBody, fullURL, cosyDate)
 	if err != nil {
 		return nil, err
 	}

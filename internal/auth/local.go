@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
@@ -174,4 +175,116 @@ func readTrimmed(path string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+// LoadCredentialsFromBytes loads credentials from raw file content strings
+// instead of reading from the local filesystem. Used for server mode where
+// auth files are uploaded via HTTP.
+func LoadCredentialsFromBytes(idContent, userContent string) (*Credentials, error) {
+	machineID := strings.TrimSpace(idContent)
+	userB64 := strings.TrimSpace(userContent)
+
+	userJSON, err := decryptUser(userB64, machineID)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt user: %w", err)
+	}
+
+	var user struct {
+		Name               string `json:"name"`
+		UID                string `json:"uid"`
+		OrganizationID     string `json:"organization_id"`
+		UserType           string `json:"user_type"`
+		Key                string `json:"key"`
+		EncryptUserInfo    string `json:"encrypt_user_info"`
+		SecurityOAuthToken string `json:"security_oauth_token"`
+		RefreshToken       string `json:"refresh_token"`
+		ExpireTime         int64  `json:"expire_time"`
+	}
+	if err := json.Unmarshal(userJSON, &user); err != nil {
+		return nil, fmt.Errorf("parse user json: %w", err)
+	}
+
+	return &Credentials{
+		MachineID:          machineID,
+		UID:                user.UID,
+		OrganizationID:     user.OrganizationID,
+		CosyKey:            user.Key,
+		EncryptUserInfo:    user.EncryptUserInfo,
+		UserType:           user.UserType,
+		SecurityOAuthToken: user.SecurityOAuthToken,
+		RefreshToken:       user.RefreshToken,
+		ExpireTime:         user.ExpireTime,
+		Name:               user.Name,
+	}, nil
+}
+
+// SaveExchangedCredentials serializes and encrypts credentials for persistent storage.
+func SaveExchangedCredentials(creds *Credentials, dataDir string) error {
+	// 1. Prepare id file content
+	idObj := map[string]string{"machine_id": creds.MachineID}
+	idJSON, _ := json.Marshal(idObj)
+
+	// 2. Prepare user file content (encrypted)
+	userObj := map[string]interface{}{
+		"name":                 creds.Name,
+		"uid":                  creds.UID,
+		"organization_id":      creds.OrganizationID,
+		"user_type":            creds.UserType,
+		"key":                  creds.CosyKey,
+		"encrypt_user_info":    creds.EncryptUserInfo,
+		"security_oauth_token": creds.SecurityOAuthToken,
+		"refresh_token":        creds.RefreshToken,
+		"expire_time":         creds.ExpireTime,
+	}
+	userJSON, _ := json.Marshal(userObj)
+	encryptedUser, err := encryptUser(userJSON, creds.MachineID)
+	if err != nil {
+		return fmt.Errorf("encrypt user data: %w", err)
+	}
+
+	return SaveCredentialsToDir(dataDir, string(idJSON), encryptedUser)
+}
+
+func encryptUser(plaintext []byte, machineID string) (string, error) {
+	if len(machineID) < 16 {
+		return "", fmt.Errorf("machineId too short")
+	}
+	key := []byte(machineID[:16])
+
+	// PKCS7 padding
+	padding := aes.BlockSize - len(plaintext)%aes.BlockSize
+	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
+	plaintext = append(plaintext, padtext...)
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+
+	ciphertext := make([]byte, len(plaintext))
+	mode := cipher.NewCBCEncrypter(block, key)
+	mode.CryptBlocks(ciphertext, plaintext)
+
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+// SaveCredentialsToDir persists uploaded auth files to disk so they survive restarts.
+func SaveCredentialsToDir(dataDir, idContent, userContent string) error {
+	authDir := filepath.Join(dataDir, "auth")
+	if err := os.MkdirAll(authDir, 0755); err != nil {
+		return fmt.Errorf("create auth dir: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "id"), []byte(strings.TrimSpace(idContent)), 0600); err != nil {
+		return fmt.Errorf("write id file: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "user"), []byte(strings.TrimSpace(userContent)), 0600); err != nil {
+		return fmt.Errorf("write user file: %w", err)
+	}
+	return nil
+}
+
+// LoadCredentialsFromDir loads credentials from a specific directory.
+// Used to reload persisted auth files in server mode.
+func LoadCredentialsFromDir(dir string) (*Credentials, error) {
+	return loadFromDir(dir)
 }

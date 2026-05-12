@@ -34,6 +34,17 @@ func NewHandler(hub *Hub, store RecordStore, bridge BridgeHandler) *Handler {
 	return &Handler{hub: hub, store: store, bridge: bridge}
 }
 
+// NewGatewayHandler creates a Handler for server mode with only the bridge.
+// hub and store are nil — gateway routes work independently.
+func NewGatewayHandler(bridge BridgeHandler) *Handler {
+	return &Handler{bridge: bridge}
+}
+
+// SetBridge hot-reloads the bridge handler (e.g. after auth file upload).
+func (h *Handler) SetBridge(bridge BridgeHandler) {
+	h.bridge = bridge
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -48,13 +59,24 @@ func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux) {
 
 func (h *Handler) RegisterGatewayRoutes(mux *http.ServeMux) {
 	// Bridge endpoints (OpenAI / Anthropic compatible)
-	if h.bridge != nil {
+	if h.bridge != nil && !h.isBridgeNil() {
 		mux.HandleFunc("/v1/models", corsMiddleware(h.bridge.HandleModels))
 		mux.HandleFunc("/v1/models/", corsMiddleware(h.bridge.HandleModels))
 		mux.HandleFunc("/v1/chat/completions", corsMiddleware(h.bridge.HandleOpenAIChat))
 		mux.HandleFunc("/v1/responses", corsMiddleware(h.bridge.HandleOpenAIResponses))
 		mux.HandleFunc("/v1/messages", corsMiddleware(h.bridge.HandleAnthropicMessages))
 	}
+}
+
+func (h *Handler) isBridgeNil() bool {
+	if h.bridge == nil {
+		return true
+	}
+	// Check if the interface contains a nil pointer
+	if bh, ok := h.bridge.(*bridge.BridgeHandler); ok {
+		return bh == nil
+	}
+	return false
 }
 
 func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {

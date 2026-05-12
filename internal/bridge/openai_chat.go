@@ -22,6 +22,9 @@ var (
 
 // fetchModelsWithCache returns cached models or fetches fresh ones from the API.
 func (h *BridgeHandler) fetchModelsWithCache(ctx context.Context) ([]ModelInfo, error) {
+	if h == nil || h.client == nil {
+		return nil, fmt.Errorf("bridge handler not initialized")
+	}
 	if modelCacheValid && time.Since(modelCacheTime) < 10*time.Minute {
 		return modelCache, nil
 	}
@@ -48,6 +51,10 @@ type modelResponse struct {
 
 // HandleModels handles GET /v1/models and GET /v1/models/{id}
 func (h *BridgeHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
+	if h == nil {
+		writeOpenAIError(w, http.StatusServiceUnavailable, "Bridge not initialized")
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
@@ -109,6 +116,10 @@ func (h *BridgeHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 
 // HandleOpenAIChat handles POST /v1/chat/completions
 func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request) {
+	if h == nil {
+		writeOpenAIError(w, http.StatusServiceUnavailable, "Bridge not initialized")
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":{"message":"Method not allowed","type":"invalid_request_error"}}`, http.StatusMethodNotAllowed)
 		return
@@ -583,7 +594,7 @@ type toolCallState struct {
 // resolveModelKey dynamically maps a requested model string to a Lingma model key
 // by checking the fetched models' keys and display names.
 func (h *BridgeHandler) resolveModelKey(ctx context.Context, model string) string {
-	if model == "" {
+	if h == nil || model == "" {
 		return "org_auto"
 	}
 

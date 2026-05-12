@@ -42,7 +42,12 @@ web/dist
 *.db
 *.db-wal
 *.db-shm
+data/
+server
 
 # Claude Code
 .claude/
 web/package.json.md5
+
+# Environment Variables
+.env

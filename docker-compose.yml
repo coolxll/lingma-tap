@@ -1,0 +1,14 @@
+services:
+  gateway:
+    build: .
+    ports:
+      - "9090:9090"
+    volumes:
+      - gateway-data:/data
+    environment:
+      - GATEWAY_PORT=9090
+      - GATEWAY_DEBUG=0
+    restart: unless-stopped
+
+volumes:
+  gateway-data:
