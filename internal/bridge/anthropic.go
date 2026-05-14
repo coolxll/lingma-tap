@@ -451,6 +451,92 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	stopReason := "end_turn"
 	var fullContent strings.Builder
 	toolCalls := make(map[int]*toolCallState)
+	finalized := false
+
+	finalize := func() {
+		if finalized {
+			return
+		}
+		finalized = true
+
+		if len(toolCalls) > 0 {
+			stopReason = "tool_use"
+		}
+
+		// Stop all open content blocks
+		if state.textBlockStarted {
+			writeAnthropicSSE(w, "content_block_stop", map[string]any{
+				"type":  "content_block_stop",
+				"index": state.textBlockIndex,
+			})
+		}
+		for _, ts := range state.toolBlocks {
+			if ts.started {
+				writeAnthropicSSE(w, "content_block_stop", map[string]any{
+					"type":  "content_block_stop",
+					"index": ts.blockIndex,
+				})
+			}
+		}
+
+		outTokens := 0
+		if usage != nil {
+			outTokens = usage.CompletionTokens
+			gLog.InputTokens = usage.PromptTokens
+			gLog.OutputTokens = usage.CompletionTokens
+		}
+
+		// message_delta with usage
+		writeAnthropicSSE(w, "message_delta", map[string]any{
+			"type": "message_delta",
+			"delta": map[string]any{
+				"stop_reason":   stopReason,
+				"stop_sequence": nil,
+			},
+			"usage": map[string]any{
+				"output_tokens": outTokens,
+			},
+		})
+		writeAnthropicSSE(w, "message_stop", map[string]any{
+			"type": "message_stop",
+		})
+		if canFlush {
+			flusher.Flush()
+		}
+
+		// Finalize Log
+		gLog.Status = 200
+		gLog.FinishReason = stopReason
+		gLog.Latency = time.Since(startTime).Milliseconds()
+
+		// Build a summary of the response for the log
+		var content []map[string]any
+		if fullContent.Len() > 0 {
+			content = append(content, map[string]any{"type": "text", "text": fullContent.String()})
+		}
+		for _, tc := range toolCalls {
+			var input map[string]any
+			if err := json.Unmarshal([]byte(tc.args.String()), &input); err != nil {
+				input = map[string]any{"_error": "failed to parse arguments", "raw": tc.args.String()}
+			}
+			content = append(content, map[string]any{
+				"type":  "tool_use",
+				"id":    tc.id,
+				"name":  tc.name,
+				"input": input,
+			})
+		}
+		respSummary := map[string]any{
+			"id":      msgID,
+			"role":    "assistant",
+			"model":   modelKey,
+			"content": content,
+			"usage":   usage,
+		}
+		respBytes, _ := json.Marshal(respSummary)
+		gLog.ResponseBody = string(respBytes)
+		h.recorder(gLog)
+	}
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
@@ -515,9 +601,9 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 						"type":  "content_block_start",
 						"index": toolState.blockIndex,
 						"content_block": map[string]any{
-							"type": "tool_use",
-							"id":   toolState.id,
-							"name": toolState.name,
+							"type":  "tool_use",
+							"id":    toolState.id,
+							"name":  toolState.name,
 							"input": map[string]any{},
 						},
 					}
@@ -531,7 +617,7 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 						"type":  "content_block_delta",
 						"index": toolState.blockIndex,
 						"delta": map[string]any{
-							"type":        "input_json_delta",
+							"type":         "input_json_delta",
 							"partial_json": tc.Arguments,
 						},
 					})
@@ -556,79 +642,9 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			if event.Usage != nil {
 				usage = event.Usage
 			}
-			// Stop all open content blocks
-			if state.textBlockStarted {
-				writeAnthropicSSE(w, "content_block_stop", map[string]any{
-					"type":  "content_block_stop",
-					"index": state.textBlockIndex,
-				})
-			}
-			for _, ts := range state.toolBlocks {
-				if ts.started {
-					writeAnthropicSSE(w, "content_block_stop", map[string]any{
-						"type":  "content_block_stop",
-						"index": ts.blockIndex,
-					})
-				}
-			}
-
-			outTokens := 0
-			if usage != nil {
-				outTokens = usage.CompletionTokens
-				gLog.InputTokens = usage.PromptTokens
-				gLog.OutputTokens = usage.CompletionTokens
-			}
-
-			// message_delta with usage
-			writeAnthropicSSE(w, "message_delta", map[string]any{
-				"type": "message_delta",
-				"delta": map[string]any{
-					"stop_reason":   stopReason,
-					"stop_sequence": nil,
-				},
-				"usage": map[string]any{
-					"output_tokens": outTokens,
-				},
-			})
-			writeAnthropicSSE(w, "message_stop", map[string]any{
-				"type": "message_stop",
-			})
-			if canFlush {
-				flusher.Flush()
-			}
-
-			// Finalize Log
-			gLog.Status = 200
-			gLog.FinishReason = stopReason
-			gLog.Latency = time.Since(startTime).Milliseconds()
-
-			// Build a summary of the response for the log
-			var content []map[string]any
-			if fullContent.Len() > 0 {
-				content = append(content, map[string]any{"type": "text", "text": fullContent.String()})
-			}
-			for _, tc := range toolCalls {
-				var input map[string]any
-				if err := json.Unmarshal([]byte(tc.args.String()), &input); err != nil {
-					input = map[string]any{"_error": "failed to parse arguments", "raw": tc.args.String()}
-				}
-				content = append(content, map[string]any{
-					"type": "tool_use",
-					"id":   tc.id,
-					"name": tc.name,
-					"input": input,
-				})
-			}
-			respSummary := map[string]any{
-				"id":      msgID,
-				"role":    "assistant",
-				"model":   modelKey,
-				"content": content,
-				"usage":   usage,
-			}
-			respBytes, _ := json.Marshal(respSummary)
-			gLog.ResponseBody = string(respBytes)
-			h.recorder(gLog)
+			finalize()
+		case "done":
+			finalize()
 		}
 		return nil
 	})
@@ -648,15 +664,20 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 		if canFlush {
 			flusher.Flush()
 		}
+		return
+	}
+
+	if !finalized {
+		finalize()
 	}
 }
 
 // anthropicStreamState tracks the state of an Anthropic streaming response
 type anthropicStreamState struct {
-	textBlockStarted  bool
-	textBlockIndex    int
+	textBlockStarted bool
+	textBlockIndex   int
 	toolBlockCounter int
-	currentIndex     int // Tracks the next content block index
+	currentIndex     int                     // Tracks the next content block index
 	toolBlocks       map[int]*toolBlockState // key: OpenAI tool call index
 	usage            *Usage
 }
@@ -699,7 +720,8 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 	toolCalls := make(map[int]*toolCallState)
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
-		if event.Type == "data" {
+		switch event.Type {
+		case "data":
 			if event.Content != "" {
 				fullContent.WriteString(event.Content)
 			}
@@ -718,6 +740,10 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 				}
 				toolCalls[tc.Index].args.WriteString(tc.Arguments)
 			}
+			if event.Usage != nil {
+				usage = *event.Usage
+			}
+		case "finish":
 			if event.Usage != nil {
 				usage = *event.Usage
 			}
@@ -758,17 +784,18 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 			input = map[string]any{}
 		}
 		content = append(content, map[string]any{
-			"type": "tool_use",
-			"id":   tc.id,
-			"name": tc.name,
+			"type":  "tool_use",
+			"id":    tc.id,
+			"name":  tc.name,
 			"input": input,
 		})
 	}
 
 	// Determine stop reason
 	stopReason := mapFinishReason(finishReason)
-	// If we have tool calls and no explicit finish reason, ensure it's tool_use
-	if len(toolCalls) > 0 && finishReason == "" {
+	// If tool calls are present, Claude clients expect tool_use regardless of
+	// whether Lingma sent no finish reason or a generic stop reason.
+	if len(toolCalls) > 0 {
 		stopReason = "tool_use"
 	}
 

@@ -88,6 +88,59 @@ func TestBridgeHandler_HandleAnthropicMessages(t *testing.T) {
 	if !strings.Contains(string(body), "Anthropic response") {
 		t.Errorf("Response body missing expected content: %s", string(body))
 	}
+	if !strings.Contains(string(body), "message_stop") {
+		t.Errorf("Response body missing message_stop: %s", string(body))
+	}
+}
+
+func TestBridgeHandler_HandleAnthropicMessages_ToolUseDoneFinalizes(t *testing.T) {
+	session := &auth.Session{CosyKey: "test-key"}
+	recorder := func(log *proto.GatewayLog) {}
+	handler := NewBridgeHandler(session, recorder)
+
+	mockResp := `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"London\"}"}}]}}]}` + "\n\ndata: [DONE]\n\n"
+	handler.client.client.Transport = &mockTransport{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(mockResp)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	reqBody := `{
+		"model":"claude-3-opus-20240229",
+		"messages":[{"role":"user","content":"What is the weather?"}],
+		"tools":[{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"location":{"type":"string"}}}}],
+		"max_tokens":1024,
+		"stream":true
+	}`
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	handler.HandleAnthropicMessages(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected 200, got %d", resp.StatusCode)
+	}
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	body := string(bodyBytes)
+	for _, want := range []string{
+		`"type":"tool_use"`,
+		`"type":"input_json_delta"`,
+		`"stop_reason":"tool_use"`,
+		`event: message_stop`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Response body missing %s: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `"stop_reason":"end_turn"`) {
+		t.Errorf("Tool call stream should not finish with end_turn: %s", body)
+	}
 }
 
 func TestBridgeHandler_HandleOpenAIResponses(t *testing.T) {
@@ -107,8 +160,8 @@ func TestBridgeHandler_HandleOpenAIResponses(t *testing.T) {
 	}
 
 	reqBody := map[string]any{
-		"model": "gpt-4",
-		"input": "test input",
+		"model":  "gpt-4",
+		"input":  "test input",
 		"stream": true,
 	}
 	reqBytes, _ := json.Marshal(reqBody)
@@ -405,5 +458,3 @@ func TestBridgeHandler_HandleKModel_ClaudeCode(t *testing.T) {
 		t.Errorf("Billing header was not stripped for kmodel request")
 	}
 }
-
-

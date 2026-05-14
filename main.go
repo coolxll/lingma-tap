@@ -126,16 +126,14 @@ func (a *App) startup(ctx context.Context) {
 			a.mu.Unlock()
 
 			if logging {
-				if a.sink != nil {
-					if err := a.db.SaveGatewayLog(gLog); err != nil {
-						log.Printf("[app] SaveGatewayLog error: %v", err)
-					}
+				if a.db != nil {
+					go func() {
+						if err := a.db.SaveGatewayLog(gLog); err != nil {
+							log.Printf("[app] SaveGatewayLog error: %v", err)
+						}
+					}()
 				}
 				if a.hub != nil {
-					// We need to broadcast as a general record for the UI to show it?
-					// Actually, the UI GatewayMonitor expects TrafficRecord.
-					// I'll convert it or update the UI.
-					// For now, I'll convert it to a TrafficRecord for the real-time feed.
 					rec := convertGatewayLogToRecord(gLog)
 					a.hub.Broadcast(rec)
 				}
@@ -179,10 +177,10 @@ func (a *App) startup(ctx context.Context) {
 	log.Printf("[app] Management API server on %s", a.apiLn.Addr())
 	
 	loggingSetting, _ := a.db.GetSetting("gateway_logging")
-	if loggingSetting == "false" {
-		a.gatewayLogging = false
-	} else {
+	if loggingSetting == "true" {
 		a.gatewayLogging = true
+	} else {
+		a.gatewayLogging = false
 	}
 
 	a.proxy = proxy.NewServer(a.ca, func(rec *proto.Record) {
