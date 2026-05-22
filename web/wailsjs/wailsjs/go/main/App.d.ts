@@ -31,6 +31,8 @@ export function SaveAnthropicMapping(arg1:Record<string, string>,arg2:string):Pr
 
 export function SetLogging(arg1:boolean):Promise<void>;
 
+export function SetProxyLogging(arg1:boolean):Promise<void>;
+
 export function StartGateway(arg1:number):Promise<void>;
 
 export function StartProxy(arg1:number):Promise<void>;

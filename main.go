@@ -47,10 +47,13 @@ type App struct {
 	gatewayRunning     bool
 	gatewayServer      *http.Server
 	gatewayLogging     bool
+	proxyLogging       bool
 }
 
 func NewApp() *App {
-	return &App{}
+	return &App{
+		proxyLogging: true,
+	}
 }
 
 func convertGatewayLogToRecord(l *proto.GatewayLog) *proto.Record {
@@ -183,10 +186,18 @@ func (a *App) startup(ctx context.Context) {
 		a.gatewayLogging = false
 	}
 
+	// Proxy logging defaults to true (independent of gateway logging)
+	proxyLoggingSetting, _ := a.db.GetSetting("proxy_logging")
+	if proxyLoggingSetting == "false" {
+		a.proxyLogging = false
+	} else {
+		a.proxyLogging = true
+	}
+
 	a.proxy = proxy.NewServer(a.ca, func(rec *proto.Record) {
 		rec.Source = "proxy"
 		a.mu.Lock()
-		logging := a.gatewayLogging
+		logging := a.proxyLogging
 		a.mu.Unlock()
 
 		if logging {
@@ -358,6 +369,21 @@ func (a *App) SetLogging(enabled bool) {
 	}
 }
 
+// SetProxyLogging enables or disables proxy traffic logging.
+func (a *App) SetProxyLogging(enabled bool) {
+	a.mu.Lock()
+	a.proxyLogging = enabled
+	a.mu.Unlock()
+
+	if a.db != nil {
+		val := "false"
+		if enabled {
+			val = "true"
+		}
+		a.db.SaveSetting("proxy_logging", val)
+	}
+}
+
 // GetStatus returns the current status.
 func (a *App) GetStatus() map[string]interface{} {
 	a.mu.Lock()
@@ -367,6 +393,7 @@ func (a *App) GetStatus() map[string]interface{} {
 		"proxy_running":   a.proxy != nil && a.proxy.Port() != 0,
 		"gateway_running": a.gatewayServer != nil,
 		"gateway_logging": a.gatewayLogging,
+		"proxy_logging":   a.proxyLogging,
 	}
 	if a.db != nil {
 		status["stats"] = a.db.Stats()

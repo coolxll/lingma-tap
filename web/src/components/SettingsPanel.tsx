@@ -42,6 +42,8 @@ interface SettingsPanelProps {
   onGatewayPortChange?: (port: number) => void;
   loggingEnabled?: boolean;
   onToggleLogging?: () => void;
+  proxyLoggingEnabled?: boolean;
+  onToggleProxyLogging?: () => void;
   stats?: StorageStats | null;
   onClearAll?: () => void;
   onClearBefore?: (days: number) => Promise<number>;
@@ -58,6 +60,8 @@ export function SettingsPanel({
   onGatewayPortChange,
   loggingEnabled,
   onToggleLogging,
+  proxyLoggingEnabled = true,
+  onToggleProxyLogging,
   stats,
   onClearAll,
   onClearBefore,
@@ -312,6 +316,25 @@ export function SettingsPanel({
                   <span
                     className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
                       loggingEnabled ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between pt-3 border-t border-zinc-800/50">
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold text-zinc-400 uppercase">{t('settings.proxy_logging')}</span>
+                  <span className="text-[9px] text-zinc-600 truncate max-w-[150px]">{t('settings.proxy_logging_hint')}</span>
+                </div>
+                <button
+                  onClick={onToggleProxyLogging}
+                  className={`relative inline-flex h-4 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    proxyLoggingEnabled ? 'bg-green-500/80' : 'bg-zinc-700'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      proxyLoggingEnabled ? 'translate-x-4' : 'translate-x-0'
                     }`}
                   />
                 </button>

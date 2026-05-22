@@ -33,6 +33,7 @@ interface WailsWindow extends Window {
         GetCACertPath: () => Promise<string>;
         GetStatus: () => Promise<Record<string, unknown>>;
         SetLogging: (enabled: boolean) => Promise<void>;
+        SetProxyLogging: (enabled: boolean) => Promise<void>;
         GetModels: () => Promise<ModelInfo[]>;
       };
     };
@@ -127,6 +128,7 @@ function App() {
   const [stats, setStats] = useState<StorageStats | null>(null);
   const [caCertPath, setCaCertPath] = useState("");
   const [gatewayLoggingEnabled, setGatewayLoggingEnabled] = useState(true);
+  const [proxyLoggingEnabled, setProxyLoggingEnabled] = useState(true);
   const [displayCount, setDisplayCount] = useState(200);
   const [canLoadMore, setCanLoadMore] = useState(true);
   const [proxyTypeFilter, setProxyTypeFilter] = useState<
@@ -267,6 +269,8 @@ function App() {
         setGatewayRunning(s.gateway_running as boolean);
       if (s?.gateway_logging !== undefined)
         setGatewayLoggingEnabled(s.gateway_logging as boolean);
+      if (s?.proxy_logging !== undefined)
+        setProxyLoggingEnabled(s.proxy_logging as boolean);
     });
   }, [wails, updateRecords, setSelectedRecord]);
 
@@ -326,6 +330,8 @@ function App() {
           setGatewayRunning(s.gateway_running as boolean);
         if (s?.gateway_logging !== undefined)
           setGatewayLoggingEnabled(s.gateway_logging as boolean);
+        if (s?.proxy_logging !== undefined)
+          setProxyLoggingEnabled(s.proxy_logging as boolean);
       });
     }, 5000);
     return () => clearInterval(interval);
@@ -374,6 +380,19 @@ function App() {
       }
     }
   }, [wails, gatewayLoggingEnabled]);
+
+  const handleToggleProxyLogging = useCallback(async () => {
+    const newState = !proxyLoggingEnabled;
+    setProxyLoggingEnabled(newState);
+    if (wails?.SetProxyLogging) {
+      try {
+        await wails.SetProxyLogging(newState);
+      } catch (err) {
+        console.error("Failed to toggle proxy logging:", err);
+        wails?.LogError(`Failed to toggle proxy logging: ${err}`);
+      }
+    }
+  }, [wails, proxyLoggingEnabled]);
 
   const handleClear = useCallback(async () => {
     if (wails) {
@@ -443,6 +462,8 @@ function App() {
             onGatewayPortChange={setGatewayPort}
             loggingEnabled={gatewayLoggingEnabled}
             onToggleLogging={handleToggleGatewayLogging}
+            proxyLoggingEnabled={proxyLoggingEnabled}
+            onToggleProxyLogging={handleToggleProxyLogging}
             stats={stats || null}
             onClearAll={handleClear}
             onClearBefore={(days) =>

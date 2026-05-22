@@ -58,6 +58,10 @@ export function SetLogging(arg1) {
   return window['go']['main']['App']['SetLogging'](arg1);
 }
 
+export function SetProxyLogging(arg1) {
+  return window['go']['main']['App']['SetProxyLogging'](arg1);
+}
+
 export function StartGateway(arg1) {
   return window['go']['main']['App']['StartGateway'](arg1);
 }
