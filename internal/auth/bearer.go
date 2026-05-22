@@ -56,27 +56,27 @@ func NewSession(creds *Credentials) *Session {
 }
 
 // NewSessionWithFreshKey generates a new tempKey, RSA-encrypts it, and creates a session.
-// Use this when the CosyKey from the auth file may be stale.
-func NewSessionWithFreshKey(creds *Credentials) (*Session, error) {
+// Returns the session (with raw key for signing) and the RSA-encrypted key (for grantAuthInfos).
+func NewSessionWithFreshKey(creds *Credentials) (*Session, string, error) {
 	tempKey := make([]byte, 16)
 	if _, err := rand.Read(tempKey); err != nil {
-		return nil, fmt.Errorf("generate temp key: %w", err)
+		return nil, "", fmt.Errorf("generate temp key: %w", err)
 	}
 
 	encrypted, err := rsa.EncryptPKCS1v15(rand.Reader, serverPubKey, tempKey)
 	if err != nil {
-		return nil, fmt.Errorf("rsa encrypt: %w", err)
+		return nil, "", fmt.Errorf("rsa encrypt: %w", err)
 	}
-	cosyKey := base64.StdEncoding.EncodeToString(encrypted)
+	encryptedKey := base64.StdEncoding.EncodeToString(encrypted)
 
 	return &Session{
-		CosyKey:  cosyKey,
+		CosyKey:  base64.StdEncoding.EncodeToString(tempKey),
 		Info:     creds.EncryptUserInfo,
 		UID:      creds.UID,
 		OrgID:    creds.OrganizationID,
 		Mid:      creds.MachineID,
 		UserType: creds.UserType,
-	}, nil
+	}, encryptedKey, nil
 }
 
 // SignRequest computes the Bearer signature for a Lingma API request.

@@ -14,8 +14,8 @@ func TestGrantAuthInfos(t *testing.T) {
 	fmt.Printf("UID: %s\n", creds.UID)
 	fmt.Printf("OrgID: %s\n", creds.OrganizationID)
 
-	// Test grantAuthInfos
-	err = grantAuthInfos(creds)
+	// Test grantAuthInfos (pass CosyKey as encryptedKey for testing)
+	err = grantAuthInfos(creds, creds.CosyKey)
 	if err != nil {
 		t.Errorf("grantAuthInfos failed: %v", err)
 	}

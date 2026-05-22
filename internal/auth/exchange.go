@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -29,16 +30,15 @@ func ExchangeCallback(userId, securityOauthToken, machineID string) (*Credential
 		MachineID:          machineID,
 	}
 
-
-	// 2. Generate a fresh CosyKey (16-byte random, RSA encrypted)
-	session, err := NewSessionWithFreshKey(creds)
+	// 2. Generate a fresh CosyKey (raw key for signing, RSA-encrypted key for server)
+	session, encryptedKey, err := NewSessionWithFreshKey(creds)
 	if err != nil {
 		return nil, fmt.Errorf("generate fresh key: %w", err)
 	}
-	creds.CosyKey = session.CosyKey
+	creds.CosyKey = session.CosyKey // raw key for Bearer signing
 
 	// 3. Call grantAuthInfos to "activate" the tokens and the new key
-	if err := grantAuthInfos(creds); err != nil {
+	if err := grantAuthInfos(creds, encryptedKey); err != nil {
 		return nil, fmt.Errorf("grant auth infos: %w", err)
 	}
 
@@ -50,13 +50,12 @@ func ExchangeCallback(userId, securityOauthToken, machineID string) (*Credential
 
 	// 5. Final login call (often required to finalize session on server)
 	if err := userLogin(fullCreds); err != nil {
-		// Log but continue, as we already have the tokens
-		fmt.Printf("Warning: final login call failed: %v\n", err)
+		log.Printf("[auth] Warning: final login call failed: %v", err)
 	}
 
 	// 6. "Activate" CosyKey with a V2 call (like model/list)
 	if err := activateCosyKey(fullCreds); err != nil {
-		fmt.Printf("Warning: CosyKey activation via V2 call failed: %v\n", err)
+		log.Printf("[auth] Warning: CosyKey activation via V2 call failed: %v", err)
 	}
 
 	return fullCreds, nil
@@ -103,7 +102,7 @@ func userLogin(creds *Credentials) error {
 	return err
 }
 
-func grantAuthInfos(creds *Credentials) error {
+func grantAuthInfos(creds *Credentials, encryptedKey string) error {
 	payload := map[string]interface{}{
 		"userId":             creds.UID,
 		"personalToken":      "",
@@ -111,7 +110,7 @@ func grantAuthInfos(creds *Credentials) error {
 		"refreshToken":       "",
 		"needRefresh":        false,
 		"authInfo": map[string]string{
-			"key": creds.CosyKey,
+			"key": encryptedKey,
 		},
 	}
 
@@ -145,8 +144,6 @@ func fetchUserStatus(creds *Credentials) (*Credentials, error) {
 	if err != nil {
 		return nil, err
 	}
-	
-	fmt.Printf("DEBUG: user/status raw body: %s\n", string(body))
 
 	var resp struct {
 		ID              string `json:"id"`
