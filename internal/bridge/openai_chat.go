@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -126,15 +127,23 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req struct {
-		Model       string           `json:"model"`
-		Messages    []map[string]any `json:"messages"`
-		Tools       []map[string]any `json:"tools"`
-		Stream      bool             `json:"stream"`
-		Temperature *float64         `json:"temperature"`
-		MaxTokens   *int             `json:"max_tokens"`
+		Model          string           `json:"model"`
+		Messages       []map[string]any `json:"messages"`
+		Tools          []map[string]any `json:"tools"`
+		ToolChoice     any              `json:"tool_choice"`
+		Stream         bool             `json:"stream"`
+		Temperature    *float64         `json:"temperature"`
+		MaxTokens      *int             `json:"max_tokens"`
+		TopP           *float64         `json:"top_p"`
+		Stop           any              `json:"stop"`
+		ReasoningEffort string          `json:"reasoning_effort"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Read raw body for deterministic session_id
+	rawBody, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(rawBody))
+
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
@@ -164,9 +173,18 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 		}
 		params["max_tokens"] = maxTokens
 	}
+	if req.TopP != nil {
+		params["top_p"] = *req.TopP
+	}
+	if req.Stop != nil {
+		params["stop"] = req.Stop
+	}
+
+	// Determine is_reasoning from reasoning_effort
+	isReasoning := openaiIsReasoning(req.ReasoningEffort)
 
 	// Build Lingma body
-	body := BuildLingmaBody(req.Messages, req.Tools, modelKey, params)
+	body := BuildLingmaBody(req.Messages, req.Tools, modelKey, params, rawBody, isReasoning, req.ToolChoice)
 
 	// Generate request ID for OpenAI response
 	reqID := "chatcmpl-" + newUUID()[:24]
@@ -211,6 +229,7 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 	var finishReason string
 
 	finishSent := false
+	firstChunkSent := false
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		if h.Debug {
@@ -220,8 +239,8 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 		switch event.Type {
 		case "data":
-			// Skip empty data events (no content, no tool calls, no finish reason)
-			if event.Content == "" && len(event.ToolCalls) == 0 && event.FinishReason == "" {
+			// Skip truly empty data events (no content, reasoning, tool calls, or finish reason)
+			if event.Content == "" && event.ReasoningContent == "" && len(event.ToolCalls) == 0 && event.FinishReason == "" {
 				if event.Usage != nil {
 					// Still send usage info as a chunk
 					chunk := map[string]any{
@@ -256,8 +275,14 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 			}
 
 			delta := map[string]any{}
-			if event.Content != "" {
+			if !firstChunkSent {
 				delta["role"] = "assistant"
+				firstChunkSent = true
+			}
+			if event.ReasoningContent != "" {
+				delta["reasoning_content"] = event.ReasoningContent
+			}
+			if event.Content != "" {
 				delta["content"] = event.Content
 			}
 
@@ -455,17 +480,26 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.ResponseWriter, reqID string, created json.Number, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
 	var fullContent strings.Builder
+	var fullReasoning strings.Builder
 	var finishReason string
 	var usage *Usage
 	var toolCalls map[int]*toolCallState
+	var lastErr *SSEEvent
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		if h.Debug {
-			fmt.Printf("[debug] SSE Event (Non-Stream): Type=%s, ContentLen=%d, ToolCalls=%d, FinishReason=%s\n", 
+			fmt.Printf("[debug] SSE Event (Non-Stream): Type=%s, ContentLen=%d, ToolCalls=%d, FinishReason=%s\n",
 				event.Type, len(event.Content), len(event.ToolCalls), event.FinishReason)
 		}
 		switch event.Type {
 		case "data":
+			if event.HasError {
+				lastErr = &event
+				return nil
+			}
+			if event.ReasoningContent != "" {
+				fullReasoning.WriteString(event.ReasoningContent)
+			}
 			if event.Content != "" {
 				fullContent.WriteString(event.Content)
 			}
@@ -501,6 +535,16 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 		gLog.Status = 500
 		h.recorder(gLog)
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Check for upstream error in SSE events
+	if lastErr != nil {
+		errMsg := lastErr.ErrorMsg
+		if errMsg == "" {
+			errMsg = "unknown upstream error"
+		}
+		writeOpenAIError(w, http.StatusBadGateway, errMsg)
 		return
 	}
 
@@ -544,16 +588,24 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 				"index": idx,
 			})
 		}
-		choice["message"] = map[string]any{
+		msg := map[string]any{
 			"role":       "assistant",
 			"content":    nil,
 			"tool_calls": tcList,
 		}
+		if fullReasoning.Len() > 0 {
+			msg["reasoning_content"] = fullReasoning.String()
+		}
+		choice["message"] = msg
 	} else {
-		choice["message"] = map[string]any{
+		msg := map[string]any{
 			"role":    "assistant",
 			"content": fullContent.String(),
 		}
+		if fullReasoning.Len() > 0 {
+			msg["reasoning_content"] = fullReasoning.String()
+		}
+		choice["message"] = msg
 	}
 
 	resp["choices"] = []map[string]any{choice}
@@ -639,6 +691,25 @@ func writeSSE(w http.ResponseWriter, prefix string, data any) {
 		return
 	}
 	fmt.Fprintf(w, "%s%s\n\n", prefix, jsonBytes)
+}
+
+func orDefault(s, def string) string {
+	if s != "" {
+		return s
+	}
+	return def
+}
+
+// openaiIsReasoning determines is_reasoning from OpenAI reasoning_effort field.
+func openaiIsReasoning(effort string) bool {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "none":
+		return false
+	case "":
+		return true // default
+	default:
+		return true
+	}
 }
 
 func escapeJSON(s string) string {

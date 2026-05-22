@@ -1,8 +1,10 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -18,15 +20,21 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 	}
 
 	var req struct {
-		Model       string           `json:"model"`
-		Input       any              `json:"input"` // string or array of content items
-		Tools       []map[string]any `json:"tools"`
-		Stream      bool             `json:"stream"`
-		Temperature *float64         `json:"temperature"`
-		MaxTokens   *int             `json:"max_output_tokens"`
+		Model          string           `json:"model"`
+		Input          any              `json:"input"` // string or array of content items
+		Tools          []map[string]any `json:"tools"`
+		ToolChoice     any              `json:"tool_choice"`
+		Stream         bool             `json:"stream"`
+		Temperature    *float64         `json:"temperature"`
+		MaxTokens      *int             `json:"max_output_tokens"`
+		ReasoningEffort string          `json:"reasoning_effort"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Read raw body for deterministic session_id
+	rawBody, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(rawBody))
+
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
@@ -52,7 +60,9 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 		params["max_tokens"] = maxTokens
 	}
 
-	body := BuildLingmaBody(messages, req.Tools, modelKey, params)
+	isReasoning := openaiIsReasoning(req.ReasoningEffort)
+
+	body := BuildLingmaBody(messages, req.Tools, modelKey, params, rawBody, isReasoning, req.ToolChoice)
 
 	respID := "resp_" + newUUID()[:24]
 
@@ -173,16 +183,47 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 	// State tracking
 	textBlockStarted := false
 	textBlockIndex := -1
+	reasoningBlockStarted := false
+	reasoningBlockIndex := -1
+	reasoningID := ""
 	toolCalls := make(map[int]*toolCallState)
 	toolCallIndices := make(map[string]int) // call_id → output item index
 	var usage *Usage
 	var fullContent strings.Builder
+	var fullReasoning strings.Builder
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
 		case "data":
 			if event.Usage != nil {
 				usage = event.Usage
+			}
+			// Handle reasoning content
+			if event.ReasoningContent != "" {
+				fullReasoning.WriteString(event.ReasoningContent)
+				if !reasoningBlockStarted {
+					reasoningID = "reason_" + newUUID()[:24]
+					reasoningBlockIndex = len(toolCallIndices)
+					writeSSE(w, "", map[string]any{
+						"type":  "response.output_item.added",
+						"index": reasoningBlockIndex,
+						"item": map[string]any{
+							"type":    "reasoning",
+							"id":      reasoningID,
+							"status":  "in_progress",
+							"content": []map[string]any{},
+						},
+					})
+					reasoningBlockStarted = true
+				}
+				writeSSE(w, "", map[string]any{
+					"type":  "response.reasoning_text.delta",
+					"item_id": reasoningID,
+					"delta":   event.ReasoningContent,
+				})
+				if canFlush {
+					flusher.Flush()
+				}
 			}
 			// Handle text content
 			if event.Content != "" {
@@ -286,6 +327,26 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 			if event.Usage != nil {
 				usage = event.Usage
 			}
+			// Close reasoning block if open
+			if reasoningBlockStarted {
+				writeSSE(w, "", map[string]any{
+					"type":    "response.reasoning_text.done",
+					"item_id": reasoningID,
+				})
+				writeSSE(w, "", map[string]any{
+					"type":  "response.output_item.done",
+					"index": reasoningBlockIndex,
+					"item": map[string]any{
+						"type":    "reasoning",
+						"id":      reasoningID,
+						"status":  "completed",
+						"content": []map[string]any{
+							{"type": "reasoning_text", "text": fullReasoning.String()},
+						},
+					},
+				})
+				reasoningBlockStarted = false
+			}
 			// Complete any open function calls
 			for _, state := range toolCalls {
 				writeSSE(w, "", map[string]any{
@@ -325,6 +386,15 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 
 			// Build output array for log
 			output := []map[string]any{}
+			if fullReasoning.Len() > 0 {
+				output = append(output, map[string]any{
+					"type": "reasoning",
+					"id":   "reason_" + newUUID()[:24],
+					"content": []map[string]any{
+						{"type": "reasoning_text", "text": fullReasoning.String()},
+					},
+				})
+			}
 			if fullContent.Len() > 0 {
 				output = append(output, map[string]any{
 					"type": "message",
@@ -374,11 +444,15 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 
 func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseWriter, respID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
 	var fullContent strings.Builder
+	var fullReasoning strings.Builder
 	var usage *Usage
 	toolCalls := make(map[int]*toolCallState)
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		if event.Type == "data" {
+			if event.ReasoningContent != "" {
+				fullReasoning.WriteString(event.ReasoningContent)
+			}
 			if event.Content != "" {
 				fullContent.WriteString(event.Content)
 			}
@@ -411,6 +485,17 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 
 	// Build output array
 	output := []map[string]any{}
+
+	// Add reasoning if present
+	if fullReasoning.Len() > 0 {
+		output = append(output, map[string]any{
+			"type": "reasoning",
+			"id":   "reason_" + newUUID()[:24],
+			"content": []map[string]any{
+				{"type": "reasoning_text", "text": fullReasoning.String()},
+			},
+		})
+	}
 
 	// Add text message if there's text content
 	if fullContent.Len() > 0 {

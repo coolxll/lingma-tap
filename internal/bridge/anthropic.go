@@ -102,7 +102,13 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 		params["temperature"] = *temperature
 	}
 
-	body := BuildLingmaBody(messages, openAITools, modelKey, params)
+	// Determine is_reasoning from thinking config
+	isReasoning := anthropicIsReasoning(rawReq)
+
+	// Capture raw request JSON for deterministic session_id
+	rawReqJSON, _ := json.Marshal(rawReq)
+
+	body := BuildLingmaBody(messages, openAITools, modelKey, params, rawReqJSON, isReasoning, nil)
 
 	msgID := "msg_" + newUUID()[:24]
 
@@ -447,11 +453,24 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	state := &anthropicStreamState{
 		toolBlocks: make(map[int]*toolBlockState),
 	}
+	thinkingBlockStarted := false
+	thinkingBlockIndex := -1
+	var fullReasoning strings.Builder
 	var usage *Usage
 	stopReason := "end_turn"
 	var fullContent strings.Builder
 	toolCalls := make(map[int]*toolCallState)
 	finalized := false
+
+	stopThinking := func() {
+		if thinkingBlockStarted {
+			writeAnthropicSSE(w, "content_block_stop", map[string]any{
+				"type":  "content_block_stop",
+				"index": thinkingBlockIndex,
+			})
+			thinkingBlockStarted = false
+		}
+	}
 
 	finalize := func() {
 		if finalized {
@@ -463,7 +482,8 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			stopReason = "tool_use"
 		}
 
-		// Stop all open content blocks
+		// Stop all open content blocks (thinking first, then text, then tools)
+		stopThinking()
 		if state.textBlockStarted {
 			writeAnthropicSSE(w, "content_block_stop", map[string]any{
 				"type":  "content_block_stop",
@@ -511,6 +531,9 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 
 		// Build a summary of the response for the log
 		var content []map[string]any
+		if fullReasoning.Len() > 0 {
+			content = append(content, map[string]any{"type": "thinking", "thinking": fullReasoning.String()})
+		}
 		if fullContent.Len() > 0 {
 			content = append(content, map[string]any{"type": "text", "text": fullContent.String()})
 		}
@@ -541,8 +564,54 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
 		case "data":
+			// Handle reasoning content (thinking blocks)
+			if event.ReasoningContent != "" {
+				fullReasoning.WriteString(event.ReasoningContent)
+				if !thinkingBlockStarted {
+					stopThinking() // defensive: close any stale thinking block
+					thinkingBlockIndex = state.nextIndex()
+					writeAnthropicSSE(w, "content_block_start", map[string]any{
+						"type":  "content_block_start",
+						"index": thinkingBlockIndex,
+						"content_block": map[string]any{
+							"type": "thinking",
+						},
+					})
+					thinkingBlockStarted = true
+				}
+				writeAnthropicSSE(w, "content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": thinkingBlockIndex,
+					"delta": map[string]any{
+						"type":     "thinking_delta",
+						"thinking": event.ReasoningContent,
+					},
+				})
+				if canFlush {
+					flusher.Flush()
+				}
+			}
+
+			// Handle errors
+			if event.HasError {
+				stopThinking()
+				writeAnthropicSSE(w, "error", map[string]any{
+					"type": "error",
+					"error": map[string]any{
+						"type":    orDefault(event.ErrorType, "api_error"),
+						"message": orDefault(event.ErrorMsg, "unknown error"),
+					},
+				})
+				if canFlush {
+					flusher.Flush()
+				}
+				return nil
+			}
+
 			// Handle text content
 			if event.Content != "" {
+				// Close thinking block before starting text
+				stopThinking()
 				fullContent.WriteString(event.Content)
 				if !state.textBlockStarted {
 					idx := state.nextIndex()
@@ -569,6 +638,9 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			}
 
 			// Handle tool calls
+			if len(event.ToolCalls) > 0 {
+				stopThinking()
+			}
 			for _, tc := range event.ToolCalls {
 				toolState, ok := state.toolBlocks[tc.Index]
 				if !ok {
@@ -713,15 +785,46 @@ func mapFinishReason(reason string) string {
 	}
 }
 
+// anthropicIsReasoning determines is_reasoning from Anthropic request's thinking config.
+func anthropicIsReasoning(req map[string]any) bool {
+	// Check thinking.type
+	if thinking, ok := req["thinking"].(map[string]any); ok {
+		t, _ := thinking["type"].(string)
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case "disabled":
+			return false
+		case "enabled":
+			// Check if budget_tokens is 0
+			if bt, ok := thinking["budget_tokens"].(float64); ok && bt == 0 {
+				return false
+			}
+			return true
+		case "adaptive", "auto":
+			return true
+		}
+	}
+	// Default: reasoning enabled
+	return true
+}
+
 func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
 	var fullContent strings.Builder
+	var fullReasoning strings.Builder
 	var usage Usage
 	var finishReason string
 	toolCalls := make(map[int]*toolCallState)
+	var lastErr *SSEEvent
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
 		case "data":
+			if event.HasError {
+				lastErr = &event
+				return nil
+			}
+			if event.ReasoningContent != "" {
+				fullReasoning.WriteString(event.ReasoningContent)
+			}
 			if event.Content != "" {
 				fullContent.WriteString(event.Content)
 			}
@@ -759,8 +862,33 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 		return
 	}
 
+	// Check for upstream error in SSE events
+	if lastErr != nil {
+		errMsg := lastErr.ErrorMsg
+		if errMsg == "" {
+			errMsg = "unknown upstream error"
+		}
+		errType := lastErr.ErrorType
+		if errType == "" {
+			errType = "api_error"
+		}
+		gLog.Error = errMsg
+		gLog.Status = http.StatusBadGateway
+		h.recorder(gLog)
+		writeAnthropicError(w, http.StatusBadGateway, errType, errMsg)
+		return
+	}
+
 	// Build content array
 	var content []map[string]any
+
+	// Add thinking content if any
+	if fullReasoning.Len() > 0 {
+		content = append(content, map[string]any{
+			"type":     "thinking",
+			"thinking": fullReasoning.String(),
+		})
+	}
 
 	// Add text content if any
 	if fullContent.Len() > 0 {

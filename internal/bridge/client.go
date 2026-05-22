@@ -2,6 +2,8 @@ package bridge
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +27,12 @@ type LingmaClient struct {
 	Debug   bool
 }
 
+// streamState holds per-request state for SSE parsing.
+// Created fresh for each ChatStream call to avoid concurrency issues.
+type streamState struct {
+	inThought bool // tracks <thought> tag state across SSE chunks
+}
+
 func NewLingmaClient(session *auth.Session) *LingmaClient {
 	return &LingmaClient{
 		session: session,
@@ -40,12 +48,20 @@ type SSEEvent struct {
 	Type string
 	// Content is the delta.content text (for text streaming)
 	Content string
+	// ReasoningContent is the delta.reasoning_content text (for thinking/reasoning)
+	ReasoningContent string
 	// ToolCalls contains tool call deltas
 	ToolCalls []ToolCallDelta
 	// FinishReason is set when the model finishes (e.g., "tool_calls", "stop")
 	FinishReason string
 	// Usage contains token usage info (from finish event)
 	Usage *Usage
+	// HasError indicates the event contains an error
+	HasError bool
+	// ErrorMsg is the error message if HasError is true
+	ErrorMsg string
+	// ErrorType is the error type if HasError is true
+	ErrorType string
 	// Raw is the raw inner JSON bytes
 	Raw []byte
 }
@@ -64,6 +80,18 @@ type Usage struct {
 	// Aliyun/Lingma aliases
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+	// Cached and reasoning tokens
+	CachedTokens    int `json:"cached_tokens,omitempty"`
+	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	// Nested details (for extraction from lingma response)
+	PromptTokensDetails     *TokenDetails `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *TokenDetails `json:"completion_tokens_details,omitempty"`
+}
+
+// TokenDetails holds nested token detail fields.
+type TokenDetails struct {
+	CachedTokens    int `json:"cached_tokens,omitempty"`
+	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 }
 
 func (u *Usage) Consolidate() {
@@ -79,10 +107,20 @@ func (u *Usage) Consolidate() {
 	if u.TotalTokens == 0 {
 		u.TotalTokens = u.PromptTokens + u.CompletionTokens
 	}
+	// Extract cached tokens from nested details
+	if u.CachedTokens == 0 && u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
+		u.CachedTokens = u.PromptTokensDetails.CachedTokens
+	}
+	// Extract reasoning tokens from nested details
+	if u.ReasoningTokens == 0 && u.CompletionTokensDetails != nil && u.CompletionTokensDetails.ReasoningTokens > 0 {
+		u.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+	}
 }
 
 // ChatStream sends a chat request to Lingma and streams SSE events.
 func (c *LingmaClient) ChatStream(ctx context.Context, body map[string]any, cb func(SSEEvent) error) error {
+	state := &streamState{} // per-request state
+
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal body: %w", err)
@@ -114,10 +152,11 @@ func (c *LingmaClient) ChatStream(ctx context.Context, body map[string]any, cb f
 		return fmt.Errorf("lingma API returned HTTP %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	return c.readSSE(resp.Body, cb)
+	return c.readSSE(resp.Body, cb, state)
 }
 
-func (c *LingmaClient) readSSE(body io.Reader, cb func(SSEEvent) error) error {
+func (c *LingmaClient) readSSE(body io.Reader, cb func(SSEEvent) error, state *streamState) error {
+	doneReceived := false
 	for ev, err := range sse.Read(body, nil) {
 		if err != nil {
 			return err
@@ -128,25 +167,35 @@ func (c *LingmaClient) readSSE(body io.Reader, cb func(SSEEvent) error) error {
 		}
 
 		if c.Debug {
-			fmt.Printf("[debug] Raw SSE Data: %s\n", ev.Data)
+			fmt.Printf("[debug] SSE Event: Type=%s, Data=%s\n", ev.Type, ev.Data)
 		}
 
 		if ev.Data == "[DONE]" {
+			doneReceived = true
 			return cb(SSEEvent{Type: "done"})
 		}
 
-		event, err := c.parseSSEData(ev.Data)
+		events, err := c.parseSSEData(ev.Data, state)
 		if err != nil {
 			continue // skip unparseable events
 		}
-		if err := cb(event); err != nil {
-			return err
+		for _, event := range events {
+			if event.Type == "done" {
+				doneReceived = true
+			}
+			if err := cb(event); err != nil {
+				return err
+			}
 		}
+	}
+	// Safety: inject [DONE] if the stream ended without one
+	if !doneReceived {
+		return cb(SSEEvent{Type: "done"})
 	}
 	return nil
 }
 
-func (c *LingmaClient) parseSSEData(data string) (SSEEvent, error) {
+func (c *LingmaClient) parseSSEData(data string, state *streamState) ([]SSEEvent, error) {
 	// 1. Try to parse as the double-JSON envelope: {"headers":{...},"body":"...","statusCodeValue":200,"statusCode":"OK"}
 	var envelope struct {
 		Headers       map[string]any `json:"headers"`
@@ -156,9 +205,9 @@ func (c *LingmaClient) parseSSEData(data string) (SSEEvent, error) {
 	}
 	if err := json.Unmarshal([]byte(data), &envelope); err == nil && envelope.Body != "" {
 		if envelope.Body == "[DONE]" {
-			return SSEEvent{Type: "done"}, nil
+			return []SSEEvent{{Type: "done"}}, nil
 		}
-		return c.parseInnerJSON(envelope.Body)
+		return c.parseInnerJSON(envelope.Body, state)
 	}
 
 	// 2. Try to parse as finish event: {"firstTokenDuration":...,"totalDuration":...,"serverDuration":...,"usage":...}
@@ -174,15 +223,16 @@ func (c *LingmaClient) parseSSEData(data string) (SSEEvent, error) {
 			finish.Usage.Consolidate()
 			event.Usage = finish.Usage
 		}
-		return event, nil
+		return []SSEEvent{event}, nil
 	}
 
 	// 3. Try to parse as direct OpenAI format (what Lingma actually returns)
 	var direct struct {
 		Choices []struct {
 			Delta struct {
-				Content   string `json:"content"`
-				ToolCalls []struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+				ToolCalls        []struct {
 					Index    int    `json:"index"`
 					ID       string `json:"id"`
 					Type     string `json:"type"`
@@ -194,90 +244,202 @@ func (c *LingmaClient) parseSSEData(data string) (SSEEvent, error) {
 			} `json:"delta"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
 		Usage *Usage `json:"usage"`
 	}
-	if err := json.Unmarshal([]byte(data), &direct); err == nil && (len(direct.Choices) > 0 || direct.Usage != nil) {
-		event := SSEEvent{Type: "data", Raw: []byte(data)}
-		for _, choice := range direct.Choices {
-			if choice.Delta.Content != "" {
-				event.Content = choice.Delta.Content
-			}
-			if choice.FinishReason != "" {
-				event.FinishReason = choice.FinishReason
-			}
+	if err := json.Unmarshal([]byte(data), &direct); err == nil && (len(direct.Choices) > 0 || direct.Usage != nil || direct.Error != nil) {
+		// Check for error
+		if direct.Error != nil {
+			return []SSEEvent{{
+				Type:     "data",
+				HasError: true,
+				ErrorMsg: direct.Error.Message,
+				ErrorType: direct.Error.Type,
+				Raw:      []byte(data),
+			}}, nil
+		}
+
+		return c.buildEventsFromChoices(direct.Choices, direct.Usage, []byte(data), state)
+	}
+
+	return nil, fmt.Errorf("unrecognized SSE data format")
+}
+
+func (c *LingmaClient) parseInnerJSON(body string, state *streamState) ([]SSEEvent, error) {
+	var inner struct {
+		Choices []struct {
+			Delta struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+				ToolCalls        []struct {
+					Index    int    `json:"index"`
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"delta"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+		Usage *Usage `json:"usage"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &inner); err != nil {
+		return nil, err
+	}
+
+	// Check for error
+	if inner.Error != nil {
+		return []SSEEvent{{
+			Type:      "data",
+			HasError:  true,
+			ErrorMsg:  inner.Error.Message,
+			ErrorType: inner.Error.Type,
+			Raw:       []byte(body),
+		}}, nil
+	}
+
+	return c.buildEventsFromChoices(inner.Choices, inner.Usage, []byte(body), state)
+}
+
+// buildEventsFromChoices processes choices array and produces SSEEvents with thought tag extraction.
+func (c *LingmaClient) buildEventsFromChoices(choices []struct {
+	Delta struct {
+		Content          string `json:"content"`
+		ReasoningContent string `json:"reasoning_content"`
+		ToolCalls        []struct {
+			Index    int    `json:"index"`
+			ID       string `json:"id"`
+			Type     string `json:"type"`
+			Function struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"function"`
+		} `json:"tool_calls"`
+	} `json:"delta"`
+	FinishReason string `json:"finish_reason"`
+}, usage *Usage, raw []byte, state *streamState) ([]SSEEvent, error) {
+	var events []SSEEvent
+
+	for _, choice := range choices {
+		// Extract native reasoning_content
+		if choice.Delta.ReasoningContent != "" {
+			events = append(events, SSEEvent{
+				Type:             "data",
+				ReasoningContent: choice.Delta.ReasoningContent,
+				Raw:              raw,
+			})
+		}
+
+		content := choice.Delta.Content
+		if content != "" {
+			// Split content by <thought> tags
+			thoughtEvents := state.splitThoughtTags(content)
+			events = append(events, thoughtEvents...)
+		}
+
+		// Tool calls
+		if len(choice.Delta.ToolCalls) > 0 {
+			ev := SSEEvent{Type: "data", Raw: raw}
 			for _, tc := range choice.Delta.ToolCalls {
-				event.ToolCalls = append(event.ToolCalls, ToolCallDelta{
+				ev.ToolCalls = append(ev.ToolCalls, ToolCallDelta{
 					Index:     tc.Index,
 					ID:        tc.ID,
 					Name:      tc.Function.Name,
 					Arguments: tc.Function.Arguments,
 				})
 			}
+			events = append(events, ev)
 		}
-		if direct.Usage != nil {
-			direct.Usage.Consolidate()
-			event.Usage = direct.Usage
-		}
-		return event, nil
-	}
 
-	return SSEEvent{}, fmt.Errorf("unrecognized SSE data format")
-}
-
-func (c *LingmaClient) parseInnerJSON(body string) (SSEEvent, error) {
-	var inner struct {
-		Choices []struct {
-			Delta struct {
-				Content   string `json:"content"`
-				ToolCalls []struct {
-					Index    int    `json:"index"`
-					ID       string `json:"id"`
-					Type     string `json:"type"`
-					Function struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
-			} `json:"delta"`
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-		Usage *Usage `json:"usage"`
-	}
-
-	if err := json.Unmarshal([]byte(body), &inner); err != nil {
-		return SSEEvent{}, err
-	}
-
-	event := SSEEvent{Type: "data", Raw: []byte(body)}
-
-	for _, choice := range inner.Choices {
-		if choice.Delta.Content != "" {
-			event.Content = choice.Delta.Content
-		}
+		// Finish reason
 		if choice.FinishReason != "" {
-			event.FinishReason = choice.FinishReason
-		}
-		for _, tc := range choice.Delta.ToolCalls {
-			event.ToolCalls = append(event.ToolCalls, ToolCallDelta{
-				Index:     tc.Index,
-				ID:        tc.ID,
-				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
+			events = append(events, SSEEvent{
+				Type:         "data",
+				FinishReason: choice.FinishReason,
+				Raw:          raw,
 			})
 		}
 	}
 
-	if inner.Usage != nil {
-		inner.Usage.Consolidate()
-		event.Usage = inner.Usage
+	if usage != nil {
+		usage.Consolidate()
+		if len(events) > 0 {
+			// Attach usage to the last event
+			events[len(events)-1].Usage = usage
+		} else {
+			events = append(events, SSEEvent{Type: "data", Usage: usage, Raw: raw})
+		}
 	}
 
-	return event, nil
+	if len(events) == 0 {
+		events = append(events, SSEEvent{Type: "data", Raw: raw})
+	}
+
+	return events, nil
+}
+
+// splitThoughtTags splits content by <thought>...</thought> tags.
+// Uses per-stream state to handle tags spanning chunk boundaries.
+func (s *streamState) splitThoughtTags(content string) []SSEEvent {
+	var events []SSEEvent
+	remaining := content
+
+	for len(remaining) > 0 {
+		if !s.inThought {
+			startIdx := strings.Index(remaining, "<thought>")
+			if startIdx == -1 {
+				// No start tag — emit as content
+				events = append(events, SSEEvent{Type: "data", Content: remaining})
+				return events
+			}
+			// Emit content before the tag
+			if startIdx > 0 {
+				events = append(events, SSEEvent{Type: "data", Content: remaining[:startIdx]})
+			}
+			s.inThought = true
+			remaining = remaining[startIdx+len("<thought>"):]
+		} else {
+			endIdx := strings.Index(remaining, "</thought>")
+			if endIdx == -1 {
+				// No end tag — emit as reasoning (may span to next chunk)
+				events = append(events, SSEEvent{Type: "data", ReasoningContent: remaining})
+				return events
+			}
+			// Emit reasoning content
+			if endIdx > 0 {
+				events = append(events, SSEEvent{Type: "data", ReasoningContent: remaining[:endIdx]})
+			}
+			s.inThought = false
+			remaining = remaining[endIdx+len("</thought>"):]
+		}
+	}
+
+	return events
 }
 
 // BuildLingmaBody constructs the full Lingma request body from translated fields.
-func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey string, params map[string]any) map[string]any {
+// rawRequestJSON is used to derive a deterministic session_id; pass nil to use a random UUID.
+// isReasoning controls model_config.is_reasoning.
+// toolChoice is the tool_choice field (may be nil).
+func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey string, params map[string]any, rawRequestJSON []byte, isReasoning bool, toolChoice any) map[string]any {
 	requestID := newUUID()
+
+	var sessionID string
+	if len(rawRequestJSON) > 0 {
+		sessionID = generateSessionID(rawRequestJSON)
+	} else {
+		sessionID = newUUID()
+	}
 
 	body := map[string]any{
 		"request_id":       requestID,
@@ -287,7 +449,7 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 		"image_urls":       nil,
 		"is_reply":         false,
 		"is_retry":         false,
-		"session_id":       newUUID(),
+		"session_id":       sessionID,
 		"code_language":    "",
 		"source":           0,
 		"version":          "3",
@@ -301,7 +463,7 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 			"model":                 "",
 			"format":                "",
 			"is_vl":                 false,
-			"is_reasoning":          false,
+			"is_reasoning":          isReasoning,
 			"api_key":               "",
 			"url":                   "",
 			"source":                "",
@@ -339,7 +501,17 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 		body["tools"] = tools
 	}
 
+	if toolChoice != nil {
+		body["tool_choice"] = toolChoice
+	}
+
 	return body
+}
+
+// generateSessionID produces a deterministic session ID from the request content.
+func generateSessionID(rawJSON []byte) string {
+	hash := sha256.Sum256(rawJSON)
+	return hex.EncodeToString(hash[:16])
 }
 
 // ModelInfo represents a model from the Lingma model list API.
