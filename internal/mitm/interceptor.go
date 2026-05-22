@@ -62,6 +62,39 @@ func (a *MitmProxyAddon) Response(f *proxy.Flow) {
 	}
 }
 
+// RequestError is called when an error occurs during the request (e.g., context canceled, connection error).
+func (a *MitmProxyAddon) RequestError(f *proxy.Flow, err error) {
+	if a.onRecord == nil {
+		return
+	}
+
+	sessionID := proto.GenerateSessionID()
+
+	// Record the request even though it failed
+	req := f.Request.Raw()
+	if req == nil {
+		// Connection-level error where request was never fully parsed
+		rec := &proto.Record{
+			Session: sessionID,
+			Host:    f.Request.URL.Host,
+			Error:   err.Error(),
+		}
+		a.onRecord(rec)
+		return
+	}
+
+	reqBody := f.Request.Body
+	rec := proto.ParseRequest(req, reqBody)
+	rec.Session = sessionID
+	rec.Index = 0
+	if rec.Host == "" {
+		rec.Host = f.Request.URL.Host
+	}
+	rec.Error = err.Error()
+
+	a.onRecord(rec)
+}
+
 // contains checks if a string contains a substring (case-insensitive).
 func contains(s, substr string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
