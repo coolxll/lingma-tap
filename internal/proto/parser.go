@@ -85,8 +85,9 @@ func ParseResponse(resp *http.Response, body []byte, session string, index int) 
 		rec.RespBody = string(body)
 	}
 
-	// Parse SSE if applicable
-	if strings.Contains(rec.RespMime, "text/event-stream") && len(body) > 0 {
+	// Parse SSE if applicable (either Content-Type is text/event-stream, or body content is formatted as SSE)
+	isSSEBody := len(body) > 0 && (strings.HasPrefix(string(body), "data:") || strings.Contains(string(body), "\ndata:"))
+	if (strings.Contains(rec.RespMime, "text/event-stream") || isSSEBody) && len(body) > 0 {
 		rec.IsSSE = true
 		rec.SSEEvents = ParseSSEEvents(string(body))
 	}
