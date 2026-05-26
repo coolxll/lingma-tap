@@ -37,7 +37,8 @@
     "ws_disconnected": "WS 已断开",
     "records_loaded": "条记录已加载",
     "sessions": "个会话",
-    "total_in_db": "数据库中共计"
+    "total_in_db": "数据库中共计",
+    "span": "跨度"
   },
   "recordlist": {
     "filter": "过滤...",

@@ -1,5 +1,5 @@
 import { memo, useState, useMemo } from 'react';
-import { TrafficRecord, formatTimestamp, getEndpointLabel, formatFriendlyMessage, getEndpointColor } from '@/lib/types';
+import { TrafficRecord, formatTimestamp, formatDurationMs, getEndpointLabel, formatFriendlyMessage, getEndpointColor } from '@/lib/types';
 import { JsonViewer } from './JsonViewer';
 import { SseEventList } from './SseEventList';
 import { ReplayModal } from './ReplayModal';
@@ -123,6 +123,22 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
           </div>
           <div className="flex items-center gap-3 text-[10px] text-zinc-500 font-medium">
             <span>{formatTimestamp(request.ts)}</span>
+            <span className="w-1 h-1 rounded-full bg-zinc-800" />
+            {(() => {
+              if (!response) {
+                return <span className="text-zinc-600 italic">pending</span>;
+              }
+              const start = new Date(request.ts).getTime();
+              const end = new Date(response.ts).getTime();
+              if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+              const ms = end - start;
+              const tone = ms > 10000 ? 'text-red-400' : ms > 3000 ? 'text-amber-400' : 'text-zinc-400';
+              return (
+                <span className={`${tone} font-mono`} title={`Round-trip ${ms}ms`}>
+                  {formatDurationMs(ms)}
+                </span>
+              );
+            })()}
             <span className="w-1 h-1 rounded-full bg-zinc-800" />
             <span className={getEndpointColor(request.endpoint_type)}>{getEndpointLabel(request.endpoint_type)}</span>
             <span className="w-1 h-1 rounded-full bg-zinc-800" />
