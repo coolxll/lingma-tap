@@ -12,10 +12,60 @@ interface DetailPanelProps {
   response: TrafficRecord | null;
 }
 
-export const DetailPanel = memo(function DetailPanel({ request, response }: DetailPanelProps) {
+export const DetailPanel = memo(function DetailPanel({ request, response: rawResponse }: DetailPanelProps) {
   const { t } = useTranslation();
   const [viewMode, setViewMode] = useState<'friendly' | 'standard'>('standard');
   const [showReplay, setShowReplay] = useState(false);
+
+  // Fallback: Parse SSE events on-the-fly in the frontend for historical records
+  const response = useMemo(() => {
+    if (!rawResponse) return null;
+    if (rawResponse.is_sse && rawResponse.sse_events && rawResponse.sse_events.length > 0) {
+      return rawResponse;
+    }
+
+    const body = rawResponse.response_body || '';
+    if (body.startsWith('data:') || body.includes('\ndata:')) {
+      const lines = body.split('\n');
+      const sse_events: any[] = [];
+      let currentEvent: any = { event_type: '', data: '' };
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        if (trimmed.startsWith('data:')) {
+          const dataVal = trimmed.slice(5).trim();
+          currentEvent.data = dataVal;
+
+          // Try to extract body if it's the Lingma/OpenAI double-JSON envelope
+          try {
+            const parsedEnvelope = JSON.parse(dataVal);
+            if (parsedEnvelope && parsedEnvelope.body) {
+              currentEvent.body = parsedEnvelope.body;
+            }
+          } catch {
+            // ignore
+          }
+
+          sse_events.push({ ...currentEvent });
+          currentEvent = { event_type: '', data: '' };
+        } else if (trimmed.startsWith('event:')) {
+          currentEvent.event_type = trimmed.slice(6).trim();
+        }
+      }
+
+      if (sse_events.length > 0) {
+        return {
+          ...rawResponse,
+          is_sse: true,
+          sse_events,
+        };
+      }
+    }
+
+    return rawResponse;
+  }, [rawResponse]);
 
   const handleExportJSONL = () => {
     if (!request) return;
