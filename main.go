@@ -354,6 +354,17 @@ func (a *App) GetCACertPath() string {
 	return a.ca.CertPath()
 }
 
+// RevealCACert opens the directory containing the CA certificate in the
+// platform's file manager (Finder on macOS, Explorer on Windows) so the user
+// can drag it into the system trust store.
+func (a *App) RevealCACert() {
+	if a.ca == nil {
+		return
+	}
+	dir := filepath.Dir(a.ca.CertPath())
+	runtime.BrowserOpenURL(a.ctx, "file://"+dir)
+}
+
 // SetLogging enables or disables traffic logging to SQLite.
 func (a *App) SetLogging(enabled bool) {
 	a.mu.Lock()

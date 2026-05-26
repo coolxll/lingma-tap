@@ -3,7 +3,6 @@ package mitm
 import (
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/coolxll/lingma-tap/internal/proto"
 	"github.com/lqqyt2423/go-mitmproxy/proxy"
@@ -70,16 +69,27 @@ func (a *MitmProxyAddon) RequestError(f *proxy.Flow, err error) {
 
 	sessionID := proto.GenerateSessionID()
 
-	// Record the request even though it failed
+	// Connection-level error before any request was attached to the flow.
+	if f.Request == nil {
+		a.onRecord(&proto.Record{
+			Session: sessionID,
+			Error:   err.Error(),
+		})
+		return
+	}
+
 	req := f.Request.Raw()
 	if req == nil {
-		// Connection-level error where request was never fully parsed
-		rec := &proto.Record{
-			Session: sessionID,
-			Host:    f.Request.URL.Host,
-			Error:   err.Error(),
+		// Request URL parsed but raw request never built (e.g. handshake failure).
+		host := ""
+		if f.Request.URL != nil {
+			host = f.Request.URL.Host
 		}
-		a.onRecord(rec)
+		a.onRecord(&proto.Record{
+			Session: sessionID,
+			Host:    host,
+			Error:   err.Error(),
+		})
 		return
 	}
 
@@ -87,15 +97,10 @@ func (a *MitmProxyAddon) RequestError(f *proxy.Flow, err error) {
 	rec := proto.ParseRequest(req, reqBody)
 	rec.Session = sessionID
 	rec.Index = 0
-	if rec.Host == "" {
+	if rec.Host == "" && f.Request.URL != nil {
 		rec.Host = f.Request.URL.Host
 	}
 	rec.Error = err.Error()
 
 	a.onRecord(rec)
-}
-
-// contains checks if a string contains a substring (case-insensitive).
-func contains(s, substr string) bool {
-	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
