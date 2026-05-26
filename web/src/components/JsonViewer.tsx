@@ -55,13 +55,42 @@ function regexHighlight(formatted: string): string {
     .replace(/: (null)/g, ': <span class="text-zinc-500">$1</span>');
 }
 
+function deepUnwrapJsonStrings(value: unknown, depth: number): unknown {
+  if (depth <= 0) return value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+        (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        const inner = JSON.parse(trimmed);
+        return deepUnwrapJsonStrings(inner, depth - 1);
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => deepUnwrapJsonStrings(item, depth));
+  }
+  if (value !== null && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      result[k] = deepUnwrapJsonStrings(v, depth);
+    }
+    return result;
+  }
+  return value;
+}
+
 export function JsonViewer({ data, maxHeight = '400px' }: JsonViewerProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   const formatted = useMemo(() => {
     try {
-      return JSON.stringify(JSON.parse(data), null, 2);
+      const parsed = JSON.parse(data);
+      return JSON.stringify(deepUnwrapJsonStrings(parsed, 3), null, 2);
     } catch {
       return data;
     }
