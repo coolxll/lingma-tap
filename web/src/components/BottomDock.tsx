@@ -1,4 +1,4 @@
-import { StorageStats } from '@/lib/types';
+import { StorageStats, formatTimeSpan } from '@/lib/types';
 import { useTranslation } from 'react-i18next';
 
 interface BottomDockProps {
@@ -10,6 +10,7 @@ interface BottomDockProps {
 
 export function BottomDock({ connected, recordCount, stats, proxyPort }: BottomDockProps) {
   const { t } = useTranslation();
+  const span = formatTimeSpan(stats?.oldest_ts, stats?.newest_ts);
 
   return (
     <div className="h-7 flex items-center px-3 gap-4 border-t border-zinc-800 bg-zinc-950 text-[10px] text-zinc-500 shrink-0">
@@ -30,6 +31,14 @@ export function BottomDock({ connected, recordCount, stats, proxyPort }: BottomD
           <span>{stats.sessions} {t('bottomdock.sessions')}</span>
           <span className="text-zinc-700">|</span>
           <span>{stats.records} {t('bottomdock.total_in_db')}</span>
+          {span && (
+            <>
+              <span className="text-zinc-700">|</span>
+              <span className="font-mono" title={`${stats.oldest_ts} → ${stats.newest_ts}`}>
+                {t('bottomdock.span')} {span}
+              </span>
+            </>
+          )}
         </>
       )}
 

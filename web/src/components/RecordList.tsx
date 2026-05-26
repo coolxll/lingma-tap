@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, memo, useCallback } from 'react';
-import { TrafficRecord, recordKey, formatTimestamp, getEndpointLabel, getStatusColor } from '@/lib/types';
+import { TrafficRecord, recordKey, formatTimestamp, formatDurationMs, formatTimeSpan, getEndpointLabel, getStatusColor } from '@/lib/types';
 import { Search, Lock, ChevronRight, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -57,6 +57,14 @@ function pairKey(p: RequestPair): string {
   return recordKey(p.req);
 }
 
+function pairLatencyMs(p: RequestPair): number | null {
+  if (!p.resp) return null;
+  const start = new Date(p.req.ts).getTime();
+  const end = new Date(p.resp.ts).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+  return end - start;
+}
+
 export const RecordList = memo(function RecordList({
   records,
   selectedRecord,
@@ -86,6 +94,17 @@ export const RecordList = memo(function RecordList({
   }, [records, localSearch]);
 
   const groups = useMemo(() => groupBySession(filteredRecords), [filteredRecords]);
+
+  const maxLatencyMs = useMemo(() => {
+    let max = 1;
+    for (const g of groups) {
+      for (const p of g.pairs) {
+        const l = pairLatencyMs(p);
+        if (l !== null && l > max) max = l;
+      }
+    }
+    return max;
+  }, [groups]);
 
   const toggleCollapse = useCallback((session: string) => {
     setCollapsed((prev) => {
@@ -183,6 +202,15 @@ export const RecordList = memo(function RecordList({
                       )}
                       <span className="text-zinc-600">{t('recordlist.session')}</span>
                       <span className="text-zinc-500 font-mono">{(group.session || '').slice(0, 8)}</span>
+                      {(() => {
+                        const first = group.pairs[0]?.req?.ts;
+                        const lastPair = group.pairs[group.pairs.length - 1];
+                        const last = lastPair?.resp?.ts || lastPair?.req?.ts;
+                        const span = formatTimeSpan(first, last);
+                        return span ? (
+                          <span className="text-zinc-600 font-mono text-[10px]" title="Session span">· {span}</span>
+                        ) : null;
+                      })()}
                       <span className="text-zinc-600 ml-auto">{group.pairs.length} {t('recordlist.requests')}</span>
                     </div>
                   </button>
@@ -251,11 +279,49 @@ export const RecordList = memo(function RecordList({
                             {pair.req.host}
                           </span>
 
+                          {/* Latency */}
+                          {(() => {
+                            const latency = pairLatencyMs(pair);
+                            if (latency === null) {
+                              return (
+                                <span className="text-zinc-700 text-[10px] font-mono shrink-0 w-12 text-right" title="Pending response">
+                                  …
+                                </span>
+                              );
+                            }
+                            const tone =
+                              latency > 10000 ? 'text-red-400'
+                              : latency > 3000 ? 'text-amber-400'
+                              : 'text-zinc-400';
+                            return (
+                              <span className={`text-[10px] font-mono shrink-0 w-12 text-right ${tone}`} title={`Latency ${latency}ms`}>
+                                {formatDurationMs(latency)}
+                              </span>
+                            );
+                          })()}
+
                           {/* Timestamp */}
                           <span className="text-zinc-600 text-[10px] shrink-0">
                             {formatTimestamp(pair.req.ts)}
                           </span>
                         </div>
+
+                        {/* Mini latency timeline */}
+                        {(() => {
+                          const latency = pairLatencyMs(pair);
+                          if (latency === null) return null;
+                          const pct = Math.max(2, Math.min(100, (latency / maxLatencyMs) * 100));
+                          const barColor =
+                            latency > 10000 ? 'bg-red-500/70'
+                            : latency > 3000 ? 'bg-amber-500/70'
+                            : pair.resp?.is_sse ? 'bg-purple-500/60'
+                            : 'bg-blue-500/60';
+                          return (
+                            <div className="mt-1 ml-7 h-[3px] w-full max-w-[260px] rounded-full bg-zinc-900 overflow-hidden">
+                              <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
+                            </div>
+                          );
+                        })()}
                       </button>
                     );
                   })}

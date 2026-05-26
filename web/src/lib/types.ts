@@ -120,6 +120,27 @@ export function formatTimestamp(ts: string): string {
   }
 }
 
+export function formatDurationMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 2 : 1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remSeconds = Math.round(seconds - minutes * 60);
+  if (minutes < 60) return `${minutes}m ${remSeconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes - hours * 60;
+  return `${hours}h ${remMinutes}m`;
+}
+
+export function formatTimeSpan(fromTs?: string, toTs?: string): string {
+  if (!fromTs || !toTs) return '';
+  const from = new Date(fromTs).getTime();
+  const to = new Date(toTs).getTime();
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return '';
+  return formatDurationMs(to - from);
+}
+
 export function getEndpointColor(endpoint: string): string {
   switch (endpoint) {
     case 'chat':

@@ -36,7 +36,8 @@
     "ws_disconnected": "WS Disconnected",
     "records_loaded": "records loaded",
     "sessions": "sessions",
-    "total_in_db": "total in DB"
+    "total_in_db": "total in DB",
+    "span": "span"
   },
   "recordlist": {
     "filter": "Filter...",
