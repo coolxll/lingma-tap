@@ -55,8 +55,9 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
           completion = response.sse_events
             .map((e: any) => {
               try {
-                if (!e.data || e.data === '[DONE]') return '';
-                const data = JSON.parse(e.data);
+                const rawContent = e.body || e.data;
+                if (!rawContent || rawContent === '[DONE]') return '';
+                const data = JSON.parse(rawContent);
                 
                 // Handle nested structure if 'body' exists
                 let target = data;
