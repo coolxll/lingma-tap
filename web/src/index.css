@@ -85,3 +85,21 @@
 .light .bg-blue-950\/40 { background-color: #eff6ff !important; color: #1d4ed8 !important; }
 
 /* Keep some specific dark accents if needed, but mostly invert */
+
+/* Shiki Syntax Highlighter overrides to match theme and support dark mode */
+.shiki {
+  padding: 0.75rem !important;
+  border-radius: 0.375rem !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  background-color: var(--app-surface) !important;
+}
+
+.dark .shiki {
+  color: var(--shiki-dark) !important;
+  background-color: var(--app-surface) !important;
+}
+
+.dark .shiki span {
+  color: var(--shiki-dark) !important;
+}
+
