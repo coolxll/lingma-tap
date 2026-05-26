@@ -61,7 +61,17 @@
     "response": "Response",
     "waiting": "Waiting for response...",
     "friendly": "Friendly",
-    "raw": "RAW"
+    "raw": "RAW",
+    "export_jsonl_hint": "Download the selected request + response as a JSONL file",
+    "replay": "Replay",
+    "replay_hint_short": "Open the request in a Replay editor and copy as cURL",
+    "replay_title": "Replay Request",
+    "replay_hint": "Edit the body / headers below and copy as a cURL command. This editor does not re-send the request to Lingma; the COSY signature would need to be re-computed.",
+    "body_json": "Body JSON",
+    "headers_json": "Headers JSON",
+    "curl_preview": "cURL Preview",
+    "copy_curl": "Copy as cURL",
+    "close": "Close"
   },
   "settings": {
     "models": "Lingma Model List",

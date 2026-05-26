@@ -2,8 +2,10 @@ import { memo, useState, useMemo } from 'react';
 import { TrafficRecord, formatTimestamp, getEndpointLabel, formatFriendlyMessage, getEndpointColor } from '@/lib/types';
 import { JsonViewer } from './JsonViewer';
 import { SseEventList } from './SseEventList';
+import { ReplayModal } from './ReplayModal';
+import { downloadTextFile, recordsToJSONL, safeFilename } from '@/lib/export';
 import { useTranslation } from 'react-i18next';
-import { MessageSquare, Code, User, Bot, Sparkles } from 'lucide-react';
+import { MessageSquare, Code, User, Bot, Sparkles, FileDown, Wand2 } from 'lucide-react';
 
 interface DetailPanelProps {
   request: TrafficRecord | null;
@@ -13,6 +15,19 @@ interface DetailPanelProps {
 export const DetailPanel = memo(function DetailPanel({ request, response }: DetailPanelProps) {
   const { t } = useTranslation();
   const [viewMode, setViewMode] = useState<'friendly' | 'standard'>('standard');
+  const [showReplay, setShowReplay] = useState(false);
+
+  const handleExportJSONL = () => {
+    if (!request) return;
+    const records: unknown[] = [request];
+    if (response) records.push(response);
+    const baseName = request.session || request.path || `record-${request.id}`;
+    downloadTextFile(
+      `${safeFilename(baseName, 'record')}.jsonl`,
+      recordsToJSONL(records),
+      'application/x-ndjson',
+    );
+  };
 
   const chatContent = useMemo(() => {
     try {
@@ -95,6 +110,7 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
   }
 
   return (
+    <>
     <div className="h-full overflow-y-auto bg-zinc-950">
       {/* Summary */}
       <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/20">
@@ -128,29 +144,47 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
           </div>
         </div>
 
-        <div className="flex bg-zinc-900/50 rounded-lg p-0.5 border border-zinc-800">
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => setViewMode('friendly')}
-            className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
-              viewMode === 'friendly'
-                ? 'bg-zinc-800 text-blue-400 shadow-sm'
-                : 'text-zinc-500 hover:text-zinc-400'
-            }`}
+            onClick={handleExportJSONL}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold rounded-lg bg-zinc-900/50 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-all"
+            title={t('detailpanel.export_jsonl_hint')}
           >
-            <MessageSquare className="w-3 h-3" />
-            CHAT
+            <FileDown className="w-3 h-3" />
+            JSONL
           </button>
           <button
-            onClick={() => setViewMode('standard')}
-            className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
-              viewMode === 'standard'
-                ? 'bg-zinc-800 text-zinc-200 shadow-sm'
-                : 'text-zinc-500 hover:text-zinc-400'
-            }`}
+            onClick={() => setShowReplay(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold rounded-lg bg-zinc-900/50 border border-zinc-800 text-zinc-400 hover:text-blue-400 hover:bg-zinc-800 transition-all"
+            title={t('detailpanel.replay_hint_short')}
           >
-            <Code className="w-3 h-3" />
-            STANDARD
+            <Wand2 className="w-3 h-3" />
+            {t('detailpanel.replay')}
           </button>
+          <div className="flex bg-zinc-900/50 rounded-lg p-0.5 border border-zinc-800">
+            <button
+              onClick={() => setViewMode('friendly')}
+              className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+                viewMode === 'friendly'
+                  ? 'bg-zinc-800 text-blue-400 shadow-sm'
+                  : 'text-zinc-500 hover:text-zinc-400'
+              }`}
+            >
+              <MessageSquare className="w-3 h-3" />
+              CHAT
+            </button>
+            <button
+              onClick={() => setViewMode('standard')}
+              className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+                viewMode === 'standard'
+                  ? 'bg-zinc-800 text-zinc-200 shadow-sm'
+                  : 'text-zinc-500 hover:text-zinc-400'
+              }`}
+            >
+              <Code className="w-3 h-3" />
+              STANDARD
+            </button>
+          </div>
         </div>
       </div>
 
@@ -245,6 +279,10 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
         </div>
       )}
     </div>
+    {showReplay && request && (
+      <ReplayModal request={request} onClose={() => setShowReplay(false)} />
+    )}
+    </>
   );
 });
 
