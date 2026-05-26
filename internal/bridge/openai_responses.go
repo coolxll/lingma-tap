@@ -192,9 +192,36 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 	var fullContent strings.Builder
 	var fullReasoning strings.Builder
 
+	upstreamErrored := false
+
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
 		case "data":
+			if event.HasError {
+				upstreamErrored = true
+				errMsg := orDefault(event.ErrorMsg, "unknown upstream error")
+				errType := orDefault(event.ErrorType, "api_error")
+				writeSSE(w, "", map[string]any{
+					"type": "response.failed",
+					"response": map[string]any{
+						"id":     respID,
+						"status": "failed",
+						"model":  modelKey,
+						"error": map[string]any{
+							"type":    errType,
+							"message": errMsg,
+						},
+					},
+				})
+				if canFlush {
+					flusher.Flush()
+				}
+				gLog.Error = errMsg
+				gLog.Status = http.StatusBadGateway
+				gLog.Latency = time.Since(startTime).Milliseconds()
+				h.recorder(gLog)
+				return nil
+			}
 			if event.Usage != nil {
 				usage = event.Usage
 			}
@@ -324,6 +351,9 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 			}
 
 		case "finish":
+			if upstreamErrored {
+				return nil
+			}
 			if event.Usage != nil {
 				usage = event.Usage
 			}
@@ -447,9 +477,14 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 	var fullReasoning strings.Builder
 	var usage *Usage
 	toolCalls := make(map[int]*toolCallState)
+	var lastErr *SSEEvent
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		if event.Type == "data" {
+			if event.HasError {
+				lastErr = &event
+				return nil
+			}
 			if event.ReasoningContent != "" {
 				fullReasoning.WriteString(event.ReasoningContent)
 			}
@@ -480,6 +515,17 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 		gLog.Status = 500
 		h.recorder(gLog)
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Check for upstream error in SSE events
+	if lastErr != nil {
+		errMsg := orDefault(lastErr.ErrorMsg, "unknown upstream error")
+		gLog.Error = errMsg
+		gLog.Status = http.StatusBadGateway
+		gLog.Latency = time.Since(startTime).Milliseconds()
+		h.recorder(gLog)
+		writeOpenAIError(w, http.StatusBadGateway, errMsg)
 		return
 	}
 
