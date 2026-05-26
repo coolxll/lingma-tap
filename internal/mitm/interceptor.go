@@ -61,6 +61,60 @@ func (a *MitmProxyAddon) Response(f *proxy.Flow) {
 	}
 }
 
+// SSEEnd is called when an SSE stream finishes (normal close or context cancel).
+// For SSE connections, Response() is never called because the body never fully
+// arrives. SSEEnd gives us request + response headers + all received SSE events.
+func (a *MitmProxyAddon) SSEEnd(f *proxy.Flow) {
+	if a.onRecord == nil {
+		return
+	}
+	if f.Request == nil {
+		return
+	}
+
+	sessionID := proto.GenerateSessionID()
+
+	// 1. Record the request
+	req := f.Request.Raw()
+	if req == nil {
+		return
+	}
+	reqBody := f.Request.Body
+	rec := proto.ParseRequest(req, reqBody)
+	rec.Session = sessionID
+	rec.Index = 0
+	if rec.Host == "" && f.Request.URL != nil {
+		rec.Host = f.Request.URL.Host
+	}
+	a.onRecord(rec)
+
+	// 2. Record the SSE response
+	var statusCode int
+	var respHeader http.Header
+	if f.Response != nil {
+		statusCode = f.Response.StatusCode
+		respHeader = f.Response.Header
+	}
+	resp := &http.Response{
+		StatusCode: statusCode,
+		Status:     fmt.Sprintf("%d %s", statusCode, http.StatusText(statusCode)),
+		Header:     respHeader,
+		Request:    req,
+	}
+
+	// Combine all SSE event data into a single body for storage.
+	var body []byte
+	if f.SSE != nil && len(f.SSE.Events) > 0 {
+		for _, evt := range f.SSE.Events {
+			body = append(body, []byte(evt.Raw)...)
+			body = append(body, '\n')
+		}
+	}
+
+	respRec := proto.ParseResponse(resp, body, sessionID, 1)
+	a.onRecord(respRec)
+}
+
 // RequestError is called when an error occurs during the request (e.g., context canceled, connection error).
 func (a *MitmProxyAddon) RequestError(f *proxy.Flow, err error) {
 	if a.onRecord == nil {
