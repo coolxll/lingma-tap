@@ -16,6 +16,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-i18next": "^17.0.6",
+    "shiki": "^4.1.0",
     "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {

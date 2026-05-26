@@ -62,7 +62,17 @@
     "response": "响应",
     "waiting": "等待响应...",
     "friendly": "友好可读",
-    "raw": "原始 (RAW)"
+    "raw": "原始 (RAW)",
+    "export_jsonl_hint": "将当前请求 + 响应导出为 JSONL 文件",
+    "replay": "重放",
+    "replay_hint_short": "在重放编辑器中打开并复制为 cURL",
+    "replay_title": "重放请求",
+    "replay_hint": "在下面修改请求体 / 请求头后复制为 cURL 命令。本编辑器不会真正重发请求到 Lingma —— COSY 签名需要重新计算。",
+    "body_json": "请求体 JSON",
+    "headers_json": "请求头 JSON",
+    "curl_preview": "cURL 预览",
+    "copy_curl": "复制为 cURL",
+    "close": "关闭"
   },
   "settings": {
     "models": "模型",
