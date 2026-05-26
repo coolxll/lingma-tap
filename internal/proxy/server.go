@@ -8,6 +8,7 @@ import (
 	"github.com/coolxll/lingma-tap/internal/mitm"
 	"github.com/lqqyt2423/go-mitmproxy/cert"
 	"github.com/lqqyt2423/go-mitmproxy/proxy"
+	logrus "github.com/sirupsen/logrus"
 )
 
 // Server is an HTTP/HTTPS proxy using go-mitmproxy.
@@ -45,6 +46,7 @@ func (s *Server) Start(port int) error {
 		return fmt.Errorf("failed to create proxy: %w", err)
 	}
 
+	logrus.SetLevel(logrus.WarnLevel)
 	p.AddAddon(mitm.NewMitmProxyAddon(s.onRecord))
 
 	s.proxyServer = p
