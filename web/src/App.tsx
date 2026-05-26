@@ -149,12 +149,14 @@ function App() {
           if (!r || r.source !== "proxy") return false;
           if (proxyTypeFilter === "all") return true;
           if (proxyTypeFilter === "chat")
-            return r.endpoint_type === "chat" || r.endpoint_type === "finish";
+            return r.endpoint_type === "chat";
           if (proxyTypeFilter === "embedding")
             return r.endpoint_type === "embedding";
           if (proxyTypeFilter === "other")
             return (
-              r.endpoint_type === "other" || r.endpoint_type === "tracking"
+              r.endpoint_type === "other" ||
+              r.endpoint_type === "tracking" ||
+              r.endpoint_type === "finish"
             );
           return true;
         });

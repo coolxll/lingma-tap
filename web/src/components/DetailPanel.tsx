@@ -31,7 +31,7 @@ export const DetailPanel = memo(function DetailPanel({ request, response }: Deta
 
   const chatContent = useMemo(() => {
     try {
-      if (!request || (request.endpoint_type !== 'chat' && request.endpoint_type !== 'finish')) return null;
+      if (!request || request.endpoint_type !== 'chat') return null;
 
       let prompt = '';
       let completion = '';
