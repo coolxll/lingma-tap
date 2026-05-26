@@ -31,6 +31,8 @@ interface WailsWindow extends Window {
         ClearRecords: () => Promise<void>;
         ClearRecordsBefore: (days: number) => Promise<number>;
         GetCACertPath: () => Promise<string>;
+        RevealCACert: () => Promise<void>;
+        OpenExternal: (url: string) => Promise<void>;
         GetStatus: () => Promise<Record<string, unknown>>;
         SetLogging: (enabled: boolean) => Promise<void>;
         SetProxyLogging: (enabled: boolean) => Promise<void>;
@@ -469,6 +471,8 @@ function App() {
             onClearBefore={(days) =>
               wails?.ClearRecordsBefore?.(days) || Promise.resolve(0)
             }
+            caCertPath={caCertPath}
+            onRevealCACert={() => wails?.RevealCACert?.()}
           />
         )}
       </div>
@@ -479,9 +483,6 @@ function App() {
         stats={stats}
         proxyPort={PROXY_PORT}
       />
-
-      {/* CA cert path hint */}
-      {caCertPath && <div className="hidden">{caCertPath}</div>}
     </div>
   );
 }

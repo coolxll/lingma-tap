@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Copy, Check, Shield, ShieldOff, Server, ServerOff, Trash2 } from 'lucide-react';
+import { RefreshCw, Copy, Check, Shield, ShieldOff, Server, ServerOff, Trash2, FolderOpen, FileKey } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 // Wails window type
@@ -47,6 +47,8 @@ interface SettingsPanelProps {
   stats?: StorageStats | null;
   onClearAll?: () => void;
   onClearBefore?: (days: number) => Promise<number>;
+  caCertPath?: string;
+  onRevealCACert?: () => void;
 }
 
 export function SettingsPanel({
@@ -65,6 +67,8 @@ export function SettingsPanel({
   stats,
   onClearAll,
   onClearBefore,
+  caCertPath,
+  onRevealCACert,
 }: SettingsPanelProps) {
   const { t } = useTranslation();
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -342,6 +346,46 @@ export function SettingsPanel({
             </div>
           </div>
         </section>
+
+        {/* CA Certificate */}
+        {caCertPath && (
+          <section>
+            <h2 className="text-sm font-semibold text-zinc-200 mb-4 uppercase tracking-widest opacity-60">{t('settings.ca_section')}</h2>
+            <div className="bg-zinc-900/30 rounded-2xl p-5 border border-zinc-800/50">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                  <FileKey className="w-4 h-4 text-amber-400" />
+                  {t('settings.ca_title')}
+                </h3>
+              </div>
+              <p className="text-[11px] text-zinc-400 leading-relaxed mb-3">
+                {t('settings.ca_hint')}
+              </p>
+              <div className="flex items-center gap-2 bg-zinc-950/50 border border-zinc-800/50 rounded-lg px-3 py-2 mb-3">
+                <span className="text-[11px] font-mono text-zinc-300 truncate flex-1" title={caCertPath}>{caCertPath}</span>
+                <button
+                  onClick={() => copyToClipboard(caCertPath)}
+                  className="p-1 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+                  title={t('common.copy')}
+                >
+                  {copied === caCertPath ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={onRevealCACert}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-[11px] font-bold transition-colors"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  {t('settings.ca_reveal')}
+                </button>
+              </div>
+              <p className="mt-3 text-[10px] text-zinc-500 leading-relaxed">
+                {t('settings.ca_install_steps')}
+              </p>
+            </div>
+          </section>
+        )}
 
         {/* Models */}
         <section>

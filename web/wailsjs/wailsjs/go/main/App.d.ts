@@ -27,6 +27,8 @@ export function OpenExternal(arg1:string):Promise<void>;
 
 export function RecentRecords(arg1:number):Promise<Array<proto.Record>>;
 
+export function RevealCACert():Promise<void>;
+
 export function SaveAnthropicMapping(arg1:Record<string, string>,arg2:string):Promise<void>;
 
 export function SetLogging(arg1:boolean):Promise<void>;

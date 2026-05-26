@@ -50,6 +50,10 @@ export function RecentRecords(arg1) {
   return window['go']['main']['App']['RecentRecords'](arg1);
 }
 
+export function RevealCACert() {
+  return window['go']['main']['App']['RevealCACert']();
+}
+
 export function SaveAnthropicMapping(arg1, arg2) {
   return window['go']['main']['App']['SaveAnthropicMapping'](arg1, arg2);
 }
