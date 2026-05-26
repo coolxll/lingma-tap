@@ -26,23 +26,32 @@ function mergeSSEContent(events: SSEEvent[]): { text: string; toolCalls: string[
     try {
       const parsed = JSON.parse(rawContent);
       
+      let target = parsed;
+      if (parsed?.body && typeof parsed.body === 'string') {
+        try {
+          target = JSON.parse(parsed.body);
+        } catch {
+          // ignore
+        }
+      }
+
       // 1. OpenAI style: choices[0].delta.content
       // 2. DashScope style: output.choices[0].delta.content
-      const delta = parsed?.choices?.[0]?.delta || parsed?.output?.choices?.[0]?.delta;
+      const delta = target?.choices?.[0]?.delta || target?.output?.choices?.[0]?.delta;
       
       // Use undefined check because content can be an empty string
       if (delta?.content !== undefined && delta?.content !== null) {
         text += delta.content;
-      } else if (parsed?.output?.text !== undefined && parsed?.output?.text !== null) {
+      } else if (target?.output?.text !== undefined && target?.output?.text !== null) {
         // 3. DashScope older style: output.text (usually contains full text so far)
-        text = parsed.output.text; 
-      } else if (parsed?.content !== undefined && parsed?.content !== null) {
+        text = target.output.text; 
+      } else if (target?.content !== undefined && target?.content !== null) {
         // 4. Simple top-level content
-        text += parsed.content;
+        text += target.content;
       }
 
       // Tool calls extraction
-      const tool_calls = delta?.tool_calls || parsed?.choices?.[0]?.message?.tool_calls;
+      const tool_calls = delta?.tool_calls || target?.choices?.[0]?.message?.tool_calls;
       if (tool_calls) {
         for (const tc of tool_calls) {
           const fn = tc.function;

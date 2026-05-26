@@ -49,7 +49,17 @@ export function parseLogDetails(record: TrafficRecord, response?: TrafficRecord 
       if (!raw || raw === '[DONE]') continue;
       try {
         const parsed = JSON.parse(raw);
-        const usage = parsed.usage || parsed.output?.usage;
+        
+        let target = parsed;
+        if (parsed?.body && typeof parsed.body === 'string') {
+          try {
+            target = JSON.parse(parsed.body);
+          } catch {
+            // ignore
+          }
+        }
+
+        const usage = target.usage || target.output?.usage;
         if (usage) {
           inputTokens = usage.prompt_tokens || usage.input_tokens || inputTokens;
           outputTokens = usage.completion_tokens || usage.output_tokens || outputTokens;
