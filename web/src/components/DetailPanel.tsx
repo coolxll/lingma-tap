@@ -107,15 +107,25 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
               try {
                 const rawContent = e.body || e.data;
                 if (!rawContent || rawContent === '[DONE]') return '';
-                const data = JSON.parse(rawContent);
+                
+                let data;
+                if (typeof rawContent === 'string') {
+                  data = JSON.parse(rawContent);
+                } else {
+                  data = rawContent;
+                }
                 
                 // Handle nested structure if 'body' exists
                 let target = data;
-                if (data.body && typeof data.body === 'string') {
-                  try {
-                    target = JSON.parse(data.body);
-                  } catch {
-                    // If body is not JSON, use it as is or fallback
+                if (data?.body) {
+                  if (typeof data.body === 'string') {
+                    try {
+                      target = JSON.parse(data.body);
+                    } catch {
+                      // If body is not JSON, use it as is or fallback
+                    }
+                  } else if (typeof data.body === 'object') {
+                    target = data.body;
                   }
                 }
 

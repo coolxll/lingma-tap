@@ -24,14 +24,23 @@ function mergeSSEContent(events: SSEEvent[]): { text: string; toolCalls: string[
     if (rawContent === '[DONE]') continue;
 
     try {
-      const parsed = JSON.parse(rawContent);
+      let parsed;
+      if (typeof rawContent === 'string') {
+        parsed = JSON.parse(rawContent);
+      } else {
+        parsed = rawContent;
+      }
       
       let target = parsed;
-      if (parsed?.body && typeof parsed.body === 'string') {
-        try {
-          target = JSON.parse(parsed.body);
-        } catch {
-          // ignore
+      if (parsed?.body) {
+        if (typeof parsed.body === 'string') {
+          try {
+            target = JSON.parse(parsed.body);
+          } catch {
+            // ignore
+          }
+        } else if (typeof parsed.body === 'object') {
+          target = parsed.body;
         }
       }
 
