@@ -189,6 +189,35 @@ func TestParseSSEData(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "double-json wrapper with nested usage",
+			data: `{"headers":{"Content-Type":["application/json"]},"body":"{\"choices\":[],\"created\":1779808522,\"id\":\"chatcmpl-a4e7b4f5-4f18-9450-8783-2fe34710c558\",\"model\":\"auto\",\"object\":\"chat.completion.chunk\",\"usage\":{\"completion_tokens\":64,\"prompt_tokens\":7785,\"total_tokens\":7849}}","statusCodeValue":200,"statusCode":"OK"}`,
+			check: func(t *testing.T, events []SSEEvent, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if len(events) == 0 {
+					t.Fatal("expected at least 1 event, got 0")
+				}
+				// Find usage in events
+				var usageEv *SSEEvent
+				for i := range events {
+					if events[i].Usage != nil {
+						usageEv = &events[i]
+						break
+					}
+				}
+				if usageEv == nil {
+					t.Fatalf("expected usage in events, got nil")
+				}
+				if usageEv.Usage.PromptTokens != 7785 {
+					t.Errorf("expected prompt tokens 7785, got %d", usageEv.Usage.PromptTokens)
+				}
+				if usageEv.Usage.CompletionTokens != 64 {
+					t.Errorf("expected completion tokens 64, got %d", usageEv.Usage.CompletionTokens)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
