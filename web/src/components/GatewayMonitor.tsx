@@ -1,8 +1,10 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Search, X, Activity, CheckCircle, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { TrafficRecord, formatTimestamp, formatFriendlyMessage } from '@/lib/types';
+import { TrafficRecord, formatTimestamp } from '@/lib/types';
 import { JsonViewer } from './JsonViewer';
+import { extractReadableResponseText } from '@/lib/sse-content';
+import { extractReadablePromptText } from '@/lib/prompt-content';
 
 interface GatewayMonitorProps {
   records: TrafficRecord[];
@@ -154,18 +156,7 @@ export function GatewayMonitor({
                 </td>
                 <td className="px-4 py-4">
                   <div className="text-xs text-zinc-400 truncate max-w-md bg-zinc-900/50 px-3 py-1.5 rounded-lg border border-zinc-800/50">
-                    {(() => {
-                      try {
-                        const body = JSON.parse(row.req.request_body || '{}');
-                        const lastMsg = body.messages?.slice(-1)[0];
-                        if (lastMsg) {
-                          return formatFriendlyMessage(lastMsg);
-                        }
-                        return '-';
-                      } catch {
-                        return '-';
-                      }
-                    })()}
+                    {extractReadablePromptText(row.req.request_body) || '-'}
                   </div>
                 </td>
                 <td className="px-4 py-4 text-center">
@@ -354,16 +345,7 @@ export function GatewayMonitor({
                   </div>
                   <div className="bg-zinc-900/30 border border-zinc-800/50 rounded-xl p-4 text-sm text-zinc-300 min-h-[200px] font-sans leading-relaxed overflow-auto">
                     {requestViewMode === 'friendly' ? (
-                      (() => {
-                        try {
-                          const body = JSON.parse(selectedRow.req.request_body || '{}');
-                          const lastMsg = body.messages?.slice(-1)[0];
-                          if (!lastMsg) return 'No prompt content';
-                          return formatFriendlyMessage(lastMsg);
-                        } catch {
-                          return selectedRow.req.request_body;
-                        }
-                      })()
+                      extractReadablePromptText(selectedRow.req.request_body) || 'No prompt content'
                     ) : (
                       <JsonViewer data={selectedRow.req.request_body || '{}'} />
                     )}
@@ -400,19 +382,7 @@ export function GatewayMonitor({
                   </div>
                   <div className="bg-zinc-900/30 border border-zinc-800/50 rounded-xl p-4 text-sm text-zinc-200 min-h-[200px] font-sans leading-relaxed overflow-auto">
                     {responseViewMode === 'friendly' ? (
-                      (() => {
-                        try {
-                          const body = JSON.parse(selectedRow.req.response_body || '{}');
-                          const message = body.choices?.[0]?.message || body.choices?.[0]?.delta;
-                          if (message) {
-                            return formatFriendlyMessage(message) || 'Waiting for response...';
-                          }
-                          const content = body.choices?.[0]?.text || selectedRow.req.response_body;
-                          return typeof content === 'string' ? content : JSON.stringify(content || 'Waiting for response...');
-                        } catch {
-                          return selectedRow.req.response_body || 'Waiting for response...';
-                        }
-                      })()
+                      extractReadableResponseText(selectedRow.req.response_body) || 'Waiting for response...'
                     ) : (
                       <JsonViewer data={selectedRow.req.response_body || '{}'} />
                     )}

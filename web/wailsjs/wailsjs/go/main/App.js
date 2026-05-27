@@ -34,6 +34,10 @@ export function GetRecords(arg1, arg2) {
   return window['go']['main']['App']['GetRecords'](arg1, arg2);
 }
 
+export function GetRecordsByType(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetRecordsByType'](arg1, arg2, arg3);
+}
+
 export function GetStatus() {
   return window['go']['main']['App']['GetStatus']();
 }

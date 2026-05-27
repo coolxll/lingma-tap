@@ -3,83 +3,13 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { SSEEvent } from '@/lib/types';
 import { JsonViewer } from './JsonViewer';
 import { useTranslation } from 'react-i18next';
+import { mergeSSEContent } from '@/lib/sse-content';
 
 interface SseEventListProps {
   events: SSEEvent[];
 }
 
 type ViewMode = 'events' | 'complete';
-
-/** Extract content from SSE events and merge into full text. */
-function mergeSSEContent(events: SSEEvent[]): { text: string; toolCalls: string[] } {
-  let text = '';
-  const toolCalls: string[] = [];
-
-  for (const evt of events) {
-    // SSE event_type defaults to 'message' or 'data' if not specified
-    const isDataEvent = !evt.event_type || evt.event_type === 'data' || evt.event_type === 'message';
-    const rawContent = evt.body || evt.data;
-    
-    if (!isDataEvent || !rawContent) continue;
-    if (rawContent === '[DONE]') continue;
-
-    try {
-      let parsed;
-      if (typeof rawContent === 'string') {
-        parsed = JSON.parse(rawContent);
-      } else {
-        parsed = rawContent;
-      }
-      
-      let target = parsed;
-      if (parsed?.body) {
-        if (typeof parsed.body === 'string') {
-          try {
-            target = JSON.parse(parsed.body);
-          } catch {
-            // ignore
-          }
-        } else if (typeof parsed.body === 'object') {
-          target = parsed.body;
-        }
-      }
-
-      // 1. OpenAI style: choices[0].delta.content
-      // 2. DashScope style: output.choices[0].delta.content
-      const delta = target?.choices?.[0]?.delta || target?.output?.choices?.[0]?.delta;
-      
-      // Use undefined check because content can be an empty string
-      if (delta?.content !== undefined && delta?.content !== null) {
-        text += delta.content;
-      } else if (target?.output?.text !== undefined && target?.output?.text !== null) {
-        // 3. DashScope older style: output.text (usually contains full text so far)
-        text = target.output.text; 
-      } else if (target?.content !== undefined && target?.content !== null) {
-        // 4. Simple top-level content
-        text += target.content;
-      }
-
-      // Tool calls extraction
-      const tool_calls = delta?.tool_calls || target?.choices?.[0]?.message?.tool_calls;
-      if (tool_calls) {
-        for (const tc of tool_calls) {
-          const fn = tc.function;
-          if (fn?.name) {
-            toolCalls.push(`${fn.name}(${fn.arguments || ''})`);
-          } else if (fn?.arguments) {
-            if (toolCalls.length > 0) {
-              toolCalls[toolCalls.length - 1] += fn.arguments;
-            }
-          }
-        }
-      }
-    } catch {
-      // Not valid JSON, skip
-    }
-  }
-
-  return { text, toolCalls };
-}
 
 export function SseEventList({ events }: SseEventListProps) {
   const { t } = useTranslation();
@@ -173,9 +103,9 @@ export function SseEventList({ events }: SseEventListProps) {
       {viewMode === 'complete' && (
         <div>
           {merged.text ? (
-            <pre className="p-3 bg-zinc-900 rounded text-xs font-mono text-zinc-200 whitespace-pre-wrap break-words max-h-[500px] overflow-y-auto">
+            <div className="p-3 bg-zinc-900 rounded text-sm leading-6 font-sans text-zinc-200 whitespace-pre-wrap break-words max-h-[500px] overflow-y-auto">
               {merged.text}
-            </pre>
+            </div>
           ) : (
             <p className="text-zinc-500 text-xs">{t('sse.no_content')}</p>
           )}

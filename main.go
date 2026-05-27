@@ -178,7 +178,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	go http.Serve(a.apiLn, mux)
 	log.Printf("[app] Management API server on %s", a.apiLn.Addr())
-	
+
 	loggingSetting, _ := a.db.GetSetting("gateway_logging")
 	if loggingSetting == "true" {
 		a.gatewayLogging = true
@@ -313,6 +313,18 @@ func (a *App) GetRecords(limit int, offset int) []proto.Record {
 		limit = 500
 	}
 	records, _ := a.db.RecentRecords(limit, offset)
+	return records
+}
+
+// GetRecordsByType returns recent proxy traffic records filtered by endpoint type.
+func (a *App) GetRecordsByType(limit int, offset int, recordType string) []proto.Record {
+	if a.db == nil {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	records, _ := a.db.RecentRecordsByType(limit, offset, recordType)
 	return records
 }
 

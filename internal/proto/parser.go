@@ -85,11 +85,24 @@ func ParseResponse(resp *http.Response, body []byte, session string, index int) 
 		rec.RespBody = string(body)
 	}
 
-	// Parse SSE if applicable (either Content-Type is text/event-stream, or body content is formatted as SSE)
+	// Parse SSE if applicable. Lingma can wrap stream chunks as plain JSON/NDJSON
+	// instead of a standards-compliant text/event-stream response.
+	var sseEvents []SSEEvent
 	isSSEBody := len(body) > 0 && (strings.HasPrefix(string(body), "data:") || strings.Contains(string(body), "\ndata:"))
-	if (strings.Contains(rec.RespMime, "text/event-stream") || isSSEBody) && len(body) > 0 {
+	if len(body) > 0 {
+		sseEvents = ParseSSEEvents(string(body))
+	}
+	hasLingmaEnvelope := false
+	for _, evt := range sseEvents {
+		if evt.Body != "" {
+			hasLingmaEnvelope = true
+			break
+		}
+	}
+	isJSONStream := len(sseEvents) > 1 || (hasLingmaEnvelope && hasStreamPayload(sseEvents))
+	if (strings.Contains(rec.RespMime, "text/event-stream") || isSSEBody || isJSONStream) && len(body) > 0 {
 		rec.IsSSE = true
-		rec.SSEEvents = ParseSSEEvents(string(body))
+		rec.SSEEvents = sseEvents
 	}
 
 	// Classify endpoint

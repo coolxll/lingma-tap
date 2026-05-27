@@ -26,6 +26,7 @@ interface WailsWindow extends Window {
         StartGateway: (port: number) => Promise<void>;
         StopGateway: () => Promise<void>;
         GetRecords: (limit: number, offset: number) => Promise<TrafficRecord[]>;
+        GetRecordsByType?: (limit: number, offset: number, recordType: string) => Promise<TrafficRecord[]>;
         GetGatewayLogs: (limit: number, offset: number) => Promise<any[]>;
         LogError: (message: string) => Promise<void>;
         ClearRecords: () => Promise<void>;
@@ -52,6 +53,29 @@ interface ModelInfo {
 const WS_PORT = 9091;
 const PROXY_PORT = 9528;
 const DEFAULT_GATEWAY_PORT = 9090;
+const PROXY_PAGE_SIZE = 500;
+const GATEWAY_PAGE_SIZE = 200;
+type ProxyTypeFilter = "all" | "chat" | "embedding" | "other";
+
+function matchesProxyTypeFilter(record: TrafficRecord, filter: ProxyTypeFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "chat") return record.endpoint_type === "chat";
+  if (filter === "embedding") return record.endpoint_type === "embedding";
+  return (
+    record.endpoint_type === "other" ||
+    record.endpoint_type === "tracking" ||
+    record.endpoint_type === "finish"
+  );
+}
+
+function shouldAutoSelectRecord(record: TrafficRecord, activeTab: TabId, proxyTypeFilter: ProxyTypeFilter): boolean {
+  if (record.direction !== "C2S") return false;
+  if (activeTab === "gateway") return record.source === "gateway";
+  if (activeTab === "proxy") {
+    return record.source === "proxy" && matchesProxyTypeFilter(record, proxyTypeFilter);
+  }
+  return false;
+}
 
 class GlobalErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -131,14 +155,20 @@ function App() {
   const [caCertPath, setCaCertPath] = useState("");
   const [gatewayLoggingEnabled, setGatewayLoggingEnabled] = useState(true);
   const [proxyLoggingEnabled, setProxyLoggingEnabled] = useState(true);
-  const [displayCount, setDisplayCount] = useState(200);
+  const [displayCount, setDisplayCount] = useState(PROXY_PAGE_SIZE);
   const [canLoadMore, setCanLoadMore] = useState(true);
-  const [proxyTypeFilter, setProxyTypeFilter] = useState<
-    "all" | "chat" | "embedding" | "other"
-  >("all");
+  const [proxyTypeFilter, setProxyTypeFilter] = useState<ProxyTypeFilter>("chat");
   const liveTailRef = useRef(liveTail);
   const selectedRef = useRef(selectedRecord);
   const recordsRef = useRef(records);
+  const activeTabRef = useRef(activeTab);
+  const proxyTypeFilterRef = useRef(proxyTypeFilter);
+  const proxyLoadedByFilterRef = useRef<Record<ProxyTypeFilter, number>>({
+    all: 0,
+    chat: 0,
+    embedding: 0,
+    other: 0,
+  });
 
   // Computed records for active tab
   const displayedRecords = useMemo(() => {
@@ -147,18 +177,7 @@ function App() {
       if (activeTab === "proxy") {
         result = records.filter((r) => {
           if (!r || r.source !== "proxy") return false;
-          if (proxyTypeFilter === "all") return true;
-          if (proxyTypeFilter === "chat")
-            return r.endpoint_type === "chat";
-          if (proxyTypeFilter === "embedding")
-            return r.endpoint_type === "embedding";
-          if (proxyTypeFilter === "other")
-            return (
-              r.endpoint_type === "other" ||
-              r.endpoint_type === "tracking" ||
-              r.endpoint_type === "finish"
-            );
-          return true;
+          return matchesProxyTypeFilter(r, proxyTypeFilter);
         });
       } else if (activeTab === "gateway") {
         result = records.filter((r) => r && (r as any).source === "gateway");
@@ -181,50 +200,88 @@ function App() {
   useEffect(() => {
     recordsRef.current = records;
   }, [records]);
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+  useEffect(() => {
+    proxyTypeFilterRef.current = proxyTypeFilter;
+  }, [proxyTypeFilter]);
 
   // Wails bindings
   const wails = (window as unknown as WailsWindow).go?.main?.App;
 
+  const fetchProxyRecords = useCallback(async (filter: ProxyTypeFilter, offset: number) => {
+    if (!wails) return [];
+    const records =
+      wails.GetRecordsByType
+        ? await wails.GetRecordsByType(PROXY_PAGE_SIZE, offset, filter)
+        : await wails.GetRecords(PROXY_PAGE_SIZE, offset);
+    proxyLoadedByFilterRef.current[filter] = Math.max(
+      proxyLoadedByFilterRef.current[filter],
+      offset + (records?.length || 0),
+    );
+    return records || [];
+  }, [wails]);
+
   const handleLoadMore = useCallback(async () => {
     if (!wails || !canLoadMore) return;
     try {
-      const proxyOffset = recordsRef.current.filter((r) => r.source === "proxy").length;
-      const gatewayOffset = recordsRef.current.filter((r) => r.source === "gateway").length;
+      let newRecords: TrafficRecord[] = [];
+      let hasMore = true;
 
-      const [newProxyRecs, newGatewayLogs] = await Promise.all([
-        wails.GetRecords(200, proxyOffset),
-        wails.GetGatewayLogs ? wails.GetGatewayLogs(200, gatewayOffset) : Promise.resolve([])
-      ]);
-
-      const newRecords: TrafficRecord[] = [...(newProxyRecs || [])];
-      if (newGatewayLogs && newGatewayLogs.length > 0) {
-        newRecords.push(...newGatewayLogs.map(mapGatewayLogToRecord));
+      if (activeTabRef.current === "proxy") {
+        const filter = proxyTypeFilterRef.current;
+        const proxyOffset = proxyLoadedByFilterRef.current[filter];
+        const newProxyRecs = await fetchProxyRecords(filter, proxyOffset);
+        newRecords = newProxyRecs;
+        hasMore = newProxyRecs.length >= PROXY_PAGE_SIZE;
+      } else if (activeTabRef.current === "gateway") {
+        const gatewayOffset = recordsRef.current.filter((r) => r.source === "gateway").length;
+        const newGatewayLogs = wails.GetGatewayLogs
+          ? await wails.GetGatewayLogs(GATEWAY_PAGE_SIZE, gatewayOffset)
+          : [];
+        newRecords = (newGatewayLogs || []).map(mapGatewayLogToRecord);
+        hasMore = (newGatewayLogs || []).length >= GATEWAY_PAGE_SIZE;
       }
 
       if (newRecords.length > 0) {
         appendRecords(newRecords);
-        setDisplayCount((prev) => prev + 200);
+        setDisplayCount((prev) => prev + PROXY_PAGE_SIZE);
       }
-      
-      if ((!newProxyRecs || newProxyRecs.length < 200) && (!newGatewayLogs || newGatewayLogs.length < 200)) {
-        setCanLoadMore(false);
-      }
+
+      setCanLoadMore(hasMore);
     } catch (err) {
       console.error("Failed to load more records:", err);
       wails?.LogError(`Failed to load more records: ${err}`);
     }
-  }, [wails, canLoadMore, appendRecords]);
+  }, [wails, canLoadMore, appendRecords, fetchProxyRecords]);
 
-  // Find response record for the selected request
-  const responseRecord = useMemo(() => {
-    if (!selectedRecord || selectedRecord.direction === "S2C") return null;
-    // Don't assume the response is the immediate next record (interleaving possible)
+  const selectedRequestRecord = useMemo(() => {
+    if (!selectedRecord) return null;
+    if (selectedRecord.direction === "C2S") return selectedRecord;
     return (
       records.find(
-        (r) => r.session === selectedRecord.session && r.direction === "S2C",
+        (r) =>
+          r.session === selectedRecord.session &&
+          r.direction === "C2S" &&
+          r.source === selectedRecord.source,
       ) || null
     );
   }, [selectedRecord, records]);
+
+  // Find response record for the selected request.
+  const responseRecord = useMemo(() => {
+    if (!selectedRequestRecord) return null;
+    // Don't assume the response is the immediate next record (interleaving possible)
+    return (
+      records.find(
+        (r) =>
+          r.session === selectedRequestRecord.session &&
+          r.direction === "S2C" &&
+          r.source === selectedRequestRecord.source,
+      ) || null
+    );
+  }, [selectedRequestRecord, records]);
 
   // Apply theme
   useEffect(() => {
@@ -242,8 +299,8 @@ function App() {
     if (!wails) return;
 
     Promise.all([
-      wails.GetRecords(200, 0),
-      wails.GetGatewayLogs ? wails.GetGatewayLogs(200, 0) : Promise.resolve([]),
+      fetchProxyRecords(proxyTypeFilterRef.current, 0),
+      wails.GetGatewayLogs ? wails.GetGatewayLogs(GATEWAY_PAGE_SIZE, 0) : Promise.resolve([]),
     ]).then(([proxyRecs, gatewayLogs]) => {
       const allRecords: TrafficRecord[] = [...(proxyRecs || [])];
 
@@ -259,7 +316,11 @@ function App() {
 
       if (allRecords.length > 0) {
         updateRecords(allRecords);
-        setSelectedRecord(allRecords[0]);
+        setSelectedRecord(
+          allRecords.find((record) => shouldAutoSelectRecord(record, activeTabRef.current, proxyTypeFilterRef.current)) ||
+          allRecords.find((record) => record.direction === "C2S") ||
+          allRecords[0],
+        );
       }
     });
 
@@ -276,7 +337,7 @@ function App() {
       if (s?.proxy_logging !== undefined)
         setProxyLoggingEnabled(s.proxy_logging as boolean);
     });
-  }, [wails, updateRecords, setSelectedRecord]);
+  }, [wails, updateRecords, setSelectedRecord, fetchProxyRecords]);
 
   // WebSocket connection
   useEffect(() => {
@@ -288,7 +349,7 @@ function App() {
           if (!record) return;
           const rec = record as unknown as TrafficRecord;
           appendRecord(rec);
-          if (liveTailRef.current) {
+          if (liveTailRef.current && shouldAutoSelectRecord(rec, activeTabRef.current, proxyTypeFilterRef.current)) {
             setSelectedRecord(rec);
           }
         } catch (err) {
@@ -302,9 +363,9 @@ function App() {
         // On reconnect, fetch latest records including gateway logs
         if (!wails) return;
         Promise.all([
-          wails.GetRecords(200, 0),
+          fetchProxyRecords(proxyTypeFilterRef.current, 0),
           wails.GetGatewayLogs
-            ? wails.GetGatewayLogs(200, 0)
+            ? wails.GetGatewayLogs(GATEWAY_PAGE_SIZE, 0)
             : Promise.resolve([]),
         ]).then(([proxyRecs, gatewayLogs]) => {
           const allRecords: TrafficRecord[] = [...(proxyRecs || [])];
@@ -320,7 +381,7 @@ function App() {
     );
     client.connect();
     return () => client.disconnect();
-  }, [appendRecord, setSelectedRecord, updateRecords, wails]);
+  }, [appendRecord, setSelectedRecord, updateRecords, wails, fetchProxyRecords]);
 
   // Poll status
   useEffect(() => {
@@ -410,6 +471,28 @@ function App() {
     clearRecords();
   }, [wails, clearRecords]);
 
+  const handleProxyTypeFilterChange = useCallback((filter: ProxyTypeFilter) => {
+    setProxyTypeFilter(filter);
+    setDisplayCount(PROXY_PAGE_SIZE);
+    setCanLoadMore(true);
+
+    if (proxyLoadedByFilterRef.current[filter] > 0) {
+      return;
+    }
+
+    fetchProxyRecords(filter, 0)
+      .then((newRecords) => {
+        if (newRecords.length > 0) {
+          appendRecords(newRecords);
+        }
+        setCanLoadMore(newRecords.length >= PROXY_PAGE_SIZE);
+      })
+      .catch((err) => {
+        console.error("Failed to load records for filter:", err);
+        wails?.LogError(`Failed to load records for filter ${filter}: ${err}`);
+      });
+  }, [appendRecords, fetchProxyRecords, wails]);
+
   const handleToggleTheme = useCallback(() => {
     setTheme((prev) => (prev === "dark" ? "light" : "dark"));
   }, []);
@@ -435,15 +518,15 @@ function App() {
           <ResizablePanels defaultSizes={[35, 65]} minSizes={[250, 300]}>
             <RecordList
               records={displayedRecords}
-              selectedRecord={selectedRecord}
+              selectedRecord={selectedRequestRecord}
               onSelectRecord={setSelectedRecord}
               onLoadMore={handleLoadMore}
               canLoadMore={canLoadMore}
               liveTail={liveTail}
               typeFilter={proxyTypeFilter}
-              onTypeFilterChange={setProxyTypeFilter}
+              onTypeFilterChange={handleProxyTypeFilterChange}
             />
-            <DetailPanel request={selectedRecord} response={responseRecord} />
+            <DetailPanel request={selectedRequestRecord} response={responseRecord} />
           </ResizablePanels>
         ) : activeTab === "gateway" ? (
           <GatewayMonitor

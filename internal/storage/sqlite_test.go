@@ -101,3 +101,42 @@ func TestClearTrafficBefore(t *testing.T) {
 	}
 	t.Logf("Deleted %d records", deleted)
 }
+
+func TestRecentRecordsByType(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open db: %v", err)
+	}
+	defer db.Close()
+	defer os.RemoveAll(tmpDir)
+
+	records := []*proto.Record{
+		{Ts: time.Now().Format(time.RFC3339), Session: "chat-1", Index: 0, Direction: "C2S", Method: "POST", Path: "/chat", EndpointType: "chat"},
+		{Ts: time.Now().Format(time.RFC3339), Session: "track-1", Index: 0, Direction: "C2S", Method: "POST", Path: "/track", EndpointType: "tracking"},
+		{Ts: time.Now().Format(time.RFC3339), Session: "embed-1", Index: 0, Direction: "C2S", Method: "POST", Path: "/embeddings", EndpointType: "embedding"},
+		{Ts: time.Now().Format(time.RFC3339), Session: "finish-1", Index: 0, Direction: "C2S", Method: "POST", Path: "/finish", EndpointType: "finish"},
+	}
+	for _, rec := range records {
+		if err := db.SaveRecord(rec); err != nil {
+			t.Fatalf("Failed to save record: %v", err)
+		}
+	}
+
+	chatRecords, err := db.RecentRecordsByType(10, 0, "chat")
+	if err != nil {
+		t.Fatalf("RecentRecordsByType chat failed: %v", err)
+	}
+	if len(chatRecords) != 1 || chatRecords[0].EndpointType != "chat" {
+		t.Fatalf("Expected one chat record, got: %+v", chatRecords)
+	}
+
+	otherRecords, err := db.RecentRecordsByType(10, 0, "other")
+	if err != nil {
+		t.Fatalf("RecentRecordsByType other failed: %v", err)
+	}
+	if len(otherRecords) != 2 {
+		t.Fatalf("Expected tracking and finish records for other filter, got: %+v", otherRecords)
+	}
+}

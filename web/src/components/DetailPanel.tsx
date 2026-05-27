@@ -1,9 +1,11 @@
 import { memo, useState, useMemo } from 'react';
-import { TrafficRecord, formatTimestamp, formatDurationMs, getEndpointLabel, formatFriendlyMessage, getEndpointColor } from '@/lib/types';
+import { TrafficRecord, formatTimestamp, formatDurationMs, getEndpointLabel, getEndpointColor } from '@/lib/types';
 import { JsonViewer } from './JsonViewer';
 import { SseEventList } from './SseEventList';
 import { ReplayModal } from './ReplayModal';
 import { downloadTextFile, recordsToJSONL, safeFilename } from '@/lib/export';
+import { extractReadableResponseText, hasReadableSSEPayload, mergeSSEContent, parseSSEEventsFromText } from '@/lib/sse-content';
+import { extractReadablePromptText } from '@/lib/prompt-content';
 import { useTranslation } from 'react-i18next';
 import { MessageSquare, Code, User, Bot, Sparkles, FileDown, Wand2 } from 'lucide-react';
 
@@ -25,43 +27,16 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
     }
 
     const body = rawResponse.response_body || '';
-    if (body.startsWith('data:') || body.includes('\ndata:')) {
-      const lines = body.split('\n');
-      const sse_events: any[] = [];
-      let currentEvent: any = { event_type: '', data: '' };
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        if (trimmed.startsWith('data:')) {
-          const dataVal = trimmed.slice(5).trim();
-          currentEvent.data = dataVal;
-
-          // Try to extract body if it's the Lingma/OpenAI double-JSON envelope
-          try {
-            const parsedEnvelope = JSON.parse(dataVal);
-            if (parsedEnvelope && parsedEnvelope.body) {
-              currentEvent.body = parsedEnvelope.body;
-            }
-          } catch {
-            // ignore
-          }
-
-          sse_events.push({ ...currentEvent });
-          currentEvent = { event_type: '', data: '' };
-        } else if (trimmed.startsWith('event:')) {
-          currentEvent.event_type = trimmed.slice(6).trim();
-        }
-      }
-
-      if (sse_events.length > 0) {
-        return {
-          ...rawResponse,
-          is_sse: true,
-          sse_events,
-        };
-      }
+    const sse_events = parseSSEEventsFromText(body);
+    const hasSSEFraming = body.startsWith('data:') || body.includes('\ndata:');
+    const hasLingmaEnvelope = sse_events.some((evt) => evt.body !== undefined && evt.body !== '');
+    const looksLikeStreamBody = hasSSEFraming || sse_events.length > 1 || (hasLingmaEnvelope && hasReadableSSEPayload(sse_events));
+    if (looksLikeStreamBody && sse_events.length > 0) {
+      return {
+        ...rawResponse,
+        is_sse: true,
+        sse_events,
+      };
     }
 
     return rawResponse;
@@ -86,71 +61,17 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
       let prompt = '';
       let completion = '';
 
-      // Extract prompt
-      try {
-        const reqBody = JSON.parse(request.request_body || '{}');
-        if (reqBody.messages && Array.isArray(reqBody.messages) && reqBody.messages.length > 0) {
-          const lastMsg = reqBody.messages[reqBody.messages.length - 1];
-          prompt = formatFriendlyMessage(lastMsg);
-        } else if (reqBody.prompt) {
-          prompt = typeof reqBody.prompt === 'string' ? reqBody.prompt : JSON.stringify(reqBody.prompt);
-        }
-      } catch (e) {
-        prompt = request.request_body;
-      }
+      prompt = extractReadablePromptText(request.request_body);
 
       // Extract completion
       if (response) {
         if (response?.is_sse && response?.sse_events) {
-          completion = response.sse_events
-            .map((e: any) => {
-              try {
-                const rawContent = e.body || e.data;
-                if (!rawContent || rawContent === '[DONE]') return '';
-                
-                let data;
-                if (typeof rawContent === 'string') {
-                  data = JSON.parse(rawContent);
-                } else {
-                  data = rawContent;
-                }
-                
-                // Handle nested structure if 'body' exists
-                let target = data;
-                if (data?.body) {
-                  if (typeof data.body === 'string') {
-                    try {
-                      target = JSON.parse(data.body);
-                    } catch {
-                      // If body is not JSON, use it as is or fallback
-                    }
-                  } else if (typeof data.body === 'object') {
-                    target = data.body;
-                  }
-                }
-
-                const delta = target.choices?.[0]?.delta;
-                if (delta) return formatFriendlyMessage(delta);
-                const content = target.choices?.[0]?.text || '';
-                return typeof content === 'string' ? content : JSON.stringify(content);
-              } catch {
-                return '';
-              }
-            })
-            .join('');
-        } else {
-          try {
-            const respBody = JSON.parse(response.response_body || '{}');
-            const message = respBody.choices?.[0]?.message || respBody.choices?.[0]?.delta;
-            if (message) {
-              completion = formatFriendlyMessage(message);
-            } else {
-              const content = respBody.choices?.[0]?.text || response.response_body;
-              completion = typeof content === 'string' ? content : JSON.stringify(content || '');
-            }
-          } catch {
-            completion = typeof response.response_body === 'string' ? response.response_body : JSON.stringify(response.response_body || '');
+          completion = mergeSSEContent(response.sse_events).text;
+          if (!completion && response.response_body) {
+            completion = extractReadableResponseText(response.response_body);
           }
+        } else {
+          completion = extractReadableResponseText(response.response_body);
         }
       }
 
@@ -174,20 +95,20 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
     <>
     <div className="h-full overflow-y-auto bg-zinc-950">
       {/* Summary */}
-      <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/20">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-900/50 text-blue-400 border border-blue-500/20">
+      <div className="px-4 py-3 border-b border-zinc-800 flex items-start gap-4 bg-zinc-900/20">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start gap-2 mb-1 min-w-0">
+            <span className="shrink-0 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-900/50 text-blue-400 border border-blue-500/20">
               {request.method}
             </span>
-            <span className="text-xs text-zinc-300 font-mono break-all">{request.url}</span>
+            <span className="min-w-0 text-xs text-zinc-300 font-mono break-all">{request.url}</span>
           </div>
-          <div className="flex items-center gap-3 text-[10px] text-zinc-500 font-medium">
-            <span>{formatTimestamp(request.ts)}</span>
-            <span className="w-1 h-1 rounded-full bg-zinc-800" />
+          <div className="flex items-center gap-3 text-[10px] text-zinc-500 font-medium min-w-0 flex-wrap">
+            <span className="shrink-0">{formatTimestamp(request.ts)}</span>
+            <span className="w-1 h-1 rounded-full bg-zinc-800 shrink-0" />
             {(() => {
               if (!response) {
-                return <span className="text-zinc-600 italic">pending</span>;
+                return <span className="text-zinc-600 italic shrink-0">pending</span>;
               }
               const start = new Date(request.ts).getTime();
               const end = new Date(response.ts).getTime();
@@ -195,25 +116,25 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
               const ms = end - start;
               const tone = ms > 10000 ? 'text-red-400' : ms > 3000 ? 'text-amber-400' : 'text-zinc-400';
               return (
-                <span className={`${tone} font-mono`} title={`Round-trip ${ms}ms`}>
+                <span className={`${tone} font-mono shrink-0`} title={`Round-trip ${ms}ms`}>
                   {formatDurationMs(ms)}
                 </span>
               );
             })()}
-            <span className="w-1 h-1 rounded-full bg-zinc-800" />
-            <span className={getEndpointColor(request.endpoint_type)}>{getEndpointLabel(request.endpoint_type)}</span>
-            <span className="w-1 h-1 rounded-full bg-zinc-800" />
-            <span className="text-zinc-400 font-mono bg-zinc-800/50 px-1.5 py-0.5 rounded">{request.path}</span>
+            <span className="w-1 h-1 rounded-full bg-zinc-800 shrink-0" />
+            <span className={`${getEndpointColor(request.endpoint_type)} shrink-0`}>{getEndpointLabel(request.endpoint_type)}</span>
+            <span className="w-1 h-1 rounded-full bg-zinc-800 shrink-0" />
+            <span className="min-w-0 max-w-full truncate text-zinc-400 font-mono bg-zinc-800/50 px-1.5 py-0.5 rounded">{request.path}</span>
             {request.is_encoded && (
               <>
-                <span className="w-1 h-1 rounded-full bg-zinc-800" />
-                <span className="text-amber-400">{t('detailpanel.encoded')}</span>
+                <span className="w-1 h-1 rounded-full bg-zinc-800 shrink-0" />
+                <span className="text-amber-400 shrink-0">{t('detailpanel.encoded')}</span>
               </>
             )}
             {response && response.status > 0 && (
               <>
-                <span className="w-1 h-1 rounded-full bg-zinc-800" />
-                <span className={response.status < 400 ? 'text-green-400' : 'text-red-400'}>
+                <span className="w-1 h-1 rounded-full bg-zinc-800 shrink-0" />
+                <span className={`${response.status < 400 ? 'text-green-400' : 'text-red-400'} shrink-0`}>
                   {response.status_text || response.status}
                 </span>
               </>
@@ -221,44 +142,44 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="shrink-0 flex items-center justify-end gap-2 flex-wrap">
           <button
             onClick={handleExportJSONL}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold rounded-lg bg-zinc-900/50 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-all"
+            className="h-8 inline-flex items-center gap-1.5 px-2.5 text-[10px] font-bold rounded-lg bg-zinc-900/50 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-all whitespace-nowrap"
             title={t('detailpanel.export_jsonl_hint')}
           >
-            <FileDown className="w-3 h-3" />
+            <FileDown className="w-3 h-3 shrink-0" />
             JSONL
           </button>
           <button
             onClick={() => setShowReplay(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold rounded-lg bg-zinc-900/50 border border-zinc-800 text-zinc-400 hover:text-blue-400 hover:bg-zinc-800 transition-all"
+            className="h-8 inline-flex items-center gap-1.5 px-2.5 text-[10px] font-bold rounded-lg bg-zinc-900/50 border border-zinc-800 text-zinc-400 hover:text-blue-400 hover:bg-zinc-800 transition-all whitespace-nowrap"
             title={t('detailpanel.replay_hint_short')}
           >
-            <Wand2 className="w-3 h-3" />
+            <Wand2 className="w-3 h-3 shrink-0" />
             {t('detailpanel.replay')}
           </button>
-          <div className="flex bg-zinc-900/50 rounded-lg p-0.5 border border-zinc-800">
+          <div className="h-8 inline-flex shrink-0 bg-zinc-900/50 rounded-lg p-0.5 border border-zinc-800">
             <button
               onClick={() => setViewMode('friendly')}
-              className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+              className={`h-7 inline-flex items-center gap-1.5 px-3 text-[10px] font-bold rounded-md transition-all whitespace-nowrap ${
                 viewMode === 'friendly'
                   ? 'bg-zinc-800 text-blue-400 shadow-sm'
                   : 'text-zinc-500 hover:text-zinc-400'
               }`}
             >
-              <MessageSquare className="w-3 h-3" />
+              <MessageSquare className="w-3 h-3 shrink-0" />
               CHAT
             </button>
             <button
               onClick={() => setViewMode('standard')}
-              className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+              className={`h-7 inline-flex items-center gap-1.5 px-3 text-[10px] font-bold rounded-md transition-all whitespace-nowrap ${
                 viewMode === 'standard'
                   ? 'bg-zinc-800 text-zinc-200 shadow-sm'
                   : 'text-zinc-500 hover:text-zinc-400'
               }`}
             >
-              <Code className="w-3 h-3" />
+              <Code className="w-3 h-3 shrink-0" />
               STANDARD
             </button>
           </div>
@@ -293,7 +214,7 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
               )}
             </div>
             <div className="bg-blue-500/5 border border-blue-500/10 rounded-xl p-4 text-sm text-zinc-200 leading-relaxed font-sans shadow-inner min-h-[100px] whitespace-pre-wrap">
-              {chatContent.completion || (response ? 'Processing...' : 'Waiting for response...')}
+              {chatContent.completion || (response ? t('sse.no_content') : t('detailpanel.waiting'))}
             </div>
           </div>
         </div>
@@ -391,4 +312,3 @@ function HeadersTable({ headers }: { headers: Record<string, string> }) {
     </div>
   );
 }
-

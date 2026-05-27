@@ -157,6 +157,41 @@ func (d *DB) RecentRecords(limit int, offset ...int) ([]proto.Record, error) {
 		return nil, err
 	}
 
+	return recordsFromRawJSON(raws), nil
+}
+
+// RecentRecordsByType returns recent records filtered by endpoint type.
+func (d *DB) RecentRecordsByType(limit int, offset int, recordType string) ([]proto.Record, error) {
+	if recordType == "" || recordType == "all" {
+		return d.RecentRecords(limit, offset)
+	}
+
+	var raws []string
+	var err error
+	if recordType == "other" {
+		err = d.db.Select(
+			&raws,
+			"SELECT raw_json FROM proxy_records WHERE endpoint_type IN ('other', 'tracking', 'finish') ORDER BY id DESC LIMIT ? OFFSET ?",
+			limit,
+			offset,
+		)
+	} else {
+		err = d.db.Select(
+			&raws,
+			"SELECT raw_json FROM proxy_records WHERE endpoint_type = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+			recordType,
+			limit,
+			offset,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return recordsFromRawJSON(raws), nil
+}
+
+func recordsFromRawJSON(raws []string) []proto.Record {
 	var records []proto.Record
 	for _, raw := range raws {
 		var rec proto.Record
@@ -166,7 +201,7 @@ func (d *DB) RecentRecords(limit int, offset ...int) ([]proto.Record, error) {
 		records = append(records, rec)
 	}
 
-	return records, nil
+	return records
 }
 
 // ClearTraffic deletes all records, sessions, and gateway logs.

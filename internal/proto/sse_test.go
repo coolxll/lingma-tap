@@ -78,3 +78,56 @@ func TestParseSSEEvents_PrettyPrint(t *testing.T) {
 		t.Errorf("Expected pretty-printed body, got: %q", events[0].Body)
 	}
 }
+
+func TestParseSSEEvents_LingmaJSONLines(t *testing.T) {
+	input := `{"headers":{"Content-Type":["application/json"]},"body":"{\"choices\":[{\"delta\":{\"content\":\"跟你\"},\"index\":0}],\"model\":\"auto\"}","statusCodeValue":200,"statusCode":"OK"}
+{"headers":{"Content-Type":["application/json"]},"body":"{\"choices\":[{\"delta\":{\"content\":\"打招呼\"},\"index\":0}],\"model\":\"auto\"}","statusCodeValue":200,"statusCode":"OK"}
+{"firstTokenDuration":277,"totalDuration":409,"serverDuration":16}
+`
+
+	events := ParseSSEEvents(input)
+	if len(events) != 3 {
+		t.Fatalf("Expected 3 events, got %d", len(events))
+	}
+	if !strings.Contains(events[0].Body, "跟你") {
+		t.Errorf("Expected first event body to contain extracted inner content, got: %s", events[0].Body)
+	}
+	if !strings.Contains(events[1].Body, "打招呼") {
+		t.Errorf("Expected second event body to contain extracted inner content, got: %s", events[1].Body)
+	}
+	if events[2].Body != "" {
+		t.Errorf("Expected stats metadata to have empty body, got: %s", events[2].Body)
+	}
+	if !hasStreamPayload(events) {
+		t.Errorf("Expected Lingma JSON lines to be recognized as stream payload")
+	}
+}
+
+func TestParseSSEEvents_ConcatenatedLingmaJSON(t *testing.T) {
+	input := `{"body":"{\"choices\":[{\"delta\":{\"content\":\"A\"}}]}"}` +
+		`{"body":"{\"choices\":[{\"delta\":{\"content\":\"B\"}}]}"}` +
+		`{"firstTokenDuration":277}`
+
+	events := ParseSSEEvents(input)
+	if len(events) != 3 {
+		t.Fatalf("Expected 3 events, got %d", len(events))
+	}
+	if !strings.Contains(events[0].Body, "A") || !strings.Contains(events[1].Body, "B") {
+		t.Fatalf("Expected concatenated JSON envelopes to be parsed, got: %+v", events)
+	}
+}
+
+func TestParseSSEEvents_DataLinesWithoutBlankSeparator(t *testing.T) {
+	input := `data:{"headers":{"Content-Type":["application/json"]},"body":"{\"choices\":[{\"delta\":{\"reasoning_content\":\"User\"},\"index\":0}],\"model\":\"auto\"}","statusCodeValue":200,"statusCode":"OK"}
+data:{"headers":{"Content-Type":["application/json"]},"body":"{\"choices\":[{\"delta\":{\"content\":\"嗨！\"},\"index\":0}],\"model\":\"auto\"}","statusCodeValue":200,"statusCode":"OK"}
+data:{"headers":{"Content-Type":["application/json"]},"body":"{\"choices\":[{\"delta\":{\"content\":\"我随时在线。\"},\"index\":0}],\"model\":\"auto\"}","statusCodeValue":200,"statusCode":"OK"}
+`
+
+	events := ParseSSEEvents(input)
+	if len(events) != 3 {
+		t.Fatalf("Expected 3 events from adjacent data lines, got %d: %+v", len(events), events)
+	}
+	if !strings.Contains(events[1].Body, "嗨！") || !strings.Contains(events[2].Body, "我随时在线。") {
+		t.Fatalf("Expected adjacent data line bodies to be extracted, got: %+v", events)
+	}
+}

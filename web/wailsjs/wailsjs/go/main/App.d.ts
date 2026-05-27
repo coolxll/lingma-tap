@@ -19,6 +19,8 @@ export function GetModels():Promise<Array<bridge.ModelInfo>>;
 
 export function GetRecords(arg1:number,arg2:number):Promise<Array<proto.Record>>;
 
+export function GetRecordsByType(arg1:number,arg2:number,arg3:string):Promise<Array<proto.Record>>;
+
 export function GetStatus():Promise<Record<string, any>>;
 
 export function LogError(arg1:string):Promise<void>;
