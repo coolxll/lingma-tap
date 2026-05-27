@@ -47,6 +47,7 @@ server
 
 # Claude Code
 .claude/
+.antigravitycli/
 web/package.json.md5
 
 # Environment Variables
