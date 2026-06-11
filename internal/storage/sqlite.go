@@ -87,9 +87,6 @@ func (d *DB) migrate() error {
 
 // SaveRecord persists a record and upserts its session aggregate.
 func (d *DB) SaveRecord(rec *proto.Record) error {
-	d.writeMu.Lock()
-	defer d.writeMu.Unlock()
-
 	// Prepare helper fields
 	reqHeadersJSON, _ := json.Marshal(rec.ReqHeaders)
 	respHeadersJSON, _ := json.Marshal(rec.RespHeaders)
@@ -99,6 +96,9 @@ func (d *DB) SaveRecord(rec *proto.Record) error {
 	rec.RespHeadersJSON = string(respHeadersJSON)
 	rec.SSEEventsJSON = string(sseEventsJSON)
 	rec.RawJSON = string(rec.ToJSON())
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 
 	tx, err := d.db.Beginx()
 	if err != nil {
@@ -328,11 +328,11 @@ func (d *DB) MustExec(query string, args ...interface{}) {
 
 // SaveGatewayLog persists a gateway-specific log entry.
 func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
-	d.writeMu.Lock()
-	defer d.writeMu.Unlock()
-
 	sseEventsJSON, _ := json.Marshal(log.SSEEvents)
 	log.SSEEventsJSON = string(sseEventsJSON)
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 
 	_, err := d.db.NamedExec(`
 		INSERT INTO gateway_logs (ts, session, model, method, path, request_body, response_body,

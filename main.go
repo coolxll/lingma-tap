@@ -11,7 +11,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -369,12 +372,34 @@ func (a *App) GetCACertPath() string {
 // RevealCACert opens the directory containing the CA certificate in the
 // platform's file manager (Finder on macOS, Explorer on Windows) so the user
 // can drag it into the system trust store.
-func (a *App) RevealCACert() {
+func (a *App) RevealCACert() error {
 	if a.ca == nil {
-		return
+		return fmt.Errorf("CA is not initialized")
 	}
-	dir := filepath.Dir(a.ca.CertPath())
-	runtime.BrowserOpenURL(a.ctx, "file://"+dir)
+	certPath := a.ca.CertPath()
+	if _, err := os.Stat(certPath); err != nil {
+		return fmt.Errorf("CA certificate not found: %w", err)
+	}
+
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "darwin":
+		cmd = exec.Command("/usr/bin/open", "-R", certPath)
+	case "windows":
+		cmd = exec.Command("explorer", "/select,"+certPath)
+	case "linux":
+		cmd = exec.Command("xdg-open", filepath.Dir(certPath))
+	default:
+		return fmt.Errorf("reveal CA certificate is not supported on %s", goruntime.GOOS)
+	}
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		if len(output) > 0 {
+			return fmt.Errorf("reveal CA certificate: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+		return fmt.Errorf("reveal CA certificate: %w", err)
+	}
+	return nil
 }
 
 // SetLogging enables or disables traffic logging to SQLite.

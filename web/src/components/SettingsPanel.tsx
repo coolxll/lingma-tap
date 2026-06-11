@@ -48,7 +48,7 @@ interface SettingsPanelProps {
   onClearAll?: () => void;
   onClearBefore?: (days: number) => Promise<number>;
   caCertPath?: string;
-  onRevealCACert?: () => void;
+  onRevealCACert?: () => Promise<void>;
 }
 
 export function SettingsPanel({
@@ -75,12 +75,25 @@ export function SettingsPanel({
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState('');
   const [copied, setCopied] = useState<string | null>(null);
-  const [clearDays, setClearDays] = useState(30);
+  const [clearDays, setClearDays] = useState<number | "">(30);
   const [clearMsg, setClearMsg] = useState('');
   const [clearLoading, setClearLoading] = useState(false);
+  const [revealLoading, setRevealLoading] = useState(false);
+  const [confirmAll, setConfirmAll] = useState(false);
+  const [confirmBefore, setConfirmBefore] = useState(false);
   const [anthropicMapping, setAnthropicMapping] = useState<Record<string, string>>({});
   const [anthropicDefault, setAnthropicDefault] = useState('dashscope_qmodel');
   const [savingMapping, setSavingMapping] = useState(false);
+
+  const getCutoffDate = (days: number) => {
+    const date = new Date();
+    date.setDate(date.getDate() - days);
+    return date.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+  };
 
   const ENDPOINTS = [
     { method: 'GET', path: '/v1/models', desc: t('settings.models') },
@@ -179,7 +192,6 @@ export function SettingsPanel({
 
   const handleClearAll = useCallback(async () => {
     if (!onClearAll) return;
-    if (!window.confirm('确定要清空所有流量记录吗？此操作不可恢复。')) return;
     setClearLoading(true);
     setClearMsg('');
     try {
@@ -195,11 +207,11 @@ export function SettingsPanel({
 
   const handleClearBefore = useCallback(async () => {
     if (!onClearBefore) return;
-    if (!window.confirm(`确定要删除 ${clearDays} 天前的所有记录吗？此操作不可恢复。`)) return;
+    const days = typeof clearDays === 'number' ? clearDays : 30;
     setClearLoading(true);
     setClearMsg('');
     try {
-      const deleted = await onClearBefore(clearDays);
+      const deleted = await onClearBefore(days);
       setClearMsg(`已删除 ${deleted} 条记录`);
       setTimeout(() => setClearMsg(''), 3000);
     } catch (err) {
@@ -208,6 +220,19 @@ export function SettingsPanel({
       setClearLoading(false);
     }
   }, [onClearBefore, clearDays]);
+
+  const handleRevealCACert = useCallback(async () => {
+    if (!onRevealCACert) return;
+    setRevealLoading(true);
+    setClearMsg('');
+    try {
+      await onRevealCACert();
+    } catch (err) {
+      setClearMsg(`错误: ${err instanceof Error ? err.message : '无法打开证书位置'}`);
+    } finally {
+      setRevealLoading(false);
+    }
+  }, [onRevealCACert]);
 
   return (
     <div className="h-full overflow-y-auto bg-zinc-950 p-6">
@@ -256,6 +281,25 @@ export function SettingsPanel({
                     ) : (
                       <><Shield className="w-3.5 h-3.5" /> {t('common.start')}</>
                     )}
+                  </button>
+                </div>
+
+                <div className="mt-4 flex items-center justify-between pt-3 border-t border-zinc-800/50">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase">{t('settings.proxy_logging')}</span>
+                    <span className="text-[9px] text-zinc-600 truncate max-w-[150px]">{t('settings.proxy_logging_hint')}</span>
+                  </div>
+                  <button
+                    onClick={onToggleProxyLogging}
+                    className={`relative inline-flex h-4 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      proxyLoggingEnabled ? 'bg-green-500/80' : 'bg-zinc-700'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        proxyLoggingEnabled ? 'translate-x-4' : 'translate-x-0'
+                      }`}
+                    />
                   </button>
                 </div>
               </div>
@@ -325,24 +369,6 @@ export function SettingsPanel({
                 </button>
               </div>
 
-              <div className="mt-4 flex items-center justify-between pt-3 border-t border-zinc-800/50">
-                <div className="flex flex-col">
-                  <span className="text-[10px] font-bold text-zinc-400 uppercase">{t('settings.proxy_logging')}</span>
-                  <span className="text-[9px] text-zinc-600 truncate max-w-[150px]">{t('settings.proxy_logging_hint')}</span>
-                </div>
-                <button
-                  onClick={onToggleProxyLogging}
-                  className={`relative inline-flex h-4 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    proxyLoggingEnabled ? 'bg-green-500/80' : 'bg-zinc-700'
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      proxyLoggingEnabled ? 'translate-x-4' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
             </div>
           </div>
         </section>
@@ -373,10 +399,11 @@ export function SettingsPanel({
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={onRevealCACert}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-[11px] font-bold transition-colors"
+                  onClick={handleRevealCACert}
+                  disabled={revealLoading}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-[11px] font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <FolderOpen className="w-3.5 h-3.5" />
+                  <FolderOpen className={`w-3.5 h-3.5 ${revealLoading ? 'animate-pulse' : ''}`} />
                   {t('settings.ca_reveal')}
                 </button>
               </div>
@@ -575,45 +602,129 @@ export function SettingsPanel({
             )}
 
             {/* Clear All */}
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs font-bold text-zinc-200">{t('settings.clear_all')}</div>
-                <div className="text-[10px] text-zinc-500">{t('settings.clear_all_hint')}</div>
-              </div>
-              <button
-                onClick={handleClearAll}
-                disabled={clearLoading}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-all disabled:opacity-50"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                {t('common.clear')}
-              </button>
-            </div>
-
-            {/* Clear Before */}
-            <div className="flex items-center justify-between pt-3 border-t border-zinc-800/50">
-              <div>
-                <div className="text-xs font-bold text-zinc-200">{t('settings.clear_before')}</div>
-                <div className="text-[10px] text-zinc-500">{t('settings.clear_before_hint')}</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  value={clearDays}
-                  onChange={(e) => setClearDays(parseInt(e.target.value) || 30)}
-                  min={1}
-                  max={365}
-                  className="w-16 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-xs font-mono text-zinc-200 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
-                />
-                <span className="text-xs text-zinc-400">{t('settings.days')}</span>
+            {!confirmAll ? (
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-zinc-200">{t('settings.clear_all')}</div>
+                  <div className="text-[10px] text-zinc-500">{t('settings.clear_all_hint')}</div>
+                </div>
                 <button
-                  onClick={handleClearBefore}
+                  onClick={() => setConfirmAll(true)}
                   disabled={clearLoading}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 transition-all disabled:opacity-50"
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-all disabled:opacity-50"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   {t('common.clear')}
                 </button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between p-3 rounded-xl bg-red-500/5 border border-red-500/20 animate-fade-in">
+                <div className="flex items-center gap-2 text-xs font-medium text-red-400">
+                  <span className="text-sm">⚠️</span>
+                  <span>确定要清空所有流量记录吗？此操作不可恢复。</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setConfirmAll(false)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-zinc-900 text-zinc-300 border border-zinc-800 hover:bg-zinc-800 transition-all"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={async () => {
+                      setConfirmAll(false);
+                      await handleClearAll();
+                    }}
+                    disabled={clearLoading}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-red-500 text-white hover:bg-red-600 transition-all disabled:opacity-50"
+                  >
+                    确定清空
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Clear Before */}
+            <div className="flex flex-col gap-2 pt-3 border-t border-zinc-800/50">
+              {!confirmBefore ? (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-bold text-zinc-200">{t('settings.clear_before')}</div>
+                    <div className="text-[10px] text-zinc-500">{t('settings.clear_before_hint')}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={clearDays}
+                      placeholder="30"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '') {
+                          setClearDays('');
+                        } else {
+                          const parsed = parseInt(val, 10);
+                          if (!isNaN(parsed)) {
+                            setClearDays(parsed);
+                          }
+                        }
+                      }}
+                      min={1}
+                      max={365}
+                      className="w-16 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-xs font-mono text-zinc-200 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+                    />
+                    <span className="text-xs text-zinc-400">{t('settings.days')}</span>
+                    <button
+                      onClick={() => setConfirmBefore(true)}
+                      disabled={clearLoading}
+                      className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 transition-all disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      {t('common.clear')}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between p-3 rounded-xl bg-amber-500/5 border border-amber-500/20 animate-fade-in">
+                  <div className="flex items-center gap-2 text-xs font-medium text-amber-400">
+                    <span className="text-sm">⚠️</span>
+                    <span>确定要删除 {typeof clearDays === 'number' ? clearDays : 30} 天前的所有记录吗？</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setConfirmBefore(false)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-zinc-900 text-zinc-300 border border-zinc-800 hover:bg-zinc-800 transition-all"
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setConfirmBefore(false);
+                        await handleClearBefore();
+                      }}
+                      disabled={clearLoading}
+                      className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-zinc-950 hover:bg-amber-600 hover:text-white transition-all disabled:opacity-50"
+                    >
+                      确定删除
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Dynamic preview hint */}
+              <div className="text-[10px] text-zinc-500 bg-zinc-950/30 rounded-lg p-2.5 border border-zinc-800/40 flex flex-col gap-1.5 leading-relaxed">
+                <div>
+                  <span className="text-amber-500/90 font-medium mr-1">⚠️ {t('settings.clear_range')}:</span>
+                  {t('settings.clear_before_preview_delete', {
+                    date: getCutoffDate(typeof clearDays === 'number' ? clearDays : 30),
+                  })}
+                </div>
+                <div>
+                  <span className="text-emerald-400/90 font-medium mr-1">✨ {t('settings.keep_range')}:</span>
+                  {t('settings.clear_before_preview_keep', {
+                    days: typeof clearDays === 'number' ? clearDays : 30,
+                    date: getCutoffDate(typeof clearDays === 'number' ? clearDays : 30),
+                  })}
+                </div>
               </div>
             </div>
 

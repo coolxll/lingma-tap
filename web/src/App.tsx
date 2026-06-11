@@ -553,11 +553,45 @@ function App() {
             onToggleProxyLogging={handleToggleProxyLogging}
             stats={stats || null}
             onClearAll={handleClear}
-            onClearBefore={(days) =>
-              wails?.ClearRecordsBefore?.(days) || Promise.resolve(0)
-            }
+            onClearBefore={async (days) => {
+              let deleted = 0;
+              if (wails?.ClearRecordsBefore) {
+                deleted = await wails.ClearRecordsBefore(days);
+                try {
+                  const s = await wails.GetStatus();
+                  const st = s?.stats as StorageStats | null;
+                  if (st) setStats(st);
+                } catch (err) {
+                  console.error("Failed to refresh status:", err);
+                }
+              } else {
+                const cutoff = new Date();
+                cutoff.setDate(cutoff.getDate() - days);
+                const cutoffTime = cutoff.getTime();
+                deleted = records.filter((r) => new Date(r.ts).getTime() < cutoffTime).length;
+              }
+
+              const cutoff = new Date();
+              cutoff.setDate(cutoff.getDate() - days);
+              const cutoffTime = cutoff.getTime();
+              const filtered = records.filter(
+                (r) => new Date(r.ts).getTime() >= cutoffTime
+              );
+              updateRecords(filtered);
+
+              if (selectedRecord && new Date(selectedRecord.ts).getTime() < cutoffTime) {
+                setSelectedRecord(filtered[0] || null);
+              }
+
+              return deleted;
+            }}
             caCertPath={caCertPath}
-            onRevealCACert={() => wails?.RevealCACert?.()}
+            onRevealCACert={async () => {
+              if (!wails?.RevealCACert) {
+                throw new Error('RevealCACert is not available');
+              }
+              await wails.RevealCACert();
+            }}
           />
         )}
       </div>
