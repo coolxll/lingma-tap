@@ -102,6 +102,290 @@ func TestClearTrafficBefore(t *testing.T) {
 	t.Logf("Deleted %d records", deleted)
 }
 
+func TestClearProxyRecords(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_proxy.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open db: %v", err)
+	}
+	defer db.Close()
+	defer os.RemoveAll(tmpDir)
+
+	// Insert proxy record
+	rec := &proto.Record{
+		Ts:        time.Now().Format(time.RFC3339),
+		Session:   "proxy-session",
+		Index:     1,
+		Direction: "C2S",
+		Method:    "POST",
+		Path:      "/test",
+		ReqBody:   "test request",
+		RespBody:  "test response",
+		Status:    200,
+	}
+	if err := db.SaveRecord(rec); err != nil {
+		t.Fatalf("Failed to save record: %v", err)
+	}
+
+	// Insert gateway log
+	glog := &proto.GatewayLog{
+		Ts:           time.Now().Format(time.RFC3339),
+		Session:      "gateway-session",
+		Model:        "test-model",
+		Method:       "POST",
+		Path:         "/gateway",
+		RequestBody:  "req",
+		ResponseBody: "resp",
+		Status:       200,
+	}
+	if err := db.SaveGatewayLog(glog); err != nil {
+		t.Fatalf("Failed to save gateway log: %v", err)
+	}
+
+	// Verify both exist
+	if db.RecordCount() != 1 {
+		t.Errorf("Expected 1 proxy record, got %d", db.RecordCount())
+	}
+	logs, _ := db.RecentGatewayLogs(10)
+	if len(logs) != 1 {
+		t.Errorf("Expected 1 gateway log, got %d", len(logs))
+	}
+
+	// Clear only proxy records
+	if err := db.ClearProxyRecords(); err != nil {
+		t.Fatalf("ClearProxyRecords failed: %v", err)
+	}
+
+	// Proxy records should be gone
+	if db.RecordCount() != 0 {
+		t.Errorf("Expected 0 proxy records after ClearProxyRecords, got %d", db.RecordCount())
+	}
+	if db.SessionCount() != 0 {
+		t.Errorf("Expected 0 sessions after ClearProxyRecords, got %d", db.SessionCount())
+	}
+
+	// Gateway logs should remain
+	logs, _ = db.RecentGatewayLogs(10)
+	if len(logs) != 1 {
+		t.Errorf("Expected 1 gateway log to remain, got %d", len(logs))
+	}
+}
+
+func TestClearGatewayLogs(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_gateway.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open db: %v", err)
+	}
+	defer db.Close()
+	defer os.RemoveAll(tmpDir)
+
+	// Insert proxy record
+	rec := &proto.Record{
+		Ts:        time.Now().Format(time.RFC3339),
+		Session:   "proxy-session",
+		Index:     1,
+		Direction: "C2S",
+		Method:    "POST",
+		Path:      "/test",
+		ReqBody:   "test request",
+		RespBody:  "test response",
+		Status:    200,
+	}
+	if err := db.SaveRecord(rec); err != nil {
+		t.Fatalf("Failed to save record: %v", err)
+	}
+
+	// Insert gateway log
+	glog := &proto.GatewayLog{
+		Ts:           time.Now().Format(time.RFC3339),
+		Session:      "gateway-session",
+		Model:        "test-model",
+		Method:       "POST",
+		Path:         "/gateway",
+		RequestBody:  "req",
+		ResponseBody: "resp",
+		Status:       200,
+	}
+	if err := db.SaveGatewayLog(glog); err != nil {
+		t.Fatalf("Failed to save gateway log: %v", err)
+	}
+
+	// Clear only gateway logs
+	if err := db.ClearGatewayLogs(); err != nil {
+		t.Fatalf("ClearGatewayLogs failed: %v", err)
+	}
+
+	// Gateway logs should be gone
+	logs, _ := db.RecentGatewayLogs(10)
+	if len(logs) != 0 {
+		t.Errorf("Expected 0 gateway logs after ClearGatewayLogs, got %d", len(logs))
+	}
+
+	// Proxy records should remain
+	if db.RecordCount() != 1 {
+		t.Errorf("Expected 1 proxy record to remain, got %d", db.RecordCount())
+	}
+}
+
+func TestClearProxyRecordsBefore(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_proxy_before.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open db: %v", err)
+	}
+	defer db.Close()
+	defer os.RemoveAll(tmpDir)
+
+	// Insert old proxy record
+	oldRec := &proto.Record{
+		Ts:        "2020-01-01T00:00:00Z",
+		Session:   "old-session",
+		Index:     1,
+		Direction: "C2S",
+		Method:    "POST",
+		Path:      "/test",
+		ReqBody:   "old",
+		RespBody:  "old",
+		Status:    200,
+	}
+	if err := db.SaveRecord(oldRec); err != nil {
+		t.Fatalf("Failed to save old record: %v", err)
+	}
+
+	// Insert recent proxy record
+	recentRec := &proto.Record{
+		Ts:        time.Now().Format(time.RFC3339),
+		Session:   "recent-session",
+		Index:     1,
+		Direction: "C2S",
+		Method:    "POST",
+		Path:      "/test",
+		ReqBody:   "recent",
+		RespBody:  "recent",
+		Status:    200,
+	}
+	if err := db.SaveRecord(recentRec); err != nil {
+		t.Fatalf("Failed to save recent record: %v", err)
+	}
+
+	// Insert gateway log (should not be touched)
+	glog := &proto.GatewayLog{
+		Ts:           "2020-01-01T00:00:00Z",
+		Session:      "gateway-session",
+		Model:        "test-model",
+		Method:       "POST",
+		Path:         "/gateway",
+		RequestBody:  "req",
+		ResponseBody: "resp",
+		Status:       200,
+	}
+	if err := db.SaveGatewayLog(glog); err != nil {
+		t.Fatalf("Failed to save gateway log: %v", err)
+	}
+
+	// Clear proxy records before yesterday
+	deleted, err := db.ClearProxyRecordsBefore("2020-01-02T00:00:00Z")
+	if err != nil {
+		t.Fatalf("ClearProxyRecordsBefore failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("Expected 1 deleted record, got %d", deleted)
+	}
+
+	// Only recent proxy record should remain
+	records, _ := db.RecentRecords(10)
+	if len(records) != 1 || records[0].Session != "recent-session" {
+		t.Errorf("Expected 1 recent proxy record, got: %+v", records)
+	}
+
+	// Gateway log should remain untouched
+	logs, _ := db.RecentGatewayLogs(10)
+	if len(logs) != 1 {
+		t.Errorf("Expected 1 gateway log to remain, got %d", len(logs))
+	}
+}
+
+func TestClearGatewayLogsBefore(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_gateway_before.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open db: %v", err)
+	}
+	defer db.Close()
+	defer os.RemoveAll(tmpDir)
+
+	// Insert proxy record (should not be touched)
+	rec := &proto.Record{
+		Ts:        "2020-01-01T00:00:00Z",
+		Session:   "proxy-session",
+		Index:     1,
+		Direction: "C2S",
+		Method:    "POST",
+		Path:      "/test",
+		ReqBody:   "test",
+		RespBody:  "test",
+		Status:    200,
+	}
+	if err := db.SaveRecord(rec); err != nil {
+		t.Fatalf("Failed to save record: %v", err)
+	}
+
+	// Insert old gateway log
+	oldLog := &proto.GatewayLog{
+		Ts:           "2020-01-01T00:00:00Z",
+		Session:      "old-gateway",
+		Model:        "test-model",
+		Method:       "POST",
+		Path:         "/gateway",
+		RequestBody:  "old",
+		ResponseBody: "old",
+		Status:       200,
+	}
+	if err := db.SaveGatewayLog(oldLog); err != nil {
+		t.Fatalf("Failed to save old gateway log: %v", err)
+	}
+
+	// Insert recent gateway log
+	recentLog := &proto.GatewayLog{
+		Ts:           time.Now().Format(time.RFC3339),
+		Session:      "recent-gateway",
+		Model:        "test-model",
+		Method:       "POST",
+		Path:         "/gateway",
+		RequestBody:  "recent",
+		ResponseBody: "recent",
+		Status:       200,
+	}
+	if err := db.SaveGatewayLog(recentLog); err != nil {
+		t.Fatalf("Failed to save recent gateway log: %v", err)
+	}
+
+	// Clear gateway logs before yesterday
+	deleted, err := db.ClearGatewayLogsBefore("2020-01-02T00:00:00Z")
+	if err != nil {
+		t.Fatalf("ClearGatewayLogsBefore failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("Expected 1 deleted gateway log, got %d", deleted)
+	}
+
+	// Only recent gateway log should remain
+	logs, _ := db.RecentGatewayLogs(10)
+	if len(logs) != 1 || logs[0].Session != "recent-gateway" {
+		t.Errorf("Expected 1 recent gateway log, got: %+v", logs)
+	}
+
+	// Proxy record should remain untouched
+	if db.RecordCount() != 1 {
+		t.Errorf("Expected 1 proxy record to remain, got %d", db.RecordCount())
+	}
+}
+
 func TestRecentRecordsByType(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")

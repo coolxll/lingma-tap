@@ -215,10 +215,45 @@ func (d *DB) ClearTraffic() error {
 	}
 	defer tx.Rollback()
 
-	tx.Exec("DELETE FROM proxy_records")
-	tx.Exec("DELETE FROM sessions")
-	tx.Exec("DELETE FROM gateway_logs")
+	if _, err := tx.Exec("DELETE FROM proxy_records"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM sessions"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM gateway_logs"); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+// ClearProxyRecords deletes all proxy records and sessions.
+func (d *DB) ClearProxyRecords() error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	tx, err := d.db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM proxy_records"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM sessions"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ClearGatewayLogs deletes all gateway logs.
+func (d *DB) ClearGatewayLogs() error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	_, err := d.db.Exec("DELETE FROM gateway_logs")
+	return err
 }
 
 // ClearTrafficBefore deletes records older than the specified date (RFC3339 format).
@@ -241,7 +276,9 @@ func (d *DB) ClearTrafficBefore(beforeDate string) (int, error) {
 	proxyDeleted, _ := result.RowsAffected()
 
 	// Delete orphan sessions (no remaining records)
-	tx.Exec(`DELETE FROM sessions WHERE id NOT IN (SELECT DISTINCT session FROM proxy_records)`)
+	if _, err := tx.Exec(`DELETE FROM sessions WHERE id NOT IN (SELECT DISTINCT session FROM proxy_records)`); err != nil {
+		return 0, err
+	}
 
 	// Delete old gateway logs
 	result, err = tx.Exec("DELETE FROM gateway_logs WHERE ts < ?", beforeDate)
@@ -255,6 +292,50 @@ func (d *DB) ClearTrafficBefore(beforeDate string) (int, error) {
 	}
 
 	return int(proxyDeleted + gatewayDeleted), nil
+}
+
+// ClearProxyRecordsBefore deletes proxy records and orphan sessions older than the specified date.
+// It returns the number of deleted proxy records.
+func (d *DB) ClearProxyRecordsBefore(beforeDate string) (int, error) {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	tx, err := d.db.Beginx()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec("DELETE FROM proxy_records WHERE ts < ?", beforeDate)
+	if err != nil {
+		return 0, err
+	}
+	proxyDeleted, _ := result.RowsAffected()
+
+	if _, err := tx.Exec(`DELETE FROM sessions WHERE id NOT IN (SELECT DISTINCT session FROM proxy_records)`); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return int(proxyDeleted), nil
+}
+
+// ClearGatewayLogsBefore deletes gateway logs older than the specified date.
+// It returns the number of deleted gateway logs.
+func (d *DB) ClearGatewayLogsBefore(beforeDate string) (int, error) {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	result, err := d.db.Exec("DELETE FROM gateway_logs WHERE ts < ?", beforeDate)
+	if err != nil {
+		return 0, err
+	}
+
+	deleted, _ := result.RowsAffected()
+	return int(deleted), nil
 }
 
 // ListSessions returns sessions ordered by last_ts descending.

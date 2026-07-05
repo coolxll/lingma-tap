@@ -30,6 +30,8 @@ interface WailsWindow extends Window {
         GetGatewayLogs: (limit: number, offset: number) => Promise<any[]>;
         LogError: (message: string) => Promise<void>;
         ClearRecords: () => Promise<void>;
+        ClearProxyRecords: () => Promise<void>;
+        ClearGatewayLogs: () => Promise<void>;
         ClearRecordsBefore: (days: number) => Promise<number>;
         GetCACertPath: () => Promise<string>;
         RevealCACert: () => Promise<void>;
@@ -130,21 +132,27 @@ export default function AppWrapper() {
 }
 
 function App() {
+  const [activeTab, setActiveTab] = useState<TabId>("proxy");
+  // Per-tab pause state
+  const [proxyPaused, setProxyPaused] = useState(false);
+  const [gatewayPaused, setGatewayPaused] = useState(false);
+  // Per-tab liveTail state
+  const [proxyLiveTail, setProxyLiveTail] = useState(true);
+  const [gatewayLiveTail, setGatewayLiveTail] = useState(true);
+
+  const isPaused = activeTab === "proxy" ? proxyPaused : gatewayPaused;
+
   const {
     records,
     selectedRecord,
     setSelectedRecord,
-    isPaused,
-    liveTail,
     appendRecord,
     updateRecords,
     clearRecords,
-    togglePause,
-    toggleLiveTail,
+    clearProxyRecords,
+    clearGatewayRecords,
     appendRecords,
-  } = useRecords();
-
-  const [activeTab, setActiveTab] = useState<TabId>("proxy");
+  } = useRecords(isPaused);
   const [connected, setConnected] = useState(false);
   const [proxyRunning, setProxyRunning] = useState(false);
   const [proxyPort, setProxyPort] = useState(PROXY_PORT);
@@ -158,6 +166,8 @@ function App() {
   const [displayCount, setDisplayCount] = useState(PROXY_PAGE_SIZE);
   const [canLoadMore, setCanLoadMore] = useState(true);
   const [proxyTypeFilter, setProxyTypeFilter] = useState<ProxyTypeFilter>("chat");
+
+  const liveTail = activeTab === "proxy" ? proxyLiveTail : gatewayLiveTail;
   const liveTailRef = useRef(liveTail);
   const selectedRef = useRef(selectedRecord);
   const recordsRef = useRef(records);
@@ -180,7 +190,7 @@ function App() {
           return matchesProxyTypeFilter(r, proxyTypeFilter);
         });
       } else if (activeTab === "gateway") {
-        result = records.filter((r) => r && (r as any).source === "gateway");
+        result = records.filter((r) => r && r.source === "gateway");
       } else {
         result = records || [];
       }
@@ -459,17 +469,62 @@ function App() {
     }
   }, [wails, proxyLoggingEnabled]);
 
+  const togglePause = useCallback(() => {
+    if (activeTabRef.current === "proxy") {
+      setProxyPaused((p) => {
+        const next = !p;
+        return next;
+      });
+    } else if (activeTabRef.current === "gateway") {
+      setGatewayPaused((p) => {
+        const next = !p;
+        return next;
+      });
+    }
+  }, []);
+
+  const toggleLiveTail = useCallback(() => {
+    if (activeTabRef.current === "proxy") {
+      setProxyLiveTail((p) => !p);
+    } else if (activeTabRef.current === "gateway") {
+      setGatewayLiveTail((p) => !p);
+    }
+  }, []);
+
   const handleClear = useCallback(async () => {
-    if (wails) {
-      try {
-        await wails.ClearRecords();
-      } catch (err) {
-        console.error("Failed to clear records:", err);
-        wails?.LogError(`Failed to clear records: ${err}`);
+    if (activeTabRef.current === "proxy") {
+      clearProxyRecords();
+      if (wails?.ClearProxyRecords) {
+        try {
+          await wails.ClearProxyRecords();
+        } catch (err) {
+          console.error("Failed to clear proxy records:", err);
+          wails?.LogError(`Failed to clear proxy records: ${err}`);
+        }
+      }
+    } else if (activeTabRef.current === "gateway") {
+      clearGatewayRecords();
+      if (wails?.ClearGatewayLogs) {
+        try {
+          await wails.ClearGatewayLogs();
+        } catch (err) {
+          console.error("Failed to clear gateway logs:", err);
+          wails?.LogError(`Failed to clear gateway logs: ${err}`);
+        }
+      }
+    } else {
+      // Settings tab: clear all (backward compatible)
+      clearRecords();
+      if (wails) {
+        try {
+          await wails.ClearRecords();
+        } catch (err) {
+          console.error("Failed to clear records:", err);
+          wails?.LogError(`Failed to clear records: ${err}`);
+        }
       }
     }
-    clearRecords();
-  }, [wails, clearRecords]);
+  }, [wails, clearProxyRecords, clearGatewayRecords, clearRecords]);
 
   const handleProxyTypeFilterChange = useCallback((filter: ProxyTypeFilter) => {
     setProxyTypeFilter(filter);

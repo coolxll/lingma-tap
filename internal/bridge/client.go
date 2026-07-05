@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,6 +21,25 @@ import (
 
 const lingmaChatURL = "https://lingma-api.tongyi.aliyun.com/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
 const lingmaModelListURL = "https://lingma-api.tongyi.aliyun.com/algo/api/v2/model/list"
+
+// buildLingmaChatURL constructs the Lingma chat endpoint URL with the given agentID.
+// It defaults to "agent_common" if agentID is empty and properly URL-encodes all query parameters.
+func buildLingmaChatURL(agentID string) string {
+	if agentID == "" {
+		agentID = "agent_common"
+	}
+	u := &url.URL{
+		Scheme: "https",
+		Host:   "lingma-api.tongyi.aliyun.com",
+		Path:   "/algo/api/v2/service/pro/sse/agent_chat_generation",
+	}
+	q := u.Query()
+	q.Set("FetchKeys", "llm_model_result")
+	q.Set("AgentId", agentID)
+	q.Set("Encode", "1")
+	u.RawQuery = q.Encode()
+	return u.String()
+}
 
 type LingmaClient struct {
 	session *auth.Session
@@ -128,12 +148,16 @@ func (c *LingmaClient) ChatStream(ctx context.Context, body map[string]any, cb f
 
 	encodedBody := encoding.Encode(bodyJSON)
 
-	headers, err := c.session.BuildHeaders(encodedBody, lingmaChatURL)
+	// Determine the correct URL based on the agent_id in the body
+	agentID, _ := body["agent_id"].(string)
+	chatURL := buildLingmaChatURL(agentID)
+
+	headers, err := c.session.BuildHeaders(encodedBody, chatURL)
 	if err != nil {
 		return fmt.Errorf("build headers: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", lingmaChatURL, strings.NewReader(encodedBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, strings.NewReader(encodedBody))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -441,6 +465,24 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 		sessionID = newUUID()
 	}
 
+	// Determine agent_id and source based on model and reasoning status.
+	// kmodel and mmodel always use agent_common with empty source.
+	// All other models default to agent_chat when reasoning, agent_common otherwise.
+	var agentID, modelConfigSource string
+	switch modelKey {
+	case "kmodel", "mmodel":
+		agentID = "agent_common"
+		modelConfigSource = ""
+	default:
+		if isReasoning {
+			agentID = "agent_chat"
+			modelConfigSource = "system"
+		} else {
+			agentID = "agent_common"
+			modelConfigSource = ""
+		}
+	}
+
 	body := map[string]any{
 		"request_id":       requestID,
 		"request_set_id":   "",
@@ -455,7 +497,7 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 		"version":          "3",
 		"chat_prompt":      "",
 		"aliyun_user_type": "enterprise_standard",
-		"agent_id":         "agent_common",
+		"agent_id":         agentID,
 		"task_id":          "question_refine",
 		"model_config": map[string]any{
 			"key":                   modelKey,
@@ -466,7 +508,7 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 			"is_reasoning":          isReasoning,
 			"api_key":               "",
 			"url":                   "",
-			"source":                "",
+			"source":                modelConfigSource,
 			"max_input_tokens":      0,
 			"enable":                false,
 			"price_factor":          0,

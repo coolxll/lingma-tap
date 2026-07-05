@@ -1,15 +1,18 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { TrafficRecord, recordKey } from '@/lib/types';
 
 const MAX_RECORDS = 2000;
 
-export function useRecords() {
+export function useRecords(externalPaused?: boolean) {
   const [records, setRecords] = useState<TrafficRecord[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<TrafficRecord | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isPaused, setIsPaused] = useState(false);
-  const [liveTail, setLiveTail] = useState(true);
-  const isPausedRef = useRef(false);
+  const isPausedRef = useRef(externalPaused ?? false);
+
+  // Sync external paused state into ref for appendRecord check
+  useEffect(() => {
+    isPausedRef.current = externalPaused ?? false;
+  }, [externalPaused]);
 
   const appendRecord = useCallback((record: TrafficRecord) => {
     if (isPausedRef.current || !record) return;
@@ -56,15 +59,20 @@ export function useRecords() {
     setSelectedRecord(null);
   }, []);
 
-  const togglePause = useCallback(() => {
-    setIsPaused((p) => {
-      isPausedRef.current = !p;
-      return !p;
+  const clearProxyRecords = useCallback(() => {
+    setRecords((prev) => {
+      const filtered = prev.filter((r) => r && r.source !== 'proxy');
+      return filtered;
     });
+    setSelectedRecord((prev) => (prev && prev.source === 'proxy' ? null : prev));
   }, []);
 
-  const toggleLiveTail = useCallback(() => {
-    setLiveTail((p) => !p);
+  const clearGatewayRecords = useCallback(() => {
+    setRecords((prev) => {
+      const filtered = prev.filter((r) => r && r.source !== 'gateway');
+      return filtered;
+    });
+    setSelectedRecord((prev) => (prev && prev.source === 'gateway' ? null : prev));
   }, []);
 
   return {
@@ -73,13 +81,11 @@ export function useRecords() {
     setSelectedRecord,
     searchQuery,
     setSearchQuery,
-    isPaused,
-    liveTail,
     appendRecord,
     updateRecords,
     clearRecords,
-    togglePause,
-    toggleLiveTail,
+    clearProxyRecords,
+    clearGatewayRecords,
     appendRecords,
   };
 }

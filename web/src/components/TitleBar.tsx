@@ -81,7 +81,7 @@ export function TitleBar({
 
       {/* Right: Actions */}
       <div className="flex items-center justify-end gap-1.5 flex-1 no-drag">
-        {/* Only show these controls on proxy tab */}
+        {/* Proxy-specific controls */}
         {activeTab === 'proxy' && (
           <div className="flex items-center gap-1.5 mr-2">
             <button
@@ -96,7 +96,13 @@ export function TitleBar({
               {proxyRunning ? <Shield className="w-3 h-3" /> : <ShieldOff className="w-3 h-3" />}
               {proxyRunning ? t('titlebar.proxy_on') : t('titlebar.proxy_off')}
             </button>
+            <div className="w-px h-5 bg-zinc-800 mx-1" />
+          </div>
+        )}
 
+        {/* Shared controls for proxy/gateway tabs */}
+        {(activeTab === 'proxy' || activeTab === 'gateway') && (
+          <div className="flex items-center gap-1.5 mr-2">
             <button
               onClick={onTogglePause}
               className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs transition-colors ${

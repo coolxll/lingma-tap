@@ -528,6 +528,48 @@ func TestBuildLingmaBody_Params(t *testing.T) {
 	}
 }
 
+func TestBuildLingmaBody_AgentID(t *testing.T) {
+	messages := []map[string]any{{"role": "user", "content": "hello"}}
+
+	tests := []struct {
+		name        string
+		modelKey    string
+		isReasoning bool
+		wantAgentID string
+		wantSource  string
+	}{
+		{"gm51model with reasoning", "gm51model", true, "agent_chat", "system"},
+		{"gm51model without reasoning", "gm51model", false, "agent_common", ""},
+		{"kmodel always agent_common", "kmodel", true, "agent_common", ""},
+		{"kmodel always agent_common", "kmodel", false, "agent_common", ""},
+		{"mmodel always agent_common", "mmodel", true, "agent_common", ""},
+		{"mmodel always agent_common", "mmodel", false, "agent_common", ""},
+		{"generic model with reasoning", "some_model", true, "agent_chat", "system"},
+		{"generic model without reasoning", "some_model", false, "agent_common", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := BuildLingmaBody(messages, nil, tt.modelKey, nil, nil, tt.isReasoning, nil)
+
+			if got := body["agent_id"]; got != tt.wantAgentID {
+				t.Errorf("agent_id: got %v, want %v", got, tt.wantAgentID)
+			}
+
+			mc, ok := body["model_config"].(map[string]any)
+			if !ok {
+				t.Fatal("model_config not found")
+			}
+			if got := mc["source"]; got != tt.wantSource {
+				t.Errorf("model_config.source: got %v, want %v", got, tt.wantSource)
+			}
+			if got := mc["is_reasoning"]; got != tt.isReasoning {
+				t.Errorf("model_config.is_reasoning: got %v, want %v", got, tt.isReasoning)
+			}
+		})
+	}
+}
+
 func TestReadSSE_DoneSafetyInjection(t *testing.T) {
 	session := &auth.Session{CosyKey: "test-key", UID: "test-uid"}
 	client := NewLingmaClient(session)
@@ -604,5 +646,43 @@ func TestStreamState_Independence(t *testing.T) {
 	}
 	if len(reasonings) != 1 || reasonings[0] != "end" {
 		t.Errorf("expected reasoning [end], got %v", reasonings)
+	}
+}
+
+func TestBuildLingmaChatURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		agentID string
+		want    string
+	}{
+		{
+			name:    "default agent_common",
+			agentID: "",
+			want:    "https://lingma-api.tongyi.aliyun.com/algo/api/v2/service/pro/sse/agent_chat_generation?AgentId=agent_common&Encode=1&FetchKeys=llm_model_result",
+		},
+		{
+			name:    "agent_chat",
+			agentID: "agent_chat",
+			want:    "https://lingma-api.tongyi.aliyun.com/algo/api/v2/service/pro/sse/agent_chat_generation?AgentId=agent_chat&Encode=1&FetchKeys=llm_model_result",
+		},
+		{
+			name:    "agent_common explicit",
+			agentID: "agent_common",
+			want:    "https://lingma-api.tongyi.aliyun.com/algo/api/v2/service/pro/sse/agent_chat_generation?AgentId=agent_common&Encode=1&FetchKeys=llm_model_result",
+		},
+		{
+			name:    "URL-encodes special characters",
+			agentID: "agent&id=foo",
+			want:    "https://lingma-api.tongyi.aliyun.com/algo/api/v2/service/pro/sse/agent_chat_generation?AgentId=agent%26id%3Dfoo&Encode=1&FetchKeys=llm_model_result",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildLingmaChatURL(tt.agentID)
+			if got != tt.want {
+				t.Errorf("buildLingmaChatURL(%q) = %q, want %q", tt.agentID, got, tt.want)
+			}
+		})
 	}
 }

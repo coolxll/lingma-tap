@@ -3,6 +3,14 @@
 import {proto} from '../models';
 import {bridge} from '../models';
 
+export function ClearGatewayLogs():Promise<void>;
+
+export function ClearGatewayLogsBefore(arg1:number):Promise<number>;
+
+export function ClearProxyRecords():Promise<void>;
+
+export function ClearProxyRecordsBefore(arg1:number):Promise<number>;
+
 export function ClearRecords():Promise<void>;
 
 export function ClearRecordsBefore(arg1:number):Promise<number>;
