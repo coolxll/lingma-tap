@@ -117,7 +117,16 @@
     "keyword": "Keyword",
     "target_model": "Target Model",
     "save_mapping": "Save Mapping Config",
-    "mapping_saved": "Mapping configuration saved"
+    "mapping_saved": "Mapping configuration saved",
+    "about": "About",
+    "current_version": "Current Version",
+    "version_hint": "Lingma Tap desktop app version",
+    "check_update": "Check for Updates",
+    "checking": "Checking...",
+    "already_latest": "You're on the latest version",
+    "new_version_available": "New version {{version}} available",
+    "go_to_releases": "Go to Releases",
+    "check_update_failed": "Failed to check for updates"
   },
   "sse": {
     "no_events": "No SSE events",

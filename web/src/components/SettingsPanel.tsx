@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Copy, Check, Shield, ShieldOff, Server, ServerOff, Trash2, FolderOpen, FileKey } from 'lucide-react';
+import { RefreshCw, Copy, Check, Shield, ShieldOff, Server, ServerOff, Trash2, FolderOpen, FileKey, ExternalLink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
+const GITHUB_OWNER = 'coolxll';
+const GITHUB_REPO = 'lingma-tap';
+const RELEASES_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases`;
 
 // Wails window type
 interface WailsWindow extends Window {
@@ -12,6 +16,8 @@ interface WailsWindow extends Window {
         ClearRecordsBefore: (days: number) => Promise<number>;
         GetAnthropicMapping: () => Promise<any>;
         SaveAnthropicMapping: (mapping: Record<string, string>, defaultModel: string) => Promise<void>;
+        OpenExternal: (url: string) => Promise<void>;
+        GetVersion: () => Promise<string>;
       };
     };
   };
@@ -84,6 +90,10 @@ export function SettingsPanel({
   const [anthropicMapping, setAnthropicMapping] = useState<Record<string, string>>({});
   const [anthropicDefault, setAnthropicDefault] = useState('dashscope_qmodel');
   const [savingMapping, setSavingMapping] = useState(false);
+  const [currentVersion, setCurrentVersion] = useState('');
+  const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'latest' | 'available' | 'error'>('idle');
+  const [latestVersion, setLatestVersion] = useState('');
+  const [updateError, setUpdateError] = useState('');
 
   const getCutoffDate = (days: number) => {
     const date = new Date();
@@ -142,6 +152,22 @@ export function SettingsPanel({
     fetchModels();
     fetchAnthropicMapping();
   }, [fetchModels, fetchAnthropicMapping]);
+
+  // Fetch current version from Wails backend
+  useEffect(() => {
+    const fetchVersion = async () => {
+      try {
+        const w = (window as unknown as WailsWindow).go;
+        const version = await w?.main?.App?.GetVersion();
+        if (version) {
+          setCurrentVersion(version.replace(/^v/, ''));
+        }
+      } catch (err) {
+        console.error('Failed to fetch version', err);
+      }
+    };
+    fetchVersion();
+  }, []);
 
   const handleSaveMapping = async () => {
     setSavingMapping(true);
@@ -220,6 +246,49 @@ export function SettingsPanel({
       setClearLoading(false);
     }
   }, [onClearBefore, clearDays]);
+
+  const compareVersions = (a: string, b: string): number => {
+    const aParts = a.replace(/^v/, '').split('.').map(Number);
+    const bParts = b.replace(/^v/, '').split('.').map(Number);
+    for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+      const aNum = aParts[i] || 0;
+      const bNum = bParts[i] || 0;
+      if (aNum > bNum) return 1;
+      if (aNum < bNum) return -1;
+    }
+    return 0;
+  };
+
+  const checkForUpdate = useCallback(async () => {
+    setUpdateStatus('checking');
+    setUpdateError('');
+    try {
+      const response = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      const remoteVersion = data.tag_name as string;
+      setLatestVersion(remoteVersion);
+      if (compareVersions(remoteVersion, currentVersion) > 0) {
+        setUpdateStatus('available');
+      } else {
+        setUpdateStatus('latest');
+      }
+    } catch (err) {
+      setUpdateStatus('error');
+      setUpdateError(err instanceof Error ? err.message : 'Unknown error');
+    }
+  }, []);
+
+  const openReleasePage = () => {
+    const w = window as unknown as WailsWindow;
+    if (w.go?.main?.App?.OpenExternal) {
+      w.go.main.App.OpenExternal(RELEASES_URL);
+    } else {
+      window.open(RELEASES_URL, '_blank');
+    }
+  };
 
   const handleRevealCACert = useCallback(async () => {
     if (!onRevealCACert) return;
@@ -741,6 +810,61 @@ export function SettingsPanel({
           </div>
         </section>
 
+
+        {/* Version & Update */}
+        <section>
+          <h2 className="text-sm font-semibold text-zinc-200 mb-4 uppercase tracking-widest opacity-60">{t('settings.about')}</h2>
+          <div className="bg-zinc-900/30 rounded-2xl p-5 border border-zinc-800/50">
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col">
+                <span className="text-xs font-bold text-zinc-200">{t('settings.current_version')}</span>
+                <span className="text-[10px] text-zinc-500">{t('settings.version_hint')}</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-mono text-zinc-300 bg-zinc-950/50 px-3 py-1 rounded-lg border border-zinc-800/50">
+                  v{currentVersion || '...'}
+                </span>
+                <button
+                  onClick={checkForUpdate}
+                  disabled={updateStatus === 'checking'}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-[11px] font-bold transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${updateStatus === 'checking' ? 'animate-spin' : ''}`} />
+                  {updateStatus === 'checking' ? t('settings.checking') : t('settings.check_update')}
+                </button>
+              </div>
+            </div>
+
+            {updateStatus === 'latest' && (
+              <div className="mt-3 text-xs text-green-400 bg-green-500/10 rounded-lg px-3 py-2">
+                {t('settings.already_latest')}
+              </div>
+            )}
+
+            {updateStatus === 'available' && (
+              <div className="mt-3 flex items-center justify-between bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-amber-400">
+                    {t('settings.new_version_available', { version: latestVersion })}
+                  </span>
+                </div>
+                <button
+                  onClick={openReleasePage}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded-lg text-[11px] font-bold transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  {t('settings.go_to_releases')}
+                </button>
+              </div>
+            )}
+
+            {updateStatus === 'error' && (
+              <div className="mt-3 text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
+                {t('settings.check_update_failed')}: {updateError}
+              </div>
+            )}
+          </div>
+        </section>
 
       </div>
     </div>

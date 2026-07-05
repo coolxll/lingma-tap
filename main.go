@@ -32,6 +32,10 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// Version is injected at build time via -ldflags.
+// Example: go build -ldflags "-X main.Version=$(git describe --tags --always)"
+var Version = "dev"
+
 //go:embed all:web/dist
 var webAssets embed.FS
 
@@ -537,6 +541,11 @@ func (a *App) SaveAnthropicMapping(mapping map[string]string, defaultModel strin
 		a.bridgeHandlerField.UpdateAnthropicMapping(mapping, defaultModel)
 	}
 	return nil
+}
+
+// GetVersion returns the current application version.
+func (a *App) GetVersion() string {
+	return Version
 }
 
 // Implement api.RecordStore interface

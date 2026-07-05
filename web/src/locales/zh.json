@@ -118,7 +118,16 @@
     "keyword": "关键字",
     "target_model": "目标模型",
     "save_mapping": "保存映射配置",
-    "mapping_saved": "映射配置已保存"
+    "mapping_saved": "映射配置已保存",
+    "about": "关于",
+    "current_version": "当前版本",
+    "version_hint": "Lingma Tap 桌面应用版本",
+    "check_update": "检查更新",
+    "checking": "检查中...",
+    "already_latest": "当前已是最新版本",
+    "new_version_available": "发现新版本 {{version}}",
+    "go_to_releases": "前往下载",
+    "check_update_failed": "检查更新失败"
   },
   "sse": {
     "no_events": "无 SSE 事件",
