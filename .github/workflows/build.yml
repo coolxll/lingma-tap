@@ -66,8 +66,16 @@ jobs:
             magick build/appicon.png -define icon:auto-resize=256,128,64,48,32,16 build/windows/icon.ico || true
           fi
 
+          # 注入版本号（tag push 时使用 tag 名，否则使用 short sha）
+          if [ "${{ github.ref_type }}" == "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.sha }}"
+          fi
+          echo "Building with version: $VERSION"
+
           # 执行构建
-          wails build -platform ${{ matrix.platform }} -clean
+          wails build -platform ${{ matrix.platform }} -clean -ldflags "-X main.Version=${VERSION}"
 
       - name: Ad-hoc Sign macOS App
         if: matrix.os == 'macos-latest'
