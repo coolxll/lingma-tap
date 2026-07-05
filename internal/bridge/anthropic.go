@@ -574,7 +574,8 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 						"type":  "content_block_start",
 						"index": thinkingBlockIndex,
 						"content_block": map[string]any{
-							"type": "thinking",
+							"type":     "thinking",
+							"thinking": "",
 						},
 					})
 					thinkingBlockStarted = true
