@@ -6,16 +6,8 @@ export function ClearGatewayLogs() {
   return window['go']['main']['App']['ClearGatewayLogs']();
 }
 
-export function ClearGatewayLogsBefore(arg1) {
-  return window['go']['main']['App']['ClearGatewayLogsBefore'](arg1);
-}
-
 export function ClearProxyRecords() {
   return window['go']['main']['App']['ClearProxyRecords']();
-}
-
-export function ClearProxyRecordsBefore(arg1) {
-  return window['go']['main']['App']['ClearProxyRecordsBefore'](arg1);
 }
 
 export function ClearRecords() {
@@ -56,6 +48,10 @@ export function GetRecordsByType(arg1, arg2, arg3) {
 
 export function GetStatus() {
   return window['go']['main']['App']['GetStatus']();
+}
+
+export function GetVersion() {
+  return window['go']['main']['App']['GetVersion']();
 }
 
 export function LogError(arg1) {

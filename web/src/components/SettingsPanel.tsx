@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, Copy, Check, Shield, ShieldOff, Server, ServerOff, Trash2, FolderOpen, FileKey, ExternalLink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -91,6 +91,7 @@ export function SettingsPanel({
   const [anthropicDefault, setAnthropicDefault] = useState('dashscope_qmodel');
   const [savingMapping, setSavingMapping] = useState(false);
   const [currentVersion, setCurrentVersion] = useState('');
+  const currentVersionRef = useRef('');
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'latest' | 'available' | 'error'>('idle');
   const [latestVersion, setLatestVersion] = useState('');
   const [updateError, setUpdateError] = useState('');
@@ -160,7 +161,9 @@ export function SettingsPanel({
         const w = (window as unknown as WailsWindow).go;
         const version = await w?.main?.App?.GetVersion();
         if (version) {
-          setCurrentVersion(version.replace(/^v/, ''));
+          const normalized = version.replace(/^v/, '');
+          currentVersionRef.current = normalized;
+          setCurrentVersion(normalized);
         }
       } catch (err) {
         console.error('Failed to fetch version', err);
@@ -270,7 +273,7 @@ export function SettingsPanel({
       const data = await response.json();
       const remoteVersion = data.tag_name as string;
       setLatestVersion(remoteVersion);
-      if (compareVersions(remoteVersion, currentVersion) > 0) {
+      if (compareVersions(remoteVersion, currentVersionRef.current) > 0) {
         setUpdateStatus('available');
       } else {
         setUpdateStatus('latest');

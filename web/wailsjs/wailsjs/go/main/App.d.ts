@@ -5,11 +5,7 @@ import {bridge} from '../models';
 
 export function ClearGatewayLogs():Promise<void>;
 
-export function ClearGatewayLogsBefore(arg1:number):Promise<number>;
-
 export function ClearProxyRecords():Promise<void>;
-
-export function ClearProxyRecordsBefore(arg1:number):Promise<number>;
 
 export function ClearRecords():Promise<void>;
 
@@ -30,6 +26,8 @@ export function GetRecords(arg1:number,arg2:number):Promise<Array<proto.Record>>
 export function GetRecordsByType(arg1:number,arg2:number,arg3:string):Promise<Array<proto.Record>>;
 
 export function GetStatus():Promise<Record<string, any>>;
+
+export function GetVersion():Promise<string>;
 
 export function LogError(arg1:string):Promise<void>;
 
