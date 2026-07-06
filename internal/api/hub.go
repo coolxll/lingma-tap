@@ -23,6 +23,7 @@ type Hub struct {
 	broadcast  chan []byte
 	register   chan *Client
 	unregister chan *Client
+	done       chan struct{}
 }
 
 type Client struct {
@@ -39,12 +40,15 @@ func NewHub() *Hub {
 		broadcast:  make(chan []byte, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
+		done:       make(chan struct{}),
 	}
 }
 
 func (h *Hub) Run() {
 	for {
 		select {
+		case <-h.done:
+			return
 		case client := <-h.register:
 			h.mu.Lock()
 			// Remove existing client with same ID
@@ -94,6 +98,16 @@ func (h *Hub) Run() {
 			}
 			h.mu.RUnlock()
 		}
+	}
+}
+
+// Stop gracefully shuts down the hub and stops the Run loop
+func (h *Hub) Stop() {
+	select {
+	case <-h.done:
+		// Already closed
+	default:
+		close(h.done)
 	}
 }
 

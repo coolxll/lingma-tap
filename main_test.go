@@ -202,7 +202,10 @@ func TestGetAnthropicMapping(t *testing.T) {
 	defer cleanup()
 
 	// Set a mapping
-	app.SaveAnthropicMapping(map[string]string{"sonnet": "dashscope_qwen3_coder"}, "dashscope_qmodel")
+	err := app.SaveAnthropicMapping(map[string]string{"sonnet": "dashscope_qwen3_coder"}, "dashscope_qmodel")
+	if err != nil {
+		t.Fatalf("SaveAnthropicMapping failed: %v", err)
+	}
 
 	mapping := app.GetAnthropicMapping()
 	if mapping == nil {

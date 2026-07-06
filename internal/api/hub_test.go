@@ -61,6 +61,7 @@ func TestNewHub(t *testing.T) {
 func TestHub_RegisterAndCount(t *testing.T) {
 	h := NewHub()
 	go h.Run()
+	defer h.Stop()
 
 	_, sc, cleanup := newTestWSConn(t)
 	defer cleanup()
@@ -78,6 +79,7 @@ func TestHub_RegisterAndCount(t *testing.T) {
 func TestHub_Unregister(t *testing.T) {
 	h := NewHub()
 	go h.Run()
+	defer h.Stop()
 
 	_, sc, cleanup := newTestWSConn(t)
 	defer cleanup()
@@ -97,6 +99,7 @@ func TestHub_Unregister(t *testing.T) {
 func TestHub_Broadcast(t *testing.T) {
 	h := NewHub()
 	go h.Run()
+	defer h.Stop()
 
 	// Create two clients, each with their own WebSocket connection
 	cc1, sc1, cleanup1 := newTestWSConn(t)
@@ -167,6 +170,7 @@ func TestHub_Broadcast(t *testing.T) {
 func TestHub_DuplicateClientID(t *testing.T) {
 	h := NewHub()
 	go h.Run()
+	defer h.Stop()
 
 	_, sc1, cleanup1 := newTestWSConn(t)
 	defer cleanup1()
@@ -190,6 +194,7 @@ func TestHub_DuplicateClientID(t *testing.T) {
 func TestHub_CapacityEviction(t *testing.T) {
 	h := NewHub()
 	go h.Run()
+	defer h.Stop()
 
 	// Register a small number of clients with unique IDs
 	for i := 0; i < 3; i++ {
@@ -211,6 +216,7 @@ func TestHub_CapacityEviction(t *testing.T) {
 func TestHub_SlowConsumerDrop(t *testing.T) {
 	h := NewHub()
 	go h.Run()
+	defer h.Stop()
 
 	// Create a client but do NOT start WritePump, so its send channel fills up.
 	_, sc, cleanup := newTestWSConn(t)
@@ -231,40 +237,51 @@ func TestHub_SlowConsumerDrop(t *testing.T) {
 	h.Broadcast(map[string]string{"key": "value"})
 	time.Sleep(50 * time.Millisecond)
 
-	// Client may or may not be evicted depending on buffer state.
-	// The important thing is the hub doesn't deadlock.
-	if h.ClientCount() < 0 {
-		t.Error("unexpected client count")
+	// Verify the slow consumer was evicted
+	if count := h.ClientCount(); count != 0 {
+		t.Errorf("expected slow consumer to be evicted, got %d clients", count)
 	}
 }
 
 func TestClient_ReadPump(t *testing.T) {
 	h := NewHub()
 	go h.Run()
+	defer h.Stop()
 
-	_, sc, cleanup := newTestWSConn(t)
+	cc, sc, cleanup := newTestWSConn(t)
 	defer cleanup()
 
 	client := NewClient(h, sc, "read-test", "127.0.0.1:1234")
 	h.register <- client
 	time.Sleep(50 * time.Millisecond)
 
-	// Simulate client sending a close message by closing the server-side connection.
-	// ReadPump should handle it and unregister.
-	sc.Close()
+	// Start ReadPump in a goroutine
+	go client.ReadPump()
 
-	// Give time for ReadPump to process
-	time.Sleep(200 * time.Millisecond)
+	// Send a message from the client connection
+	testMsg := []byte(`{"type":"test","data":"hello"}`)
+	err := cc.WriteMessage(websocket.TextMessage, testMsg)
+	if err != nil {
+		t.Fatalf("failed to write message: %v", err)
+	}
 
-	// The client should be unregistered (best-effort check)
-	// If the unregister happened, count should be 0.
-	// We don't assert strictly because ReadPump may already have exited
-	// before we close, but the test should not panic.
+	// Give ReadPump time to process the message
+	time.Sleep(100 * time.Millisecond)
+
+	// Close the connection to trigger ReadPump exit
+	cc.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify client was unregistered after ReadPump exited
+	if count := h.ClientCount(); count != 0 {
+		t.Errorf("expected 0 clients after ReadPump exit, got %d", count)
+	}
 }
 
 func TestClient_WritePump(t *testing.T) {
 	h := NewHub()
 	go h.Run()
+	defer h.Stop()
 
 	cc, sc, cleanup := newTestWSConn(t)
 	defer cleanup()
