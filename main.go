@@ -344,11 +344,11 @@ func (a *App) StartGateway(port int, listenAddr string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.gatewayServer != nil {
-		a.gatewayServer.Close()
+	// Validate listenAddr before closing existing server
+	if listenAddr == "" {
+		listenAddr = "127.0.0.1"
 	}
 
-	// Validate listenAddr against whitelist
 	validAddrs := map[string]bool{
 		"127.0.0.1": true,
 		"0.0.0.0":   true,
@@ -366,9 +366,11 @@ func (a *App) StartGateway(port int, listenAddr string) error {
 		return fmt.Errorf("invalid listen address: %s (allowed: 127.0.0.1, 0.0.0.0, or Tailscale IP)", listenAddr)
 	}
 
-	if listenAddr == "" {
-		listenAddr = "127.0.0.1"
+	// Now safe to close existing server
+	if a.gatewayServer != nil {
+		a.gatewayServer.Close()
 	}
+
 	addr := fmt.Sprintf("%s:%d", listenAddr, port)
 	handler := api.NewHandler(a.hub, a, a.bridgeHandlerField)
 	mux := http.NewServeMux()

@@ -171,10 +171,10 @@ func (c *Client) WritePump() {
 
 func (c *Client) ReadPump() {
 	defer func() {
-		// Non-blocking send to avoid deadlock if hub is stopped
+		// Block until unregister is delivered or hub is stopped
 		select {
 		case c.hub.unregister <- c:
-		default:
+		case <-c.hub.done:
 		}
 		c.conn.Close()
 	}()
