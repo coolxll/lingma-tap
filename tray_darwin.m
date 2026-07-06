@@ -14,6 +14,8 @@ extern void goHideWindow();
 
 void initTray(const unsigned char* iconData, int iconLength) {
     dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+        
         statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
         
         NSData *data = [NSData dataWithBytes:iconData length:iconLength];
