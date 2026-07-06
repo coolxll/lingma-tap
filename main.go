@@ -381,26 +381,6 @@ func (a *App) ClearRecordsBefore(days int) (int, error) {
 	return a.db.ClearTrafficBefore(cutoff)
 }
 
-// ClearProxyRecordsBefore clears proxy records older than the specified number of days.
-// Returns the number of deleted proxy records.
-func (a *App) ClearProxyRecordsBefore(days int) (int, error) {
-	if a.db == nil {
-		return 0, fmt.Errorf("database not initialized")
-	}
-	cutoff := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
-	return a.db.ClearProxyRecordsBefore(cutoff)
-}
-
-// ClearGatewayLogsBefore clears gateway logs older than the specified number of days.
-// Returns the number of deleted gateway logs.
-func (a *App) ClearGatewayLogsBefore(days int) (int, error) {
-	if a.db == nil {
-		return 0, fmt.Errorf("database not initialized")
-	}
-	cutoff := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
-	return a.db.ClearGatewayLogsBefore(cutoff)
-}
-
 // GetCACertPath returns the CA certificate file path.
 func (a *App) GetCACertPath() string {
 	if a.ca == nil {
