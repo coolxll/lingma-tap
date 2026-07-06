@@ -78,6 +78,56 @@ func TestBridgeHandler_HandleOpenAIChat(t *testing.T) {
 	}
 }
 
+func TestBridgeHandler_OpenAIChatStreamRecordsUsageOnlyChunk(t *testing.T) {
+	session := &auth.Session{CosyKey: "test-key"}
+	var logs []proto.GatewayLog
+	handler := NewBridgeHandler(session, func(log *proto.GatewayLog) {
+		logs = append(logs, *log)
+	})
+
+	mockResp := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"Hello"}}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}`,
+		`data: {"firstTokenDuration":1,"totalDuration":2,"serverDuration":2}`,
+		`data: [DONE]`,
+		``,
+	}, "\n\n")
+	handler.client.client.Transport = &mockTransport{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(mockResp)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	reqBody := `{"model":"gpt-4","messages":[{"role":"user","content":"Hi"}],"stream":true}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	handler.HandleOpenAIChat(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	var final *proto.GatewayLog
+	for i := range logs {
+		if logs[i].Status == http.StatusOK {
+			final = &logs[i]
+		}
+	}
+	if final == nil {
+		t.Fatalf("expected final successful gateway log, got %+v", logs)
+	}
+	if final.InputTokens != 7 || final.OutputTokens != 3 {
+		t.Fatalf("gateway log tokens = %d/%d, want 7/3", final.InputTokens, final.OutputTokens)
+	}
+}
+
 func TestBridgeHandler_HandleAnthropicMessages(t *testing.T) {
 	session := &auth.Session{CosyKey: "test-key"}
 	recorder := func(log *proto.GatewayLog) {}

@@ -226,6 +226,7 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 			}
 			if event.Usage != nil {
 				usage = event.Usage
+				applyUsageToGatewayLog(gLog, usage)
 			}
 			// Handle reasoning content
 			if event.ReasoningContent != "" {
@@ -358,6 +359,7 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 			if upstreamErrored {
 				return nil
 			}
+			applyFinishEvent(gLog, event)
 			if event.Usage != nil {
 				usage = event.Usage
 			}
@@ -413,10 +415,7 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 			// Finalize Log
 			gLog.Status = 200
 			gLog.Latency = time.Since(startTime).Milliseconds()
-			if usage != nil {
-				gLog.InputTokens = usage.PromptTokens
-				gLog.OutputTokens = usage.CompletionTokens
-			}
+			applyUsageToGatewayLog(gLog, usage)
 
 			if recordPayloads {
 				output := []map[string]any{}
@@ -462,6 +461,9 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 	})
 
 	if err != nil {
+		if recordContextError(ctx, gLog, startTime, err, h.recorder) {
+			return
+		}
 		gLog.Error = err.Error()
 		gLog.Status = 500
 		h.recorder(gLog)
@@ -484,7 +486,8 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 	var lastErr *SSEEvent
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
-		if event.Type == "data" {
+		switch event.Type {
+		case "data":
 			if event.HasError {
 				lastErr = &event
 				return nil
@@ -509,15 +512,18 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 			}
 			if event.Usage != nil {
 				usage = event.Usage
+				applyUsageToGatewayLog(gLog, usage)
 			}
+		case "finish":
+			applyFinishEvent(gLog, event)
 		}
 		return nil
 	})
 
 	if err != nil {
-		gLog.Error = err.Error()
-		gLog.Status = 500
-		h.recorder(gLog)
+		if recordStreamError(ctx, gLog, startTime, err, h.recorder) {
+			return
+		}
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -589,10 +595,7 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 	// Finalize Log
 	gLog.Status = 200
 	h.captureResponseBytes(gLog, respBytes)
-	if usage != nil {
-		gLog.InputTokens = usage.PromptTokens
-		gLog.OutputTokens = usage.CompletionTokens
-	}
+	applyUsageToGatewayLog(gLog, usage)
 	gLog.Latency = time.Since(startTime).Milliseconds()
 	h.recorder(gLog)
 

@@ -100,16 +100,20 @@ func TestStorageFullFlow(t *testing.T) {
 	}
 
 	if err := db.SaveGatewayLog(&proto.GatewayLog{
-		Ts:           Now(),
-		Session:      "session-g1",
-		Model:        "gpt-4",
-		Method:       "POST",
-		Path:         "/chat",
-		RequestBody:  "hi",
-		ResponseBody: "hello again",
-		InputTokens:  123,
-		OutputTokens: 45,
-		Status:       200,
+		Ts:              Now(),
+		Session:         "session-g1",
+		Model:           "gpt-4",
+		Method:          "POST",
+		Path:            "/chat",
+		RequestBody:     "hi",
+		ResponseBody:    "hello again",
+		InputTokens:     123,
+		CachedTokens:    67,
+		OutputTokens:    45,
+		ReasoningTokens: 8,
+		TotalTokens:     168,
+		TTFT:            321,
+		Status:          200,
 	}); err != nil {
 		t.Fatalf("SaveGatewayLog update failed: %v", err)
 	}
@@ -117,8 +121,8 @@ func TestStorageFullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecentGatewayLogs after update failed: %v", err)
 	}
-	if logs[0].InputTokens != 123 || logs[0].OutputTokens != 45 {
-		t.Errorf("expected updated token usage 123/45, got %d/%d", logs[0].InputTokens, logs[0].OutputTokens)
+	if logs[0].InputTokens != 123 || logs[0].OutputTokens != 45 || logs[0].CachedTokens != 67 || logs[0].ReasoningTokens != 8 || logs[0].TotalTokens != 168 || logs[0].TTFT != 321 {
+		t.Errorf("expected updated usage fields, got %+v", logs[0])
 	}
 	if err := db.SaveGatewayLog(&proto.GatewayLog{
 		Ts:          Now(),
@@ -135,7 +139,7 @@ func TestStorageFullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecentGatewayLogs after late initial update failed: %v", err)
 	}
-	if logs[0].Status != 200 || logs[0].InputTokens != 123 || logs[0].OutputTokens != 45 || logs[0].ResponseBody != "hello again" {
+	if logs[0].Status != 200 || logs[0].InputTokens != 123 || logs[0].OutputTokens != 45 || logs[0].CachedTokens != 67 || logs[0].ReasoningTokens != 8 || logs[0].TotalTokens != 168 || logs[0].TTFT != 321 || logs[0].ResponseBody != "hello again" {
 		t.Errorf("late initial log regressed final observability fields: %+v", logs[0])
 	}
 

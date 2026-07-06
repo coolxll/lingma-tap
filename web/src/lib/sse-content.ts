@@ -1,17 +1,9 @@
 import { SSEEvent } from './types';
+import { parseJSONMaybe } from './utils';
 
 export interface MergedSSEContent {
   text: string;
   toolCalls: string[];
-}
-
-function parseJSONMaybe(value: unknown): unknown {
-  if (typeof value !== 'string') return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
 }
 
 function unwrapSSEPayload(rawContent: unknown): unknown {

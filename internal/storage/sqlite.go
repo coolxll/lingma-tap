@@ -21,6 +21,18 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// preserveOnPartialUpdate returns a SQL fragment that keeps the existing
+// column value when an upsert carries a partial (status=0) update, falling
+// back to the incoming value otherwise. `guard` selects which existing
+// column signals "already finalized" (the column itself for numeric fields,
+// or `status` for text/payload fields that should follow the status lifecycle).
+func preserveOnPartialUpdate(col, guard string) string {
+	return col + " = CASE\n" +
+		"\t\t\t\tWHEN excluded.status = 0 AND gateway_logs." + guard + " > 0 THEN gateway_logs." + col + "\n" +
+		"\t\t\t\tELSE excluded." + col + "\n" +
+		"\t\t\tEND"
+}
+
 type DB struct {
 	db      *sqlx.DB
 	writeMu sync.Mutex
@@ -373,47 +385,29 @@ func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
 
 	_, err := d.db.NamedExec(`
 		INSERT INTO gateway_logs (ts, session, model, method, path, request_body, response_body,
-			input_tokens, output_tokens, status, latency, error, is_sse, sse_events_json, finish_reason)
+			input_tokens, output_tokens, cached_tokens, reasoning_tokens, total_tokens, ttft,
+			status, latency, error, is_sse, sse_events_json, finish_reason)
 		VALUES (:ts, :session, :model, :method, :path, :request_body, :response_body,
-			:input_tokens, :output_tokens, :status, :latency, :error, :is_sse, :sse_events_json, :finish_reason)
+			:input_tokens, :output_tokens, :cached_tokens, :reasoning_tokens, :total_tokens, :ttft,
+			:status, :latency, :error, :is_sse, :sse_events_json, :finish_reason)
 		ON CONFLICT(session) DO UPDATE SET
 			model = excluded.model,
 			method = excluded.method,
 			path = excluded.path,
 			request_body = excluded.request_body,
-			response_body = CASE
-				WHEN excluded.status = 0 AND gateway_logs.status > 0 THEN gateway_logs.response_body
-				ELSE excluded.response_body
-			END,
-			input_tokens = CASE
-				WHEN excluded.status = 0 AND gateway_logs.input_tokens > 0 THEN gateway_logs.input_tokens
-				ELSE excluded.input_tokens
-			END,
-			output_tokens = CASE
-				WHEN excluded.status = 0 AND gateway_logs.output_tokens > 0 THEN gateway_logs.output_tokens
-				ELSE excluded.output_tokens
-			END,
-			status = CASE
-				WHEN excluded.status = 0 AND gateway_logs.status > 0 THEN gateway_logs.status
-				ELSE excluded.status
-			END,
-			latency = CASE
-				WHEN excluded.status = 0 AND gateway_logs.latency > 0 THEN gateway_logs.latency
-				ELSE excluded.latency
-			END,
-			error = CASE
-				WHEN excluded.status = 0 AND gateway_logs.status > 0 THEN gateway_logs.error
-				ELSE excluded.error
-			END,
+			`+preserveOnPartialUpdate("response_body", "status")+`,
+			`+preserveOnPartialUpdate("input_tokens", "input_tokens")+`,
+			`+preserveOnPartialUpdate("output_tokens", "output_tokens")+`,
+			`+preserveOnPartialUpdate("cached_tokens", "cached_tokens")+`,
+			`+preserveOnPartialUpdate("reasoning_tokens", "reasoning_tokens")+`,
+			`+preserveOnPartialUpdate("total_tokens", "total_tokens")+`,
+			`+preserveOnPartialUpdate("ttft", "ttft")+`,
+			`+preserveOnPartialUpdate("status", "status")+`,
+			`+preserveOnPartialUpdate("latency", "latency")+`,
+			`+preserveOnPartialUpdate("error", "status")+`,
 			is_sse = excluded.is_sse,
-			sse_events_json = CASE
-				WHEN excluded.status = 0 AND gateway_logs.status > 0 THEN gateway_logs.sse_events_json
-				ELSE excluded.sse_events_json
-			END,
-			finish_reason = CASE
-				WHEN excluded.status = 0 AND gateway_logs.status > 0 THEN gateway_logs.finish_reason
-				ELSE excluded.finish_reason
-			END
+			`+preserveOnPartialUpdate("sse_events_json", "status")+`,
+			`+preserveOnPartialUpdate("finish_reason", "status")+`
 	`, log)
 	return err
 }
@@ -428,7 +422,8 @@ func (d *DB) RecentGatewayLogs(limit int, offset ...int) ([]proto.GatewayLog, er
 	var logs []proto.GatewayLog
 	err := d.db.Select(&logs, `
 		SELECT id, ts, session, model, method, path, request_body, response_body,
-			input_tokens, output_tokens, status, latency, error, is_sse, sse_events_json, finish_reason
+			input_tokens, output_tokens, cached_tokens, reasoning_tokens, total_tokens, ttft,
+			status, latency, error, is_sse, sse_events_json, finish_reason
 		FROM gateway_logs ORDER BY id DESC LIMIT ? OFFSET ?
 	`, limit, off)
 	if err != nil {

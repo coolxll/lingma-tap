@@ -1,10 +1,4 @@
-function parseJSONMaybe(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
+import { parseJSONMaybe } from './utils';
 
 function stringifyContent(value: unknown): string {
   if (value === undefined || value === null) return '';

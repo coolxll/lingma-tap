@@ -347,3 +347,24 @@ func TestApp_ImplementsRecordStore(t *testing.T) {
 		t.Error("expected non-nil stats")
 	}
 }
+
+func TestConvertGatewayLogToRecordCopiesUsageFields(t *testing.T) {
+	log := &proto.GatewayLog{
+		ID:              9,
+		Session:         "live-1",
+		Model:           "gpt-test",
+		InputTokens:     10,
+		OutputTokens:    20,
+		CachedTokens:    3,
+		ReasoningTokens: 4,
+		TotalTokens:     30,
+		TTFT:            123,
+		Latency:         456,
+		FinishReason:    "stop",
+	}
+
+	rec := convertGatewayLogToRecord(log)
+	if rec.InputTokens != 10 || rec.OutputTokens != 20 || rec.CachedTokens != 3 || rec.ReasoningTokens != 4 || rec.TotalTokens != 30 || rec.TTFT != 123 || rec.Latency != 456 || rec.FinishReason != "stop" {
+		t.Fatalf("record did not copy usage fields: %+v", rec)
+	}
+}

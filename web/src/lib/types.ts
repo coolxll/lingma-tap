@@ -40,6 +40,10 @@ export interface TrafficRecord {
   model?: string;
   input_tokens?: number;
   output_tokens?: number;
+  cached_tokens?: number;
+  reasoning_tokens?: number;
+  total_tokens?: number;
+  ttft?: number;
   latency?: number;
   finish_reason?: string;
 }
@@ -55,6 +59,10 @@ export interface GatewayLog {
   response_body: string;
   input_tokens: number;
   output_tokens: number;
+  cached_tokens?: number;
+  reasoning_tokens?: number;
+  total_tokens?: number;
+  ttft?: number;
   status: number;
   latency: number;
   error?: string;
@@ -81,6 +89,10 @@ export function mapGatewayLogToRecord(log: any): TrafficRecord {
     model: log.model || "",
     input_tokens: log.input_tokens || 0,
     output_tokens: log.output_tokens || 0,
+    cached_tokens: log.cached_tokens || 0,
+    reasoning_tokens: log.reasoning_tokens || 0,
+    total_tokens: log.total_tokens || 0,
+    ttft: log.ttft || 0,
     latency: log.latency || 0,
     error: log.error || "",
     finish_reason: log.finish_reason || "",

@@ -504,9 +504,8 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 		outTokens := 0
 		if usage != nil {
 			outTokens = usage.CompletionTokens
-			gLog.InputTokens = usage.PromptTokens
-			gLog.OutputTokens = usage.CompletionTokens
 		}
+		applyUsageToGatewayLog(gLog, usage)
 
 		// message_delta with usage
 		writeAnthropicSSE(w, "message_delta", map[string]any{
@@ -717,9 +716,11 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			// Handle usage
 			if event.Usage != nil {
 				usage = event.Usage
+				applyUsageToGatewayLog(gLog, usage)
 			}
 
 		case "finish":
+			applyFinishEvent(gLog, event)
 			if event.Usage != nil {
 				usage = event.Usage
 			}
@@ -731,9 +732,9 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	})
 
 	if err != nil {
-		gLog.Error = err.Error()
-		gLog.Status = 500
-		h.recorder(gLog)
+		if recordStreamError(ctx, gLog, startTime, err, h.recorder) {
+			return
+		}
 
 		writeAnthropicSSE(w, "error", map[string]any{
 			"type": "error",
@@ -854,8 +855,10 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 			}
 			if event.Usage != nil {
 				usage = *event.Usage
+				applyUsageToGatewayLog(gLog, &usage)
 			}
 		case "finish":
+			applyFinishEvent(gLog, event)
 			if event.Usage != nil {
 				usage = *event.Usage
 			}
@@ -864,9 +867,9 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 	})
 
 	if err != nil {
-		gLog.Error = err.Error()
-		gLog.Status = 500
-		h.recorder(gLog)
+		if recordStreamError(ctx, gLog, startTime, err, h.recorder) {
+			return
+		}
 		writeAnthropicError(w, http.StatusInternalServerError, "api_error", err.Error())
 		return
 	}
@@ -955,8 +958,7 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 	// Finalize Log
 	gLog.Status = 200
 	h.captureResponseBytes(gLog, respBytes)
-	gLog.InputTokens = usage.PromptTokens
-	gLog.OutputTokens = usage.CompletionTokens
+	applyUsageToGatewayLog(gLog, &usage)
 	gLog.Latency = time.Since(startTime).Milliseconds()
 	gLog.FinishReason = stopReason
 	h.recorder(gLog)

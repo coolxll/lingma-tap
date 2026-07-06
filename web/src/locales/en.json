@@ -158,7 +158,18 @@
       "preview": "Preview",
       "tokens": "Tokens",
       "latency": "Latency",
-      "time": "Time"
+      "time": "Time",
+      "endpoint": "Endpoint",
+      "result": "Result",
+      "ttft": "TTFT",
+      "total_latency": "Total Latency",
+      "speed": "Speed",
+      "input": "Input",
+      "output": "Output",
+      "reasoning": "Reasoning",
+      "cached": "Cached",
+      "total_tokens": "Total Tokens",
+      "columns": "Columns"
     },
     "details": {
       "title": "Request Details",

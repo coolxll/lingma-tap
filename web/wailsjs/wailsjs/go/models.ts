@@ -58,6 +58,10 @@ export namespace proto {
 	    response_body: string;
 	    input_tokens: number;
 	    output_tokens: number;
+	    cached_tokens?: number;
+	    reasoning_tokens?: number;
+	    total_tokens?: number;
+	    ttft?: number;
 	    status: number;
 	    latency: number;
 	    error?: string;
@@ -81,6 +85,10 @@ export namespace proto {
 	        this.response_body = source["response_body"];
 	        this.input_tokens = source["input_tokens"];
 	        this.output_tokens = source["output_tokens"];
+	        this.cached_tokens = source["cached_tokens"];
+	        this.reasoning_tokens = source["reasoning_tokens"];
+	        this.total_tokens = source["total_tokens"];
+	        this.ttft = source["ttft"];
 	        this.status = source["status"];
 	        this.latency = source["latency"];
 	        this.error = source["error"];
@@ -138,6 +146,10 @@ export namespace proto {
 	    model?: string;
 	    input_tokens?: number;
 	    output_tokens?: number;
+	    cached_tokens?: number;
+	    reasoning_tokens?: number;
+	    total_tokens?: number;
+	    ttft?: number;
 	    latency?: number;
 	    finish_reason?: string;
 	
@@ -177,6 +189,10 @@ export namespace proto {
 	        this.model = source["model"];
 	        this.input_tokens = source["input_tokens"];
 	        this.output_tokens = source["output_tokens"];
+	        this.cached_tokens = source["cached_tokens"];
+	        this.reasoning_tokens = source["reasoning_tokens"];
+	        this.total_tokens = source["total_tokens"];
+	        this.ttft = source["ttft"];
 	        this.latency = source["latency"];
 	        this.finish_reason = source["finish_reason"];
 	    }

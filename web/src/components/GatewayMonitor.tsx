@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Search, X, Activity, CheckCircle, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { TrafficRecord, formatTimestamp } from '@/lib/types';
+import { TrafficRecord, formatTimestamp, getStatusColor } from '@/lib/types';
+import { parseJSONMaybe } from '@/lib/utils';
 import { JsonViewer } from './JsonViewer';
 import { extractReadableResponseText } from '@/lib/sse-content';
 import { extractReadablePromptText } from '@/lib/prompt-content';
@@ -15,6 +16,68 @@ interface GatewayMonitorProps {
   canLoadMore?: boolean;
 }
 
+interface ProcessedRow {
+  req: TrafficRecord;
+  resp: TrafficRecord | null;
+  details: {
+    model: string;
+    path: string;
+    status: number;
+    error: string;
+    finishReason: string;
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+    reasoningTokens: number;
+    totalTokens: number;
+    ttft: number;
+    latency: number;
+    speed: number;
+  };
+}
+
+type ColumnKey =
+  | 'time'
+  | 'model'
+  | 'endpoint'
+  | 'result'
+  | 'ttft'
+  | 'latency'
+  | 'speed'
+  | 'input'
+  | 'output'
+  | 'reasoning'
+  | 'cached'
+  | 'totalTokens';
+
+const DEFAULT_COLUMNS: ColumnKey[] = ['time', 'model', 'result', 'ttft', 'latency', 'speed', 'input', 'output', 'totalTokens'];
+const ALL_COLUMNS: ColumnKey[] = ['time', 'model', 'endpoint', 'result', 'ttft', 'latency', 'speed', 'input', 'output', 'reasoning', 'cached', 'totalTokens'];
+
+function formatMs(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '-';
+  return `${Math.round(value)}ms`;
+}
+
+function formatTokens(value: number): string {
+  return Number.isFinite(value) ? Math.round(value).toLocaleString() : '0';
+}
+
+function resultColor(status: number): string {
+  const baseColor = getStatusColor(status);
+  if (status >= 200 && status < 300) return `${baseColor} bg-green-500/10 border-green-500/20`;
+  if (status >= 400) return `${baseColor} bg-red-500/10 border-red-500/20`;
+  if (status > 0) return `${baseColor} bg-amber-500/10 border-amber-500/20`;
+  return `${baseColor} bg-zinc-900 border-zinc-800`;
+}
+
+function shortenEndpoint(path: string): string {
+  if (!path) return '-';
+  if (path.includes('/v1/chat/completions')) return '/v1/chat/completions';
+  if (path.includes('/v1/responses')) return '/v1/responses';
+  if (path.includes('/v1/messages')) return '/v1/messages';
+  return path.length > 28 ? `…${path.slice(-27)}` : path;
+}
+
 export function GatewayMonitor({
   records,
   onClear,
@@ -25,79 +88,177 @@ export function GatewayMonitor({
 }: GatewayMonitorProps) {
   const { t } = useTranslation();
   const [filter, setFilter] = useState('');
-  const [selectedRow, setSelectedRow] = useState<{ req: TrafficRecord; resp: TrafficRecord | null } | null>(null);
+  const [selectedRow, setSelectedRow] = useState<ProcessedRow | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [requestViewMode, setRequestViewMode] = useState<'friendly' | 'raw'>('friendly');
   const [responseViewMode, setResponseViewMode] = useState<'friendly' | 'raw'>('friendly');
+  const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(() => new Set(DEFAULT_COLUMNS));
   const PAGE_SIZE = 50;
 
-  // Filter and Limit to 500
   const processedRows = useMemo(() => {
     if (!records) return [];
     const filtered = records
       .filter(r => r && r.source === 'gateway')
-      .map(row => ({
-        req: row,
-        resp: row,
-        details: {
-          model: row.model || 'Unknown',
-          inputTokens: row.input_tokens || 0,
-          outputTokens: row.output_tokens || 0,
-          latency: Number(row.latency) || 0
-        }
-      }))
+      .map(row => {
+        const inputTokens = row.input_tokens || 0;
+        const outputTokens = row.output_tokens || 0;
+        const totalTokens = row.total_tokens || inputTokens + outputTokens;
+        const latency = Number(row.latency) || 0;
+        const ttft = Number(row.ttft) || 0;
+        const generationMs = Math.max(latency - ttft, 1);
+        const speed = outputTokens / Math.max(generationMs / 1000, 0.001);
+        return {
+          req: row,
+          resp: row,
+          details: {
+            model: row.model || 'Unknown',
+            path: row.path || '',
+            status: row.status || 0,
+            error: row.error || '',
+            finishReason: row.finish_reason || '',
+            inputTokens,
+            outputTokens,
+            cachedTokens: row.cached_tokens || 0,
+            reasoningTokens: row.reasoning_tokens || 0,
+            totalTokens,
+            ttft,
+            latency,
+            speed
+          }
+        };
+      })
       .filter(row => {
         if (!filter) return true;
         const search = filter.toLowerCase();
         return (
           (row.details.model || '').toLowerCase().includes(search) ||
+          (row.details.path || '').toLowerCase().includes(search) ||
           (row.req.session && row.req.session.toLowerCase().includes(search)) ||
           (row.req.request_body && row.req.request_body.toLowerCase().includes(search))
         );
       });
 
-    // Limit removed to allow full history viewing via pagination
     return filtered;
   }, [records, filter]);
 
-  // Statistics
   const stats = useMemo(() => {
     const total = processedRows.length;
     const ok = processedRows.filter(r => r.resp && r.resp.status >= 200 && r.resp.status < 300).length;
     const err = processedRows.filter(r => r.resp && r.resp.status >= 400).length;
-    const inputTokens = processedRows.reduce((sum, r) => sum + (r.req.input_tokens || 0), 0);
-    const outputTokens = processedRows.reduce((sum, r) => sum + (r.req.output_tokens || 0), 0);
+    const inputTokens = processedRows.reduce((sum, r) => sum + r.details.inputTokens, 0);
+    const outputTokens = processedRows.reduce((sum, r) => sum + r.details.outputTokens, 0);
     return { total, ok, err, inputTokens, outputTokens };
   }, [processedRows]);
 
-  // Pagination logic
   const totalPages = Math.ceil(processedRows.length / PAGE_SIZE);
   const paginatedRows = useMemo(() => {
     const start = (currentPage - 1) * PAGE_SIZE;
     return processedRows.slice(start, start + PAGE_SIZE);
   }, [processedRows, currentPage]);
 
-  // Reset page on filter change
+  const visibleColumnList = useMemo(() => ALL_COLUMNS.filter(col => visibleColumns.has(col)), [visibleColumns]);
+
   useEffect(() => {
     setCurrentPage(1);
   }, [filter]);
 
+  const toggleColumn = (column: ColumnKey) => {
+    setVisibleColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(column)) {
+        if (next.size > 1) next.delete(column);
+      } else {
+        next.add(column);
+      }
+      return next;
+    });
+  };
+
+  const columnLabel = (column: ColumnKey): string => {
+    const labels: Record<ColumnKey, string> = {
+      time: t('monitor.table.time'),
+      model: t('monitor.table.model'),
+      endpoint: t('monitor.table.endpoint'),
+      result: t('monitor.table.result'),
+      ttft: t('monitor.table.ttft'),
+      latency: t('monitor.table.total_latency'),
+      speed: t('monitor.table.speed'),
+      input: t('monitor.table.input'),
+      output: t('monitor.table.output'),
+      reasoning: t('monitor.table.reasoning'),
+      cached: t('monitor.table.cached'),
+      totalTokens: t('monitor.table.total_tokens')
+    };
+    return labels[column];
+  };
+
+  const renderCell = (column: ColumnKey, row: ProcessedRow) => {
+    switch (column) {
+      case 'time':
+        return <span className="text-[10px] text-zinc-500 font-medium whitespace-nowrap">{formatTimestamp(row.req.ts)}</span>;
+      case 'model':
+        return (
+          <div className="flex flex-col min-w-36">
+            <span className="text-sm font-bold text-zinc-200 group-hover:text-blue-400 transition-colors truncate">{row.details.model}</span>
+            <span className="text-[10px] text-zinc-600 font-mono">{(row.req.session || '').slice(0, 8)}...</span>
+          </div>
+        );
+      case 'endpoint':
+        return <span className="font-mono text-[11px] text-zinc-400 whitespace-nowrap">{shortenEndpoint(row.details.path)}</span>;
+      case 'result': {
+        const label = row.details.status > 0 ? String(row.details.status) : row.details.error ? 'ERR' : '-';
+        return (
+          <div className="flex flex-col gap-1 min-w-24">
+            <span className={`w-fit px-2 py-1 rounded-lg border text-[10px] font-bold ${resultColor(row.details.status)}`}>{label}</span>
+            <span className="text-[10px] text-zinc-600 truncate max-w-28" title={row.details.error || row.details.finishReason}>
+              {row.details.error || row.details.finishReason || '-'}
+            </span>
+          </div>
+        );
+      }
+      case 'ttft':
+        return <span className="font-mono text-xs text-zinc-300 whitespace-nowrap">{formatMs(row.details.ttft)}</span>;
+      case 'latency':
+        return <span className={`font-mono text-xs font-bold whitespace-nowrap ${row.details.latency > 3000 ? 'text-amber-500' : 'text-zinc-300'}`}>{formatMs(row.details.latency)}</span>;
+      case 'speed':
+        return <span className="font-mono text-xs text-green-400 whitespace-nowrap">{row.details.outputTokens > 0 ? `${row.details.speed.toFixed(1)} tok/s` : '-'}</span>;
+      case 'input':
+        return <span className="font-mono text-xs text-zinc-400">{formatTokens(row.details.inputTokens)}</span>;
+      case 'output':
+        return <span className="font-mono text-xs font-bold text-blue-400">{formatTokens(row.details.outputTokens)}</span>;
+      case 'reasoning':
+        return <span className="font-mono text-xs text-purple-400">{formatTokens(row.details.reasoningTokens)}</span>;
+      case 'cached':
+        return <span className="font-mono text-xs text-emerald-400">{formatTokens(row.details.cachedTokens)}</span>;
+      case 'totalTokens':
+        return <span className="font-mono text-xs font-bold text-zinc-200">{formatTokens(row.details.totalTokens)}</span>;
+      default:
+        return null;
+    }
+  };
+
+  const selectedDetails = selectedRow?.details;
+  const selectedSpeed = selectedDetails ? selectedDetails.speed.toFixed(1) : '0.0';
+  const selectedTotalTokens = selectedDetails?.totalTokens || 0;
+  const selectedLatency = selectedDetails?.latency || 0;
+  const selectedTTFT = selectedDetails?.ttft || 0;
+  const ttftWidth = selectedLatency > 0 ? Math.min(100, Math.max(0, (selectedTTFT / selectedLatency) * 100)) : 0;
+
   return (
     <div className="h-full flex flex-col bg-zinc-950">
-      {/* Toolbar */}
-      <div className="flex items-center gap-4 px-6 py-4 bg-zinc-950 border-b border-zinc-900">
+      <div className="flex flex-wrap items-center gap-4 px-6 py-4 bg-zinc-950 border-b border-zinc-900">
         <button
           onClick={onToggleLogging}
           className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border ${loggingEnabled
-              ? 'bg-green-500/10 text-green-400 border-green-500/20'
-              : 'bg-zinc-900 text-zinc-500 border-zinc-800'
+            ? 'bg-green-500/10 text-green-400 border-green-500/20'
+            : 'bg-zinc-900 text-zinc-500 border-zinc-800'
             }`}
         >
           <div className={`w-1.5 h-1.5 rounded-full ${loggingEnabled ? 'bg-green-500 animate-pulse' : 'bg-zinc-600'}`} />
           {loggingEnabled ? t('monitor.logging_status.active') : t('monitor.logging_status.paused')}
         </button>
 
-        <div className="relative flex-1 max-w-md">
+        <div className="relative flex-1 min-w-64 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-600" />
           <input
             type="text"
@@ -127,18 +288,37 @@ export function GatewayMonitor({
         >
           <Trash2 className="w-5 h-5" />
         </button>
+
+        <div className="basis-full flex flex-wrap items-center gap-2 pt-1">
+          <span className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mr-1">{t('monitor.table.columns')}</span>
+          {ALL_COLUMNS.map(column => (
+            <button
+              key={column}
+              type="button"
+              onClick={() => toggleColumn(column)}
+              className={`px-2.5 py-1 rounded-lg border text-[10px] font-bold transition-colors ${visibleColumns.has(column)
+                ? 'bg-blue-500/10 text-blue-300 border-blue-500/30'
+                : 'bg-zinc-900/50 text-zinc-500 border-zinc-800 hover:text-zinc-300'
+                }`}
+            >
+              {columnLabel(column)}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Main Table Content */}
       <div className="flex-1 overflow-auto">
-        <table className="w-full border-collapse text-left">
+        <table className="min-w-[1120px] w-full border-collapse text-left">
           <thead className="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur-md">
             <tr className="border-b border-zinc-900">
-              <th className="px-6 py-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest">{t('monitor.table.model')}</th>
-              <th className="px-4 py-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest">{t('monitor.table.preview')}</th>
-              <th className="px-4 py-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest text-center">{t('monitor.table.tokens')}</th>
-              <th className="px-4 py-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest text-right">{t('monitor.table.latency')}</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest text-right">{t('monitor.table.time')}</th>
+              {visibleColumnList.map(column => (
+                <th
+                  key={column}
+                  className={`px-4 py-4 text-[10px] font-bold text-zinc-600 uppercase tracking-widest ${['ttft', 'latency', 'speed', 'input', 'output', 'reasoning', 'cached', 'totalTokens'].includes(column) ? 'text-right' : ''}`}
+                >
+                  {columnLabel(column)}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -148,34 +328,14 @@ export function GatewayMonitor({
                 onClick={() => setSelectedRow(row)}
                 className="group border-b border-zinc-900/50 hover:bg-zinc-900/30 cursor-pointer transition-colors"
               >
-                <td className="px-6 py-4">
-                  <div className="flex flex-col">
-                    <span className="text-sm font-bold text-zinc-200 group-hover:text-blue-400 transition-colors">{row.details.model}</span>
-                    <span className="text-[10px] text-zinc-600 font-mono">{(row.req.session || '').slice(0, 8)}...</span>
-                  </div>
-                </td>
-                <td className="px-4 py-4">
-                  <div className="text-xs text-zinc-400 truncate max-w-md bg-zinc-900/50 px-3 py-1.5 rounded-lg border border-zinc-800/50">
-                    {extractReadablePromptText(row.req.request_body) || '-'}
-                  </div>
-                </td>
-                <td className="px-4 py-4 text-center">
-                  <div className="flex items-center justify-center gap-1.5">
-                    <span className="text-[10px] font-bold text-zinc-500">{row.details.inputTokens}</span>
-                    <div className="w-1 h-1 rounded-full bg-zinc-800" />
-                    <span className="text-[10px] font-bold text-blue-400">{row.details.outputTokens}</span>
-                  </div>
-                </td>
-                <td className="px-4 py-4 text-right">
-                  <div className="flex flex-col items-end">
-                    <span className={`text-xs font-mono font-bold ${row.details.latency > 3000 ? 'text-amber-500' : 'text-zinc-300'}`}>
-                      {row.details.latency}ms
-                    </span>
-                  </div>
-                </td>
-                <td className="px-6 py-4 text-right">
-                  <span className="text-[10px] text-zinc-500 font-medium">{formatTimestamp(row.req.ts)}</span>
-                </td>
+                {visibleColumnList.map(column => (
+                  <td
+                    key={column}
+                    className={`px-4 py-4 ${['ttft', 'latency', 'speed', 'input', 'output', 'reasoning', 'cached', 'totalTokens'].includes(column) ? 'text-right' : ''}`}
+                  >
+                    {renderCell(column, row)}
+                  </td>
+                ))}
               </tr>
             ))}
           </tbody>
@@ -191,7 +351,6 @@ export function GatewayMonitor({
         )}
       </div>
 
-      {/* Pagination Footer */}
       {totalPages > 1 && (
         <div className="px-6 py-3 bg-zinc-950 border-t border-zinc-900 flex items-center justify-between">
           <div className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">
@@ -227,51 +386,39 @@ export function GatewayMonitor({
         </div>
       )}
 
-      {/* Detail Modal */}
       {selectedRow && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6"
-          onClick={() => setSelectedRow(null)}
-        >
-          <div
-            className="bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden"
-            onClick={e => e.stopPropagation()}
-          >
-            {/* Modal Header */}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6 animate-in fade-in duration-200">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-3xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
             <div className="px-6 py-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-900/30">
-              <div className="flex items-center gap-4">
-                <div className="p-2 bg-blue-500/10 rounded-lg">
-                  <Activity className="w-5 h-5 text-blue-400" />
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-3">
+                  <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 text-[10px] font-bold uppercase tracking-widest border border-blue-500/20">
+                    {selectedRow.req.model || 'Unknown Model'}
+                  </span>
+                  <span className="text-xs text-zinc-500 font-mono">{selectedRow.req.session}</span>
                 </div>
-                <div>
-                  <h3 className="text-sm font-bold text-zinc-100">{t('monitor.details.title')}</h3>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[10px] text-zinc-500 font-mono bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">{selectedRow.req.session}</span>
-                    <span className="text-[10px] text-blue-400 font-mono bg-blue-900/20 px-1.5 py-0.5 rounded border border-blue-500/20">{selectedRow.req.path}</span>
-                  </div>
-                </div>
+                <h2 className="text-lg font-bold text-zinc-100">{shortenEndpoint(selectedRow.req.path)} · {formatTimestamp(selectedRow.req.ts)}</h2>
               </div>
               <button
                 onClick={() => setSelectedRow(null)}
-                className="p-2 hover:bg-zinc-900 rounded-full transition-colors text-zinc-500 hover:text-zinc-200"
+                className="p-2 rounded-full hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="flex-1 overflow-auto p-6 space-y-6">
-              {/* Metric Cards */}
               <div className="grid grid-cols-4 gap-4">
                 <MetricCard
                   label="Provider Latency"
-                  value={`${selectedRow.req.latency || 0}ms`}
-                  subValue="Total turnaround time"
+                  value={formatMs(selectedRow.req.latency || 0)}
+                  subValue={`TTFT ${formatMs(selectedRow.req.ttft || 0)}`}
                   icon={<Activity className="w-4 h-4" />}
                   color="blue"
                 />
                 <MetricCard
                   label="Throughput"
-                  value={`${((selectedRow.req.output_tokens || 0) / ((selectedRow.req.latency || 1) / 1000)).toFixed(1)}`}
+                  value={selectedSpeed}
                   unit="tok/s"
                   subValue="Generation speed"
                   icon={<Activity className="w-4 h-4" />}
@@ -279,43 +426,40 @@ export function GatewayMonitor({
                 />
                 <MetricCard
                   label="Tokens"
-                  value={`${(selectedRow.req.input_tokens || 0) + (selectedRow.req.output_tokens || 0)}`}
-                  subValue={`${selectedRow.req.input_tokens || 0} → ${selectedRow.req.output_tokens || 0}`}
+                  value={`${selectedTotalTokens}`}
+                  subValue={`${selectedRow.req.input_tokens || 0} → ${selectedRow.req.output_tokens || 0} · cache ${selectedRow.req.cached_tokens || 0} · reasoning ${selectedRow.req.reasoning_tokens || 0}`}
                   icon={<Activity className="w-4 h-4" />}
                   color="purple"
                 />
                 <MetricCard
                   label="Finish Reason"
-                  value={selectedRow.req.finish_reason || 'stop'}
+                  value={selectedRow.req.finish_reason || (selectedRow.req.status >= 400 ? 'error' : 'stop')}
                   subValue={selectedRow.req.is_sse ? 'Streaming' : 'Non-streaming'}
                   icon={<CheckCircle className="w-4 h-4" />}
                   color="amber"
                 />
               </div>
 
-              {/* Visual Timeline Bar */}
               <div className="bg-zinc-900/50 p-4 rounded-xl border border-zinc-800/50">
                 <div className="flex justify-between items-center mb-2 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
                   <span>Latency Timeline</span>
-                  <span>Total: {selectedRow.req.latency}ms</span>
+                  <span>Total: {formatMs(selectedLatency)}</span>
                 </div>
                 <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden flex">
                   <div
                     className="h-full bg-blue-500/80 transition-all duration-500"
-                    style={{ width: '40%' }}
+                    style={{ width: `${ttftWidth}%` }}
                     title="TTFT"
                   />
                   <div
                     className="h-full bg-blue-400/40 transition-all duration-500"
-                    style={{ width: '60%' }}
+                    style={{ width: `${Math.max(0, 100 - ttftWidth)}%` }}
                     title="Generation"
                   />
                 </div>
               </div>
 
-              {/* Request & Response Sections */}
               <div className="grid grid-cols-2 gap-6">
-                {/* Prompt Section */}
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
@@ -326,8 +470,8 @@ export function GatewayMonitor({
                       <button
                         onClick={() => setRequestViewMode('friendly')}
                         className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${requestViewMode === 'friendly'
-                            ? 'bg-zinc-800 text-blue-400 shadow-sm'
-                            : 'text-zinc-500 hover:text-zinc-400'
+                          ? 'bg-zinc-800 text-blue-400 shadow-sm'
+                          : 'text-zinc-500 hover:text-zinc-400'
                           }`}
                       >
                         FRIENDLY
@@ -335,8 +479,8 @@ export function GatewayMonitor({
                       <button
                         onClick={() => setRequestViewMode('raw')}
                         className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${requestViewMode === 'raw'
-                            ? 'bg-zinc-800 text-purple-400 shadow-sm'
-                            : 'text-zinc-500 hover:text-zinc-400'
+                          ? 'bg-zinc-800 text-blue-400 shadow-sm'
+                          : 'text-zinc-500 hover:text-zinc-400'
                           }`}
                       >
                         RAW
@@ -352,7 +496,6 @@ export function GatewayMonitor({
                   </div>
                 </div>
 
-                {/* Assistant Section */}
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
@@ -363,8 +506,8 @@ export function GatewayMonitor({
                       <button
                         onClick={() => setResponseViewMode('friendly')}
                         className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${responseViewMode === 'friendly'
-                            ? 'bg-zinc-800 text-green-400 shadow-sm'
-                            : 'text-zinc-500 hover:text-zinc-400'
+                          ? 'bg-zinc-800 text-green-400 shadow-sm'
+                          : 'text-zinc-500 hover:text-zinc-400'
                           }`}
                       >
                         FRIENDLY
@@ -372,8 +515,8 @@ export function GatewayMonitor({
                       <button
                         onClick={() => setResponseViewMode('raw')}
                         className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${responseViewMode === 'raw'
-                            ? 'bg-zinc-800 text-blue-400 shadow-sm'
-                            : 'text-zinc-500 hover:text-zinc-400'
+                          ? 'bg-zinc-800 text-blue-400 shadow-sm'
+                          : 'text-zinc-500 hover:text-zinc-400'
                           }`}
                       >
                         RAW
@@ -390,7 +533,6 @@ export function GatewayMonitor({
                 </div>
               </div>
 
-              {/* Raw JSON */}
               <details className="group border border-zinc-800/50 rounded-xl overflow-hidden">
                 <summary className="flex items-center justify-between px-4 py-3 bg-zinc-900/20 cursor-pointer hover:bg-zinc-900/40 transition-colors">
                   <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Metadata & Raw JSON</span>
@@ -399,14 +541,20 @@ export function GatewayMonitor({
                 <div className="p-4 bg-zinc-950">
                   <JsonViewer data={JSON.stringify({
                     model: selectedRow.req.model,
+                    endpoint: selectedRow.req.path,
+                    status: selectedRow.req.status,
                     latency: selectedRow.req.latency,
+                    ttft: selectedRow.req.ttft,
                     usage: {
                       input: selectedRow.req.input_tokens,
-                      output: selectedRow.req.output_tokens
+                      output: selectedRow.req.output_tokens,
+                      cached: selectedRow.req.cached_tokens,
+                      reasoning: selectedRow.req.reasoning_tokens,
+                      total: selectedTotalTokens
                     },
                     finish_reason: selectedRow.req.finish_reason,
-                    raw_request: JSON.parse(selectedRow.req.request_body || '{}'),
-                    raw_response: selectedRow.req.response_body
+                    raw_request: parseJSONMaybe(selectedRow.req.request_body || ''),
+                    raw_response: parseJSONMaybe(selectedRow.req.response_body || '')
                   }, null, 2)} />
                 </div>
               </details>

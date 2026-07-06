@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -150,6 +151,9 @@ func TestParseSSEData(t *testing.T) {
 				}
 				if events[0].Usage.CompletionTokens != 5 {
 					t.Errorf("expected completion tokens 5, got %d", events[0].Usage.CompletionTokens)
+				}
+				if events[0].FirstTokenDuration != 123 {
+					t.Errorf("expected first token duration 123, got %d", events[0].FirstTokenDuration)
 				}
 			},
 		},
@@ -737,11 +741,69 @@ func TestUsageConsolidate_CachedAndReasoningTokens(t *testing.T) {
 	if u.TotalTokens != 300 {
 		t.Errorf("TotalTokens: got %d, want 300", u.TotalTokens)
 	}
+	if u.InputTokens != 100 {
+		t.Errorf("InputTokens: got %d, want 100", u.InputTokens)
+	}
+	if u.OutputTokens != 200 {
+		t.Errorf("OutputTokens: got %d, want 200", u.OutputTokens)
+	}
 	if u.CachedTokens != 50 {
 		t.Errorf("CachedTokens: got %d, want 50", u.CachedTokens)
 	}
 	if u.ReasoningTokens != 30 {
 		t.Errorf("ReasoningTokens: got %d, want 30", u.ReasoningTokens)
+	}
+
+	u = &Usage{
+		InputTokensDetails: &TokenDetails{
+			CachedTokens: 60,
+		},
+		OutputTokensDetails: &TokenDetails{
+			ReasoningTokens: 40,
+		},
+	}
+	u.Consolidate()
+	if u.CachedTokens != 60 || u.ReasoningTokens != 40 {
+		t.Errorf("OpenAI-style details = cached %d reasoning %d, want 60/40", u.CachedTokens, u.ReasoningTokens)
+	}
+
+	u = &Usage{PromptTokens: 10, CompletionTokens: 20}
+	u.Consolidate()
+	if u.InputTokens != 10 || u.OutputTokens != 20 || u.TotalTokens != 30 {
+		t.Errorf("Consolidate backfill = %+v, want input/output/total 10/20/30", u)
+	}
+}
+
+func TestUsageUnmarshal_NumericStrings(t *testing.T) {
+	var u Usage
+	if err := json.Unmarshal([]byte(`{"prompt_tokens":"12","completion_tokens":"5","total_tokens":"17"}`), &u); err != nil {
+		t.Fatalf("unmarshal usage: %v", err)
+	}
+	if u.PromptTokens != 12 || u.CompletionTokens != 5 || u.TotalTokens != 17 {
+		t.Fatalf("usage = %+v, want 12/5/17", u)
+	}
+	if u.InputTokens != 12 || u.OutputTokens != 5 {
+		t.Fatalf("aliases = %d/%d, want 12/5", u.InputTokens, u.OutputTokens)
+	}
+}
+
+func TestUsageUnmarshal_SkipsZeroAliases(t *testing.T) {
+	var u Usage
+	if err := json.Unmarshal([]byte(`{"input_tokens":0,"output_tokens":0,"inputTokenCount":12,"outputTokenCount":5}`), &u); err != nil {
+		t.Fatalf("unmarshal usage: %v", err)
+	}
+	if u.PromptTokens != 12 || u.CompletionTokens != 5 || u.InputTokens != 12 || u.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want prompt/completion/input/output 12/5/12/5", u)
+	}
+}
+
+func TestUsageUnmarshal_CacheInputTokenSum(t *testing.T) {
+	var u Usage
+	if err := json.Unmarshal([]byte(`{"cache_read_input_tokens":3,"cache_creation_input_tokens":4}`), &u); err != nil {
+		t.Fatalf("unmarshal usage: %v", err)
+	}
+	if u.CachedTokens != 7 {
+		t.Fatalf("cached tokens = %d, want 7", u.CachedTokens)
 	}
 }
 

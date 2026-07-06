@@ -159,7 +159,18 @@
       "preview": "预览",
       "tokens": "Token 消耗",
       "latency": "延迟",
-      "time": "时间"
+      "time": "时间",
+      "endpoint": "端点",
+      "result": "结果",
+      "ttft": "首字延迟",
+      "total_latency": "总延迟",
+      "speed": "生成速度",
+      "input": "输入",
+      "output": "输出",
+      "reasoning": "推理",
+      "cached": "缓存",
+      "total_tokens": "Token 总数",
+      "columns": "列"
     },
     "details": {
       "title": "请求详情",

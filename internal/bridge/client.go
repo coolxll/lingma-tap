@@ -80,8 +80,10 @@ type SSEEvent struct {
 	ToolCalls []ToolCallDelta
 	// FinishReason is set when the model finishes (e.g., "tool_calls", "stop")
 	FinishReason string
-	// Usage contains token usage info (from finish event)
+	// Usage contains token usage info (from finish/usage events)
 	Usage *Usage
+	// FirstTokenDuration is time-to-first-token in milliseconds from Lingma finish metadata.
+	FirstTokenDuration int
 	// HasError indicates the event contains an error
 	HasError bool
 	// ErrorMsg is the error message if HasError is true
@@ -112,6 +114,8 @@ type Usage struct {
 	// Nested details (for extraction from lingma response)
 	PromptTokensDetails     *TokenDetails `json:"prompt_tokens_details,omitempty"`
 	CompletionTokensDetails *TokenDetails `json:"completion_tokens_details,omitempty"`
+	InputTokensDetails      *TokenDetails `json:"input_tokens_details,omitempty"`
+	OutputTokensDetails     *TokenDetails `json:"output_tokens_details,omitempty"`
 }
 
 func (u *Usage) UnmarshalJSON(data []byte) error {
@@ -130,35 +134,72 @@ func (u *Usage) UnmarshalJSON(data []byte) error {
 	u.TotalTokens = firstInt(raw, u.TotalTokens, "total_tokens", "totalTokens", "totalTokenCount")
 	u.InputTokens = firstInt(raw, u.InputTokens, "input_tokens", "inputTokens", "prompt_tokens", "promptTokens", "inputTokenCount")
 	u.OutputTokens = firstInt(raw, u.OutputTokens, "output_tokens", "outputTokens", "completion_tokens", "completionTokens", "outputTokenCount")
-	u.CachedTokens = firstInt(raw, u.CachedTokens,
-		"cached_tokens", "cachedTokens", "cache_read_input_tokens", "cacheReadInputTokens",
+	u.CachedTokens = firstInt(raw, u.CachedTokens, "cached_tokens", "cachedTokens")
+	cacheInputTokens := sumInts(raw,
+		"cache_read_input_tokens", "cacheReadInputTokens",
 		"cache_creation_input_tokens", "cacheCreationInputTokens",
 	)
+	if u.CachedTokens == 0 && cacheInputTokens > 0 {
+		u.CachedTokens = cacheInputTokens
+	}
 	u.ReasoningTokens = firstInt(raw, u.ReasoningTokens, "reasoning_tokens", "reasoningTokens", "thinking_tokens", "thinkingTokens")
 
 	u.Consolidate()
 	return nil
 }
 
+func rawInt(raw map[string]json.RawMessage, key string) (int, bool) {
+	v, ok := raw[key]
+	if !ok || string(v) == "null" {
+		return 0, false
+	}
+	var n int
+	if err := json.Unmarshal(v, &n); err == nil {
+		return n, true
+	}
+	var f float64
+	if err := json.Unmarshal(v, &f); err == nil {
+		return int(f), true
+	}
+	var s string
+	if err := json.Unmarshal(v, &s); err == nil {
+		var parsed int
+		if _, err := fmt.Sscanf(s, "%d", &parsed); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
+}
+
 func firstInt(raw map[string]json.RawMessage, current int, keys ...string) int {
 	if current != 0 {
 		return current
 	}
+	foundZero := false
 	for _, key := range keys {
-		v, ok := raw[key]
-		if !ok || string(v) == "null" {
+		n, ok := rawInt(raw, key)
+		if !ok {
 			continue
 		}
-		var n int
-		if err := json.Unmarshal(v, &n); err == nil {
+		if n != 0 {
 			return n
 		}
-		var f float64
-		if err := json.Unmarshal(v, &f); err == nil {
-			return int(f)
-		}
+		foundZero = true
+	}
+	if foundZero {
+		return 0
 	}
 	return current
+}
+
+func sumInts(raw map[string]json.RawMessage, keys ...string) int {
+	total := 0
+	for _, key := range keys {
+		if n, ok := rawInt(raw, key); ok && n > 0 {
+			total += n
+		}
+	}
+	return total
 }
 
 // TokenDetails holds nested token detail fields.
@@ -174,17 +215,29 @@ func (u *Usage) Consolidate() {
 	if u.PromptTokens == 0 && u.InputTokens != 0 {
 		u.PromptTokens = u.InputTokens
 	}
+	if u.InputTokens == 0 && u.PromptTokens != 0 {
+		u.InputTokens = u.PromptTokens
+	}
 	if u.CompletionTokens == 0 && u.OutputTokens != 0 {
 		u.CompletionTokens = u.OutputTokens
+	}
+	if u.OutputTokens == 0 && u.CompletionTokens != 0 {
+		u.OutputTokens = u.CompletionTokens
 	}
 	if u.TotalTokens == 0 {
 		u.TotalTokens = u.PromptTokens + u.CompletionTokens
 	}
-	// Extract cached tokens from nested details
+	// Extract cached tokens from nested details.
+	if u.CachedTokens == 0 && u.InputTokensDetails != nil && u.InputTokensDetails.CachedTokens > 0 {
+		u.CachedTokens = u.InputTokensDetails.CachedTokens
+	}
 	if u.CachedTokens == 0 && u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
 		u.CachedTokens = u.PromptTokensDetails.CachedTokens
 	}
-	// Extract reasoning tokens from nested details
+	// Extract reasoning tokens from nested details.
+	if u.ReasoningTokens == 0 && u.OutputTokensDetails != nil && u.OutputTokensDetails.ReasoningTokens > 0 {
+		u.ReasoningTokens = u.OutputTokensDetails.ReasoningTokens
+	}
 	if u.ReasoningTokens == 0 && u.CompletionTokensDetails != nil && u.CompletionTokensDetails.ReasoningTokens > 0 {
 		u.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
 	}
@@ -305,7 +358,7 @@ func (c *LingmaClient) parseSSEData(data string, state *streamState) ([]SSEEvent
 		Usage              *Usage `json:"usage"`
 	}
 	if err := json.Unmarshal([]byte(data), &finish); err == nil && finish.TotalDuration > 0 {
-		event := SSEEvent{Type: "finish", Raw: []byte(data)}
+		event := SSEEvent{Type: "finish", Raw: []byte(data), FirstTokenDuration: finish.FirstTokenDuration}
 		if finish.Usage != nil {
 			finish.Usage.Consolidate()
 			event.Usage = finish.Usage

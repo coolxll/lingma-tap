@@ -244,6 +244,9 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 			// Skip truly empty data events (no content, reasoning, tool calls, or finish reason)
 			if event.Content == "" && event.ReasoningContent == "" && len(event.ToolCalls) == 0 && event.FinishReason == "" {
 				if event.Usage != nil {
+					usage = event.Usage
+					applyUsageToGatewayLog(gLog, usage)
+
 					// Still send usage info as a chunk
 					chunk := map[string]any{
 						"id":      reqID,
@@ -361,8 +364,7 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 			if event.Usage != nil {
 				chunk["usage"] = event.Usage
 				usage = event.Usage
-				gLog.InputTokens = event.Usage.PromptTokens
-				gLog.OutputTokens = event.Usage.CompletionTokens
+				applyUsageToGatewayLog(gLog, usage)
 			}
 
 			writeSSE(w, "data: ", chunk)
@@ -371,10 +373,9 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 			}
 
 		case "finish":
+			applyFinishEvent(gLog, event)
 			if event.Usage != nil {
 				usage = event.Usage
-				gLog.InputTokens = event.Usage.PromptTokens
-				gLog.OutputTokens = event.Usage.CompletionTokens
 			}
 			if !finishSent {
 				fReason := "stop"
@@ -474,6 +475,9 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 	})
 
 	if err != nil {
+		if recordContextError(ctx, gLog, startTime, err, h.recorder) {
+			return
+		}
 		// Error after headers sent — log but can't change status
 		gLog.Error = err.Error()
 		gLog.Status = 500
@@ -532,15 +536,18 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 			}
 			if event.Usage != nil {
 				usage = event.Usage
+				applyUsageToGatewayLog(gLog, usage)
 			}
+		case "finish":
+			applyFinishEvent(gLog, event)
 		}
 		return nil
 	})
 
 	if err != nil {
-		gLog.Error = err.Error()
-		gLog.Status = 500
-		h.recorder(gLog)
+		if recordStreamError(ctx, gLog, startTime, err, h.recorder) {
+			return
+		}
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -643,10 +650,7 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 	// Finalize Log
 	gLog.Status = 200
 	h.captureResponseBytes(gLog, respBytes)
-	if usage != nil {
-		gLog.InputTokens = usage.PromptTokens
-		gLog.OutputTokens = usage.CompletionTokens
-	}
+	applyUsageToGatewayLog(gLog, usage)
 	gLog.Latency = time.Since(startTime).Milliseconds()
 	gLog.FinishReason = finishReason
 	h.recorder(gLog)

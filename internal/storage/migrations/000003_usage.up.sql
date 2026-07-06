@@ -1,0 +1,4 @@
+ALTER TABLE gateway_logs ADD COLUMN cached_tokens INTEGER DEFAULT 0;
+ALTER TABLE gateway_logs ADD COLUMN reasoning_tokens INTEGER DEFAULT 0;
+ALTER TABLE gateway_logs ADD COLUMN total_tokens INTEGER DEFAULT 0;
+ALTER TABLE gateway_logs ADD COLUMN ttft INTEGER DEFAULT 0;
