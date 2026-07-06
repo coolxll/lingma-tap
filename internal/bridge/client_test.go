@@ -218,6 +218,123 @@ func TestParseSSEData(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "native tool calls",
+			data: `{"choices":[{"delta":{"content":"Let me check.","tool_calls":[{"index":0,"id":"call_native","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":3}}`,
+			check: func(t *testing.T, events []SSEEvent, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				var text string
+				var toolCalls []ToolCallDelta
+				var usage *Usage
+				for i := range events {
+					text += events[i].Content
+					toolCalls = append(toolCalls, events[i].ToolCalls...)
+					if events[i].Usage != nil {
+						usage = events[i].Usage
+					}
+				}
+				if text != "Let me check." {
+					t.Fatalf("content = %q, want Let me check.", text)
+				}
+				if len(toolCalls) != 1 {
+					t.Fatalf("expected one native tool call, got %+v", toolCalls)
+				}
+				tc := toolCalls[0]
+				if tc.Index != 0 || tc.ID != "call_native" || tc.Name != "read_file" || tc.Arguments != `{"path":"README.md"}` {
+					t.Fatalf("unexpected native tool call: %+v", tc)
+				}
+				if usage == nil || usage.PromptTokens != 10 || usage.CompletionTokens != 3 {
+					t.Fatalf("expected usage 10/3, got %+v", usage)
+				}
+			},
+		},
+		{
+			name: "native tool calls take precedence over XML fallback",
+			data: `{"choices":[{"delta":{"content":"<tool_call>{\"name\":\"xml_tool\",\"arguments\":{\"path\":\"xml.md\"}}</tool_call>","tool_calls":[{"index":0,"id":"call_native","type":"function","function":{"name":"native_tool","arguments":"{\"path\":\"native.md\"}"}}]},"finish_reason":"tool_calls"}]}`,
+			check: func(t *testing.T, events []SSEEvent, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				var text string
+				var toolCalls []ToolCallDelta
+				for _, event := range events {
+					text += event.Content
+					toolCalls = append(toolCalls, event.ToolCalls...)
+				}
+				if strings.Contains(text, "tool_call") {
+					t.Fatalf("tool XML leaked into text: %q", text)
+				}
+				if len(toolCalls) != 1 {
+					t.Fatalf("expected only native tool call, got %+v", toolCalls)
+				}
+				if toolCalls[0].Name != "native_tool" || toolCalls[0].Arguments != `{"path":"native.md"}` {
+					t.Fatalf("unexpected tool call: %+v", toolCalls[0])
+				}
+			},
+		},
+		{
+			name: "usage camelCase aliases",
+			data: `{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"inputTokens":123,"outputTokens":45,"totalTokens":168}}`,
+			check: func(t *testing.T, events []SSEEvent, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				var usageEv *SSEEvent
+				for i := range events {
+					if events[i].Usage != nil {
+						usageEv = &events[i]
+						break
+					}
+				}
+				if usageEv == nil {
+					t.Fatalf("expected usage in events, got nil")
+				}
+				if usageEv.Usage.PromptTokens != 123 {
+					t.Errorf("expected prompt tokens 123, got %d", usageEv.Usage.PromptTokens)
+				}
+				if usageEv.Usage.CompletionTokens != 45 {
+					t.Errorf("expected completion tokens 45, got %d", usageEv.Usage.CompletionTokens)
+				}
+				if usageEv.Usage.TotalTokens != 168 {
+					t.Errorf("expected total tokens 168, got %d", usageEv.Usage.TotalTokens)
+				}
+			},
+		},
+		{
+			name: "tool call XML is converted and not emitted as text",
+			data: `{"choices":[{"delta":{"content":"before <tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"README.md\"}}</tool_call> after"},"finish_reason":"tool_calls"}]}`,
+			check: func(t *testing.T, events []SSEEvent, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				var text string
+				var toolCalls []ToolCallDelta
+				for _, event := range events {
+					text += event.Content
+					toolCalls = append(toolCalls, event.ToolCalls...)
+				}
+				if len(events) < 3 || events[0].Content != "before " || len(events[1].ToolCalls) != 1 || events[2].Content != " after" {
+					t.Fatalf("tool XML events were not emitted in order: %+v", events)
+				}
+				if strings.Contains(text, "tool_call") {
+					t.Fatalf("tool XML leaked into text: %q", text)
+				}
+				if text != "before  after" {
+					t.Fatalf("unexpected text content: %q", text)
+				}
+				if len(toolCalls) != 1 {
+					t.Fatalf("expected one tool call, got %+v", toolCalls)
+				}
+				if toolCalls[0].Name != "read_file" {
+					t.Errorf("tool name = %q, want read_file", toolCalls[0].Name)
+				}
+				if toolCalls[0].Arguments != `{"path":"README.md"}` {
+					t.Errorf("tool args = %q", toolCalls[0].Arguments)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -229,11 +346,190 @@ func TestParseSSEData(t *testing.T) {
 	}
 }
 
+func TestSplitContentEventsToolXMLAcrossChunks(t *testing.T) {
+	state := &streamState{}
+
+	first := state.splitContentEvents("before <tool_", true)
+	if len(first) != 1 || first[0].Content != "before " {
+		t.Fatalf("unexpected first chunk events: %+v", first)
+	}
+
+	second := state.splitContentEvents(`call name="read_file">{"path":"README.md"}</tool_call> after`, true)
+	if len(second) != 2 {
+		t.Fatalf("unexpected second chunk event count: %+v", second)
+	}
+	if len(second[0].ToolCalls) != 1 {
+		t.Fatalf("expected tool call first, got %+v", second)
+	}
+	if second[0].ToolCalls[0].Name != "read_file" {
+		t.Fatalf("tool name = %q, want read_file", second[0].ToolCalls[0].Name)
+	}
+	if second[0].ToolCalls[0].Arguments != `{"path":"README.md"}` {
+		t.Fatalf("tool args = %q", second[0].ToolCalls[0].Arguments)
+	}
+	if second[1].Content != " after" {
+		t.Fatalf("expected trailing text, got %+v", second[1])
+	}
+}
+
+func TestSplitContentEventsToolXMLDirectArgumentFields(t *testing.T) {
+	state := &streamState{}
+	events := state.splitContentEvents(`<tool_call>{"name":"read_file","path":"README.md","limit":20}</tool_call>`, true)
+	if len(events) != 1 || len(events[0].ToolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %+v", events)
+	}
+	tc := events[0].ToolCalls[0]
+	if tc.Name != "read_file" {
+		t.Fatalf("tool name = %q, want read_file", tc.Name)
+	}
+	if tc.Arguments != `{"limit":20,"path":"README.md"}` {
+		t.Fatalf("tool args = %q", tc.Arguments)
+	}
+}
+
+func TestSplitContentEventsNativeModeStripsXMLWithoutConverting(t *testing.T) {
+	state := &streamState{}
+	events := state.splitContentEvents(`before <tool_call>{"name":"xml_tool","arguments":{"path":"xml.md"}}</tool_call> after`, false)
+	if len(events) != 1 {
+		t.Fatalf("expected one text event, got %+v", events)
+	}
+	if events[0].Content != "before  after" {
+		t.Fatalf("content = %q, want stripped text", events[0].Content)
+	}
+	if len(events[0].ToolCalls) != 0 {
+		t.Fatalf("expected no XML fallback tool calls in native mode, got %+v", events[0].ToolCalls)
+	}
+}
+
+func TestSplitContentEventsNativeModeClearsPendingXMLFallback(t *testing.T) {
+	state := &streamState{}
+	first := state.splitContentEvents("before <tool_", true)
+	if len(first) != 1 || first[0].Content != "before " {
+		t.Fatalf("unexpected first chunk events: %+v", first)
+	}
+
+	native := state.splitContentEvents("native text", false)
+	if len(native) != 1 || native[0].Content != "native text" {
+		t.Fatalf("unexpected native chunk events: %+v", native)
+	}
+	if state.toolXMLPrefix != "" || state.inToolXML || state.toolXMLBuffer.Len() != 0 {
+		t.Fatalf("pending XML fallback state was not cleared")
+	}
+	if flushed := state.flushPendingContentEvents(); len(flushed) != 0 {
+		t.Fatalf("pending XML fallback leaked after native tool call mode: %+v", flushed)
+	}
+}
+
+func TestSplitContentEventsSplitCloseTagAcrossChunks(t *testing.T) {
+	open := string([]byte{60}) + "tool_call"
+	closePartial := string([]byte{60, 47}) + "tool_"
+	state := &streamState{}
+
+	// First chunk: opening tag + payload, closing tag split (ends with partial close)
+	first := state.splitContentEvents("before "+open+">"+`{"name":"read_file","arguments":{"path":"README.md"}}`+closePartial, true)
+	if len(first) != 1 || first[0].Content != "before " {
+		t.Fatalf("unexpected first chunk events: %+v", first)
+	}
+	if !state.inToolXML {
+		t.Fatal("expected inToolXML to be true after partial close tag")
+	}
+
+	// Second chunk: completes the closing tag "call>" plus trailing text
+	second := state.splitContentEvents("call> after", true)
+	if len(second) != 2 {
+		t.Fatalf("unexpected second chunk event count: %d, got %+v", len(second), second)
+	}
+	if len(second[0].ToolCalls) != 1 {
+		t.Fatalf("expected tool call first, got %+v", second)
+	}
+	if second[0].ToolCalls[0].Name != "read_file" {
+		t.Fatalf("tool name = %q, want read_file", second[0].ToolCalls[0].Name)
+	}
+	if second[0].ToolCalls[0].Arguments != `{"path":"README.md"}` {
+		t.Fatalf("tool args = %q", second[0].ToolCalls[0].Arguments)
+	}
+	if second[1].Content != " after" {
+		t.Fatalf("expected trailing text, got %+v", second[1])
+	}
+}
+
+func TestSplitContentEventsLoneAngleBracketStartsMarker(t *testing.T) {
+	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
+	lt := string([]byte{60})
+	state := &streamState{}
+
+	// First chunk ends with a lone angle bracket that could start a tool call marker
+	first := state.splitContentEvents("before "+lt, true)
+	if len(first) != 1 || first[0].Content != "before " {
+		t.Fatalf("unexpected first chunk events: %+v", first)
+	}
+	if state.toolXMLPrefix != lt {
+		t.Fatalf("expected pending prefix %q, got %q", lt, state.toolXMLPrefix)
+	}
+
+	// Second chunk completes the marker and payload
+	second := state.splitContentEvents("tool_call>"+`{"name":"read_file","arguments":{"path":"README.md"}}`+closeTag+" after", true)
+	if len(second) != 2 {
+		t.Fatalf("unexpected second chunk event count: %d, got %+v", len(second), second)
+	}
+	if len(second[0].ToolCalls) != 1 {
+		t.Fatalf("expected tool call first, got %+v", second)
+	}
+	if second[0].ToolCalls[0].Name != "read_file" {
+		t.Fatalf("tool name = %q, want read_file", second[0].ToolCalls[0].Name)
+	}
+	if second[0].ToolCalls[0].Arguments != `{"path":"README.md"}` {
+		t.Fatalf("tool args = %q", second[0].ToolCalls[0].Arguments)
+	}
+	if second[1].Content != " after" {
+		t.Fatalf("expected trailing text, got %+v", second[1])
+	}
+}
+
+func TestSplitContentEventsLoneAngleBracketNotMarker(t *testing.T) {
+	lt := string([]byte{60})
+	state := &streamState{}
+
+	// First chunk ends with a lone angle bracket that is NOT part of a tool call marker
+	first := state.splitContentEvents("hello "+lt, true)
+	if len(first) != 1 || first[0].Content != "hello " {
+		t.Fatalf("unexpected first chunk events: %+v", first)
+	}
+	if state.toolXMLPrefix != lt {
+		t.Fatalf("expected pending prefix %q, got %q", lt, state.toolXMLPrefix)
+	}
+
+	// Second chunk does not continue the marker - bracket should be emitted as text
+	second := state.splitContentEvents(" world", true)
+	if len(second) != 1 || second[0].Content != lt+" world" {
+		t.Fatalf("expected bracket+space+world as text, got %+v", second)
+	}
+	if state.toolXMLPrefix != "" {
+		t.Fatalf("expected no pending prefix, got %q", state.toolXMLPrefix)
+	}
+}
+
+func TestSplitContentEventsLoneAngleBracketFlushedAsText(t *testing.T) {
+	lt := string([]byte{60})
+	state := &streamState{}
+
+	// Chunk ends with a lone angle bracket and stream ends - prefix should flush as text
+	first := state.splitContentEvents("hello "+lt, true)
+	if len(first) != 1 || first[0].Content != "hello " {
+		t.Fatalf("unexpected first chunk events: %+v", first)
+	}
+
+	flushed := state.flushPendingContentEvents()
+	if len(flushed) != 1 || flushed[0].Content != lt {
+		t.Fatalf("expected lone angle bracket flushed as text, got %+v", flushed)
+	}
+}
+
 func TestSplitThoughtTags(t *testing.T) {
 	tests := []struct {
-		name     string
-		content  string
-		inThought bool
+		name          string
+		content       string
+		inThought     bool
 		wantContent   []string
 		wantReasoning []string
 		wantInThought bool
@@ -684,5 +980,168 @@ func TestBuildLingmaChatURL(t *testing.T) {
 				t.Errorf("buildLingmaChatURL(%q) = %q, want %q", tt.agentID, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseToolCallXML_FallbackChains(t *testing.T) {
+	open := string([]byte{60}) + "tool_call"
+	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
+
+	tests := []struct {
+		name     string
+		xmlBlock string
+		wantName string
+		wantArgs string
+	}{
+		{
+			name:     "JSON with name and arguments",
+			xmlBlock: open + ">" + `{"name":"read_file","arguments":{"path":"README.md"}}` + closeTag,
+			wantName: "read_file",
+			wantArgs: `{"path":"README.md"}`,
+		},
+		{
+			name:     "JSON with tool_name fallback",
+			xmlBlock: open + ">" + `{"tool_name":"write_file","arguments":{"path":"out.txt"}}` + closeTag,
+			wantName: "write_file",
+			wantArgs: `{"path":"out.txt"}`,
+		},
+		{
+			name:     "JSON with tool fallback",
+			xmlBlock: open + ">" + `{"tool":"list_dir","arguments":{"dir":"/tmp"}}` + closeTag,
+			wantName: "list_dir",
+			wantArgs: `{"dir":"/tmp"}`,
+		},
+		{
+			name:     "JSON with toolName fallback",
+			xmlBlock: open + ">" + `{"toolName":"run_cmd","arguments":{"cmd":"ls"}}` + closeTag,
+			wantName: "run_cmd",
+			wantArgs: `{"cmd":"ls"}`,
+		},
+		{
+			name:     "name from XML attribute",
+			xmlBlock: open + ` name="attr_tool">` + `{"arguments":{"key":"val"}}` + closeTag,
+			wantName: "attr_tool",
+			wantArgs: `{"key":"val"}`,
+		},
+		{
+			name:     "XML field name and arguments fallback",
+			xmlBlock: open + ">" + string([]byte{60}) + "name>xml_field_tool" + string([]byte{60, 47}) + "name>" + string([]byte{60}) + "arguments>" + `{"x":1}` + string([]byte{60, 47}) + "arguments>" + closeTag,
+			wantName: "xml_field_tool",
+			wantArgs: `{"x":1}`,
+		},
+		{
+			name:     "function sub-object fallback",
+			xmlBlock: open + ">" + `{"function":{"name":"fn_tool","arguments":{"a":"b"}}}` + closeTag,
+			wantName: "fn_tool",
+			wantArgs: `{"a":"b"}`,
+		},
+		{
+			name:     "input/parameters/args fallback",
+			xmlBlock: open + ">" + `{"name":"p_tool","input":{"p":1}}` + closeTag,
+			wantName: "p_tool",
+			wantArgs: `{"p":1}`,
+		},
+		{
+			name:     "direct argument fields fallback",
+			xmlBlock: open + ">" + `{"name":"direct_tool","path":"README.md","limit":20}` + closeTag,
+			wantName: "direct_tool",
+			wantArgs: `{"limit":20,"path":"README.md"}`,
+		},
+		{
+			name:     "name from XML attribute with id",
+			xmlBlock: open + ` name="id_tool" id="call_123">` + `{"key":"val"}` + closeTag,
+			wantName: "id_tool",
+			wantArgs: `{"key":"val"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc, ok := parseToolCallXML(tt.xmlBlock, 0)
+			if !ok {
+				t.Fatalf("parseToolCallXML returned false for %q", tt.xmlBlock)
+			}
+			if tc.Name != tt.wantName {
+				t.Errorf("name = %q, want %q", tc.Name, tt.wantName)
+			}
+			if tc.Arguments != tt.wantArgs {
+				t.Errorf("args = %q, want %q", tc.Arguments, tt.wantArgs)
+			}
+		})
+	}
+}
+
+func TestParseToolCallXML_NoName(t *testing.T) {
+	open := string([]byte{60}) + "tool_call"
+	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
+	xmlBlock := open + ">" + `{"arguments":{"x":1}}` + closeTag
+	_, ok := parseToolCallXML(xmlBlock, 0)
+	if ok {
+		t.Error("expected false when no name can be resolved")
+	}
+}
+
+func TestExtractXMLAttr_GTInValue(t *testing.T) {
+	open := string([]byte{60}) + "tool_call"
+	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
+	s := open + ` name="a>b" id="call_1">` + `{"x":1}` + closeTag
+	name := extractXMLAttr(s, "name")
+	if name != "a>b" {
+		t.Errorf("name = %q, want %q", name, "a>b")
+	}
+	id := extractXMLAttr(s, "id")
+	if id != "call_1" {
+		t.Errorf("id = %q, want %q", id, "call_1")
+	}
+}
+
+func TestExtractXMLAttr_SingleQuotes(t *testing.T) {
+	open := string([]byte{60}) + "tool_call"
+	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
+	s := open + ` name='single_quote'>` + `{"x":1}` + closeTag
+	name := extractXMLAttr(s, "name")
+	if name != "single_quote" {
+		t.Errorf("name = %q, want %q", name, "single_quote")
+	}
+}
+
+func TestStripOuterToolTag_GTInAttr(t *testing.T) {
+	open := string([]byte{60}) + "tool_call"
+	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
+	xmlBlock := open + ` name="a>b">` + `{"path":"README.md"}` + closeTag
+	inner := stripOuterToolTag(xmlBlock)
+	if inner != `{"path":"README.md"}` {
+		t.Errorf("inner = %q, want %q", inner, `{"path":"README.md"}`)
+	}
+}
+
+func TestStripCompleteToolXML_UnclosedTag(t *testing.T) {
+	open := string([]byte{60}) + "tool_call"
+	content := "before text " + open + ` name="test">` + `{"x":1}` + " trailing content"
+	result := stripCompleteToolXML(content)
+	// Unclosed tags should be preserved as-is, not stripped or dropped
+	if result != content {
+		t.Errorf("result = %q, want %q (unclosed tag should be preserved)", result, content)
+	}
+}
+
+func TestStripCompleteToolXML_NoTags(t *testing.T) {
+	content := "just regular text"
+	result := stripCompleteToolXML(content)
+	if result != content {
+		t.Errorf("result = %q, want %q", result, content)
+	}
+}
+
+func TestStripCompleteToolXML_MixedClosedAndUnclosed(t *testing.T) {
+	open := string([]byte{60}) + "tool_call"
+	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
+	unclosed := open + ` name="y">` + `{"q":2}`
+	content := "a " + open + ` name="x">` + `{"p":1}` + closeTag + " b " + unclosed
+	result := stripCompleteToolXML(content)
+	// Closed tag stripped, unclosed tag preserved
+	want := "a  b " + unclosed
+	if result != want {
+		t.Errorf("result = %q, want %q", result, want)
 	}
 }

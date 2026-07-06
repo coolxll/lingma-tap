@@ -377,14 +377,43 @@ func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
 		VALUES (:ts, :session, :model, :method, :path, :request_body, :response_body,
 			:input_tokens, :output_tokens, :status, :latency, :error, :is_sse, :sse_events_json, :finish_reason)
 		ON CONFLICT(session) DO UPDATE SET
-			response_body = excluded.response_body,
-			output_tokens = excluded.output_tokens,
-			status = excluded.status,
-			latency = excluded.latency,
-			error = excluded.error,
+			model = excluded.model,
+			method = excluded.method,
+			path = excluded.path,
+			request_body = excluded.request_body,
+			response_body = CASE
+				WHEN excluded.status = 0 AND gateway_logs.status > 0 THEN gateway_logs.response_body
+				ELSE excluded.response_body
+			END,
+			input_tokens = CASE
+				WHEN excluded.status = 0 AND gateway_logs.input_tokens > 0 THEN gateway_logs.input_tokens
+				ELSE excluded.input_tokens
+			END,
+			output_tokens = CASE
+				WHEN excluded.status = 0 AND gateway_logs.output_tokens > 0 THEN gateway_logs.output_tokens
+				ELSE excluded.output_tokens
+			END,
+			status = CASE
+				WHEN excluded.status = 0 AND gateway_logs.status > 0 THEN gateway_logs.status
+				ELSE excluded.status
+			END,
+			latency = CASE
+				WHEN excluded.status = 0 AND gateway_logs.latency > 0 THEN gateway_logs.latency
+				ELSE excluded.latency
+			END,
+			error = CASE
+				WHEN excluded.status = 0 AND gateway_logs.status > 0 THEN gateway_logs.error
+				ELSE excluded.error
+			END,
 			is_sse = excluded.is_sse,
-			sse_events_json = excluded.sse_events_json,
-			finish_reason = excluded.finish_reason
+			sse_events_json = CASE
+				WHEN excluded.status = 0 AND gateway_logs.status > 0 THEN gateway_logs.sse_events_json
+				ELSE excluded.sse_events_json
+			END,
+			finish_reason = CASE
+				WHEN excluded.status = 0 AND gateway_logs.status > 0 THEN gateway_logs.finish_reason
+				ELSE excluded.finish_reason
+			END
 	`, log)
 	return err
 }

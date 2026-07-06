@@ -2,6 +2,8 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
+
 	"github.com/coolxll/lingma-tap/internal/auth"
 	"github.com/coolxll/lingma-tap/internal/proto"
 )
@@ -17,6 +19,7 @@ type BridgeHandler struct {
 	recorder     func(*proto.GatewayLog)
 	modelMapping map[string]string
 	defaultModel string
+	payloads     func() bool
 	Debug        bool
 }
 
@@ -27,8 +30,48 @@ func NewBridgeHandler(session *auth.Session, recorder func(*proto.GatewayLog)) *
 		recorder:     recorder,
 		modelMapping: make(map[string]string),
 		defaultModel: "dashscope_qmodel",
+		payloads:     func() bool { return true },
 	}
 	return h
+}
+
+// SetPayloadLoggingFunc controls whether full request/response payloads are captured for gateway logs.
+func (h *BridgeHandler) SetPayloadLoggingFunc(fn func() bool) {
+	if fn == nil {
+		h.payloads = func() bool { return true }
+		return
+	}
+	h.payloads = fn
+}
+
+func (h *BridgeHandler) shouldRecordPayloads() bool {
+	if h == nil || h.payloads == nil {
+		return true
+	}
+	return h.payloads()
+}
+
+func (h *BridgeHandler) captureRequestBody(body map[string]any) string {
+	if !h.shouldRecordPayloads() {
+		return ""
+	}
+	b, _ := json.Marshal(body)
+	return string(b)
+}
+
+func (h *BridgeHandler) captureResponseBody(log *proto.GatewayLog, resp any) {
+	if !h.shouldRecordPayloads() {
+		return
+	}
+	b, _ := json.Marshal(resp)
+	log.ResponseBody = string(b)
+}
+
+func (h *BridgeHandler) captureResponseBytes(log *proto.GatewayLog, resp []byte) {
+	if !h.shouldRecordPayloads() {
+		return
+	}
+	log.ResponseBody = string(resp)
 }
 
 // SetDebug enables or disables debug logging for the bridge and its client.

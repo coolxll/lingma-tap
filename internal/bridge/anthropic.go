@@ -119,7 +119,8 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 		Model:       modelKey,
 		Method:      r.Method,
 		Path:        r.URL.Path,
-		RequestBody: func() string { b, _ := json.Marshal(body); return string(b) }(),
+		RequestBody: h.captureRequestBody(body),
+		IsSSE:       stream,
 	}
 	startTime := time.Now()
 	h.recorder(gLog)
@@ -461,6 +462,7 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	var fullContent strings.Builder
 	toolCalls := make(map[int]*toolCallState)
 	finalized := false
+	recordPayloads := h.shouldRecordPayloads()
 
 	stopThinking := func() {
 		if thinkingBlockStarted {
@@ -529,35 +531,35 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 		gLog.FinishReason = stopReason
 		gLog.Latency = time.Since(startTime).Milliseconds()
 
-		// Build a summary of the response for the log
-		var content []map[string]any
-		if fullReasoning.Len() > 0 {
-			content = append(content, map[string]any{"type": "thinking", "thinking": fullReasoning.String()})
-		}
-		if fullContent.Len() > 0 {
-			content = append(content, map[string]any{"type": "text", "text": fullContent.String()})
-		}
-		for _, tc := range toolCalls {
-			var input map[string]any
-			if err := json.Unmarshal([]byte(tc.args.String()), &input); err != nil {
-				input = map[string]any{"_error": "failed to parse arguments", "raw": tc.args.String()}
+		if recordPayloads {
+			var content []map[string]any
+			if fullReasoning.Len() > 0 {
+				content = append(content, map[string]any{"type": "thinking", "thinking": fullReasoning.String()})
 			}
-			content = append(content, map[string]any{
-				"type":  "tool_use",
-				"id":    tc.id,
-				"name":  tc.name,
-				"input": input,
-			})
+			if fullContent.Len() > 0 {
+				content = append(content, map[string]any{"type": "text", "text": fullContent.String()})
+			}
+			for _, tc := range toolCalls {
+				var input map[string]any
+				if err := json.Unmarshal([]byte(tc.args.String()), &input); err != nil {
+					input = map[string]any{"_error": "failed to parse arguments", "raw": tc.args.String()}
+				}
+				content = append(content, map[string]any{
+					"type":  "tool_use",
+					"id":    tc.id,
+					"name":  tc.name,
+					"input": input,
+				})
+			}
+			respSummary := map[string]any{
+				"id":      msgID,
+				"role":    "assistant",
+				"model":   modelKey,
+				"content": content,
+				"usage":   usage,
+			}
+			h.captureResponseBody(gLog, respSummary)
 		}
-		respSummary := map[string]any{
-			"id":      msgID,
-			"role":    "assistant",
-			"model":   modelKey,
-			"content": content,
-			"usage":   usage,
-		}
-		respBytes, _ := json.Marshal(respSummary)
-		gLog.ResponseBody = string(respBytes)
 		h.recorder(gLog)
 	}
 
@@ -566,7 +568,9 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 		case "data":
 			// Handle reasoning content (thinking blocks)
 			if event.ReasoningContent != "" {
-				fullReasoning.WriteString(event.ReasoningContent)
+				if recordPayloads {
+					fullReasoning.WriteString(event.ReasoningContent)
+				}
 				if !thinkingBlockStarted {
 					stopThinking() // defensive: close any stale thinking block
 					thinkingBlockIndex = state.nextIndex()
@@ -613,7 +617,9 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			if event.Content != "" {
 				// Close thinking block before starting text
 				stopThinking()
-				fullContent.WriteString(event.Content)
+				if recordPayloads {
+					fullContent.WriteString(event.Content)
+				}
 				if !state.textBlockStarted {
 					idx := state.nextIndex()
 					writeAnthropicSSE(w, "content_block_start", map[string]any{
@@ -665,7 +671,9 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 					toolCalls[tc.Index].name = tc.Name
 				}
 				if tc.Arguments != "" {
-					toolCalls[tc.Index].args.WriteString(tc.Arguments)
+					if recordPayloads {
+						toolCalls[tc.Index].args.WriteString(tc.Arguments)
+					}
 				}
 
 				// Send content_block_start if not started
@@ -946,7 +954,7 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 
 	// Finalize Log
 	gLog.Status = 200
-	gLog.ResponseBody = string(respBytes)
+	h.captureResponseBytes(gLog, respBytes)
 	gLog.InputTokens = usage.PromptTokens
 	gLog.OutputTokens = usage.CompletionTokens
 	gLog.Latency = time.Since(startTime).Milliseconds()

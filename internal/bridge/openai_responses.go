@@ -20,14 +20,14 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 	}
 
 	var req struct {
-		Model          string           `json:"model"`
-		Input          any              `json:"input"` // string or array of content items
-		Tools          []map[string]any `json:"tools"`
-		ToolChoice     any              `json:"tool_choice"`
-		Stream         bool             `json:"stream"`
-		Temperature    *float64         `json:"temperature"`
-		MaxTokens      *int             `json:"max_output_tokens"`
-		ReasoningEffort string          `json:"reasoning_effort"`
+		Model           string           `json:"model"`
+		Input           any              `json:"input"` // string or array of content items
+		Tools           []map[string]any `json:"tools"`
+		ToolChoice      any              `json:"tool_choice"`
+		Stream          bool             `json:"stream"`
+		Temperature     *float64         `json:"temperature"`
+		MaxTokens       *int             `json:"max_output_tokens"`
+		ReasoningEffort string           `json:"reasoning_effort"`
 	}
 
 	// Read raw body for deterministic session_id
@@ -73,7 +73,8 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 		Model:       modelKey,
 		Method:      r.Method,
 		Path:        r.URL.Path,
-		RequestBody: func() string { b, _ := json.Marshal(body); return string(b) }(),
+		RequestBody: h.captureRequestBody(body),
+		IsSSE:       req.Stream,
 	}
 	startTime := time.Now()
 	h.recorder(gLog)
@@ -110,7 +111,7 @@ func responsesInputToMessages(input any) []map[string]any {
 					id = "call_" + newUUID()[:24]
 				}
 				messages = append(messages, map[string]any{
-					"role": "assistant",
+					"role":    "assistant",
 					"content": nil,
 					"tool_calls": []map[string]any{
 						{"id": id, "type": "function", "function": map[string]any{"name": name, "arguments": args}},
@@ -191,6 +192,7 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 	var usage *Usage
 	var fullContent strings.Builder
 	var fullReasoning strings.Builder
+	recordPayloads := h.shouldRecordPayloads()
 
 	upstreamErrored := false
 
@@ -244,7 +246,7 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 					reasoningBlockStarted = true
 				}
 				writeSSE(w, "", map[string]any{
-					"type":  "response.reasoning_text.delta",
+					"type":    "response.reasoning_text.delta",
 					"item_id": reasoningID,
 					"delta":   event.ReasoningContent,
 				})
@@ -254,7 +256,9 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 			}
 			// Handle text content
 			if event.Content != "" {
-				fullContent.WriteString(event.Content)
+				if recordPayloads {
+					fullContent.WriteString(event.Content)
+				}
 				if !textBlockStarted {
 					textBlockIndex = len(toolCallIndices)
 					// Start a text output block
@@ -329,7 +333,7 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 				// Emit argument delta
 				if tc.Arguments != "" {
 					writeSSE(w, "", map[string]any{
-						"type":  "response.function_call_arguments.delta",
+						"type":    "response.function_call_arguments.delta",
 						"item_id": state.id,
 						"delta":   tc.Arguments,
 					})
@@ -367,9 +371,9 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 					"type":  "response.output_item.done",
 					"index": reasoningBlockIndex,
 					"item": map[string]any{
-						"type":    "reasoning",
-						"id":      reasoningID,
-						"status":  "completed",
+						"type":   "reasoning",
+						"id":     reasoningID,
+						"status": "completed",
 						"content": []map[string]any{
 							{"type": "reasoning_text", "text": fullReasoning.String()},
 						},
@@ -414,44 +418,44 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 				gLog.OutputTokens = usage.CompletionTokens
 			}
 
-			// Build output array for log
-			output := []map[string]any{}
-			if fullReasoning.Len() > 0 {
-				output = append(output, map[string]any{
-					"type": "reasoning",
-					"id":   "reason_" + newUUID()[:24],
-					"content": []map[string]any{
-						{"type": "reasoning_text", "text": fullReasoning.String()},
-					},
-				})
+			if recordPayloads {
+				output := []map[string]any{}
+				if fullReasoning.Len() > 0 {
+					output = append(output, map[string]any{
+						"type": "reasoning",
+						"id":   "reason_" + newUUID()[:24],
+						"content": []map[string]any{
+							{"type": "reasoning_text", "text": fullReasoning.String()},
+						},
+					})
+				}
+				if fullContent.Len() > 0 {
+					output = append(output, map[string]any{
+						"type": "message",
+						"role": "assistant",
+						"content": []map[string]any{
+							{"type": "text", "text": fullContent.String()},
+						},
+					})
+				}
+				for _, tc := range toolCalls {
+					output = append(output, map[string]any{
+						"type":      "function_call",
+						"id":        tc.id,
+						"name":      tc.name,
+						"arguments": tc.args.String(),
+					})
+				}
+				respSummary := map[string]any{
+					"id":     respID,
+					"object": "response",
+					"status": "completed",
+					"model":  modelKey,
+					"output": output,
+					"usage":  usage,
+				}
+				h.captureResponseBody(gLog, respSummary)
 			}
-			if fullContent.Len() > 0 {
-				output = append(output, map[string]any{
-					"type": "message",
-					"role": "assistant",
-					"content": []map[string]any{
-						{"type": "text", "text": fullContent.String()},
-					},
-				})
-			}
-			for _, tc := range toolCalls {
-				output = append(output, map[string]any{
-					"type":      "function_call",
-					"id":        tc.id,
-					"name":      tc.name,
-					"arguments": tc.args.String(),
-				})
-			}
-			respSummary := map[string]any{
-				"id":     respID,
-				"object": "response",
-				"status": "completed",
-				"model":  modelKey,
-				"output": output,
-				"usage":  usage,
-			}
-			respBytes, _ := json.Marshal(respSummary)
-			gLog.ResponseBody = string(respBytes)
 			h.recorder(gLog)
 		}
 		return nil
@@ -584,7 +588,7 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 
 	// Finalize Log
 	gLog.Status = 200
-	gLog.ResponseBody = string(respBytes)
+	h.captureResponseBytes(gLog, respBytes)
 	if usage != nil {
 		gLog.InputTokens = usage.PromptTokens
 		gLog.OutputTokens = usage.CompletionTokens

@@ -156,6 +156,35 @@ func TestSetLogging(t *testing.T) {
 	}
 }
 
+func TestGatewayLogSnapshotOmitsPayloadsOnly(t *testing.T) {
+	src := &proto.GatewayLog{
+		RequestBody:  `{"messages":[{"role":"user","content":"secret prompt"}]}`,
+		Session:      "s1",
+		ResponseBody: `{"text":"hello"}`,
+		InputTokens:  12,
+		OutputTokens: 3,
+		Status:       200,
+		SSEEvents:    []proto.SSEEvent{{EventType: "data", Data: "chunk"}},
+	}
+
+	snapshot := gatewayLogSnapshot(src, false)
+	if snapshot.RequestBody != "" {
+		t.Fatalf("expected request body to be omitted, got %q", snapshot.RequestBody)
+	}
+	if snapshot.ResponseBody != "" {
+		t.Fatalf("expected response body to be omitted, got %q", snapshot.ResponseBody)
+	}
+	if len(snapshot.SSEEvents) != 0 {
+		t.Fatalf("expected SSE events to be omitted, got %+v", snapshot.SSEEvents)
+	}
+	if snapshot.InputTokens != 12 || snapshot.OutputTokens != 3 || snapshot.Status != 200 {
+		t.Fatalf("metadata was not preserved: %+v", snapshot)
+	}
+	if src.RequestBody == "" || src.ResponseBody == "" || len(src.SSEEvents) == 0 {
+		t.Fatalf("snapshot mutated source log: %+v", src)
+	}
+}
+
 func TestSetProxyLogging(t *testing.T) {
 	app, _, cleanup := newTestApp(t)
 	defer cleanup()
@@ -241,6 +270,18 @@ func TestGetVersion(t *testing.T) {
 	version := app.GetVersion()
 	if version == "" {
 		t.Error("expected non-empty version")
+	}
+}
+
+func TestResolveAppVersionPrefersInjectedVersion(t *testing.T) {
+	originalVersion := Version
+	Version = "v9.8.7"
+	t.Cleanup(func() {
+		Version = originalVersion
+	})
+
+	if got := resolveAppVersion(); got != "v9.8.7" {
+		t.Fatalf("resolveAppVersion() = %q, want injected version", got)
 	}
 }
 

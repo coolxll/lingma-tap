@@ -88,8 +88,8 @@
     "gateway_stop": "Stop Gateway",
     "gateway_running": "Gateway is running on port {{port}}",
     "gateway_stopped": "Gateway is stopped",
-    "gateway_logging": "AI Gateway Logging",
-    "gateway_logging_hint": "Parse and save AI traffic logs to SQLite (may affect performance)",
+    "gateway_logging": "Save Full Payloads",
+    "gateway_logging_hint": "Status, latency, and token usage are always saved; disable to omit prompts and full responses",
     "listen_addr": "Listen Address",
     "listen_addr_warning": "Binding to all interfaces exposes the gateway to your network without authentication. Anyone on the same network can use your Lingma credentials. Use Tailscale IP for secure remote access.",
     "proxy_logging": "Proxy Packet Capture",
@@ -139,8 +139,8 @@
   },
   "monitor": {
     "logging_status": {
-      "active": "Logging Active",
-      "paused": "Logging Paused",
+      "active": "Full Payloads",
+      "paused": "Metadata Only",
       "btn_on": "Start Logging",
       "btn_off": "Stop Logging"
     },

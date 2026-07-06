@@ -127,16 +127,16 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req struct {
-		Model          string           `json:"model"`
-		Messages       []map[string]any `json:"messages"`
-		Tools          []map[string]any `json:"tools"`
-		ToolChoice     any              `json:"tool_choice"`
-		Stream         bool             `json:"stream"`
-		Temperature    *float64         `json:"temperature"`
-		MaxTokens      *int             `json:"max_tokens"`
-		TopP           *float64         `json:"top_p"`
-		Stop           any              `json:"stop"`
-		ReasoningEffort string          `json:"reasoning_effort"`
+		Model           string           `json:"model"`
+		Messages        []map[string]any `json:"messages"`
+		Tools           []map[string]any `json:"tools"`
+		ToolChoice      any              `json:"tool_choice"`
+		Stream          bool             `json:"stream"`
+		Temperature     *float64         `json:"temperature"`
+		MaxTokens       *int             `json:"max_tokens"`
+		TopP            *float64         `json:"top_p"`
+		Stop            any              `json:"stop"`
+		ReasoningEffort string           `json:"reasoning_effort"`
 	}
 
 	// Read raw body for deterministic session_id
@@ -197,7 +197,8 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 		Model:       modelKey,
 		Method:      r.Method,
 		Path:        r.URL.Path,
-		RequestBody: func() string { b, _ := json.Marshal(body); return string(b) }(),
+		RequestBody: h.captureRequestBody(body),
+		IsSSE:       req.Stream,
 	}
 	startTime := time.Now()
 
@@ -227,6 +228,7 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 	var fullContent strings.Builder
 	var usage *Usage
 	var finishReason string
+	recordPayloads := h.shouldRecordPayloads()
 
 	finishSent := false
 	firstChunkSent := false
@@ -263,7 +265,7 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 				return nil
 			}
 
-			if event.Content != "" {
+			if recordPayloads && event.Content != "" {
 				fullContent.WriteString(event.Content)
 			}
 
@@ -298,20 +300,20 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 						tcID = "call_" + newUUID()[:24]
 						toolCallIDs[tc.Index] = tcID
 					}
-					if toolCallArgs[tc.Index] == nil {
-						toolCallArgs[tc.Index] = &strings.Builder{}
-					}
 					if tc.Name != "" {
 						toolCallNames[tc.Index] = tc.Name
 					}
-					if tc.Arguments != "" {
+					if recordPayloads && toolCallArgs[tc.Index] == nil {
+						toolCallArgs[tc.Index] = &strings.Builder{}
+					}
+					if recordPayloads && tc.Arguments != "" {
 						toolCallArgs[tc.Index].WriteString(tc.Arguments)
 					}
 
 					tcObj := map[string]any{
 						"index": tc.Index,
 					}
-					
+
 					isNew := false
 					if !toolCallInitialized[tc.Index] {
 						isNew = true
@@ -409,54 +411,59 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 			}
 			gLog.FinishReason = finishReason
 
-			resp := map[string]any{
-				"id":      reqID,
-				"object":  "chat.completion",
-				"created": created,
-				"model":   modelKey,
-			}
-			choice := map[string]any{
-				"index":         0,
-				"finish_reason": finishReason,
-				"message": map[string]any{
-					"role":    "assistant",
-					"content": fullContent.String(),
-				},
-			}
-			// Add tool calls if we tracked them
-			if len(toolCallIDs) > 0 {
-				var tcList []map[string]any
-				var keys []int
-				for idx := range toolCallIDs {
-					keys = append(keys, idx)
+			if recordPayloads {
+				resp := map[string]any{
+					"id":      reqID,
+					"object":  "chat.completion",
+					"created": created,
+					"model":   modelKey,
 				}
-				sort.Ints(keys)
+				choice := map[string]any{
+					"index":         0,
+					"finish_reason": finishReason,
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": fullContent.String(),
+					},
+				}
+				// Add tool calls if we tracked them
+				if len(toolCallIDs) > 0 {
+					var tcList []map[string]any
+					var keys []int
+					for idx := range toolCallIDs {
+						keys = append(keys, idx)
+					}
+					sort.Ints(keys)
 
-				for _, idx := range keys {
-					tcList = append(tcList, map[string]any{
-						"id":    toolCallIDs[idx],
-						"type":  "function",
-						"index": idx,
-						"function": map[string]any{
-							"name":      toolCallNames[idx],
-							"arguments": toolCallArgs[idx].String(),
-						},
-					})
+					for _, idx := range keys {
+						args := ""
+						if toolCallArgs[idx] != nil {
+							args = toolCallArgs[idx].String()
+						}
+						tcList = append(tcList, map[string]any{
+							"id":    toolCallIDs[idx],
+							"type":  "function",
+							"index": idx,
+							"function": map[string]any{
+								"name":      toolCallNames[idx],
+								"arguments": args,
+							},
+						})
+					}
+					choice["message"].(map[string]any)["tool_calls"] = tcList
 				}
-				choice["message"].(map[string]any)["tool_calls"] = tcList
-			}
-			resp["choices"] = []map[string]any{choice}
-			if usage != nil {
-				resp["usage"] = usage
-			} else {
-				resp["usage"] = map[string]any{
-					"prompt_tokens":     gLog.InputTokens,
-					"completion_tokens": gLog.OutputTokens,
-					"total_tokens":      gLog.InputTokens + gLog.OutputTokens,
+				resp["choices"] = []map[string]any{choice}
+				if usage != nil {
+					resp["usage"] = usage
+				} else {
+					resp["usage"] = map[string]any{
+						"prompt_tokens":     gLog.InputTokens,
+						"completion_tokens": gLog.OutputTokens,
+						"total_tokens":      gLog.InputTokens + gLog.OutputTokens,
+					}
 				}
+				h.captureResponseBody(gLog, resp)
 			}
-			respBytes, _ := json.Marshal(resp)
-			gLog.ResponseBody = string(respBytes)
 			gLog.Latency = time.Since(startTime).Milliseconds()
 			h.recorder(gLog)
 
@@ -544,6 +551,17 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 		if errMsg == "" {
 			errMsg = "unknown upstream error"
 		}
+		errResp := map[string]any{
+			"error": map[string]any{
+				"message": errMsg,
+				"type":    orDefault(lastErr.ErrorType, "api_error"),
+			},
+		}
+		gLog.Error = errMsg
+		gLog.Status = http.StatusBadGateway
+		h.captureResponseBody(gLog, errResp)
+		gLog.Latency = time.Since(startTime).Milliseconds()
+		h.recorder(gLog)
 		writeOpenAIError(w, http.StatusBadGateway, errMsg)
 		return
 	}
@@ -624,7 +642,7 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 
 	// Finalize Log
 	gLog.Status = 200
-	gLog.ResponseBody = string(respBytes)
+	h.captureResponseBytes(gLog, respBytes)
 	if usage != nil {
 		gLog.InputTokens = usage.PromptTokens
 		gLog.OutputTokens = usage.CompletionTokens

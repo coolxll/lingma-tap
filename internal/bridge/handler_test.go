@@ -22,6 +22,28 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestBridgeHandlerPayloadLoggingDisabledOmitsBodies(t *testing.T) {
+	handler := NewBridgeHandler(&auth.Session{CosyKey: "test-key"}, func(log *proto.GatewayLog) {})
+	handler.SetPayloadLoggingFunc(func() bool { return false })
+
+	reqBody := handler.captureRequestBody(map[string]any{
+		"messages": []map[string]any{{"role": "user", "content": "secret prompt"}},
+	})
+	if reqBody != "" {
+		t.Fatalf("expected request body capture to be empty, got %q", reqBody)
+	}
+
+	gLog := &proto.GatewayLog{}
+	handler.captureResponseBody(gLog, map[string]any{"content": "secret response"})
+	if gLog.ResponseBody != "" {
+		t.Fatalf("expected response body capture to be empty, got %q", gLog.ResponseBody)
+	}
+	handler.captureResponseBytes(gLog, []byte(`{"content":"secret response"}`))
+	if gLog.ResponseBody != "" {
+		t.Fatalf("expected response bytes capture to be empty, got %q", gLog.ResponseBody)
+	}
+}
+
 func TestBridgeHandler_HandleOpenAIChat(t *testing.T) {
 	session := &auth.Session{CosyKey: "test-key"}
 	recorder := func(log *proto.GatewayLog) {}
@@ -244,6 +266,85 @@ func TestBridgeHandler_HandleOpenAIChat_WithTools(t *testing.T) {
 	m3 := messages[2].(map[string]any)
 	if m3["role"] != "tool" || m3["tool_call_id"] != "call_1" {
 		t.Errorf("Message 3 should be tool result, got %v", m3)
+	}
+}
+
+func TestBridgeHandler_OpenAINonStreamAggregatesNativeToolCalls(t *testing.T) {
+	session := &auth.Session{CosyKey: "test-key"}
+	handler := NewBridgeHandler(session, func(log *proto.GatewayLog) {})
+
+	mockResp := strings.Join([]string{
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_native","type":"function","function":{"name":"read_file","arguments":""}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"README.md\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":11,"completion_tokens":4}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n\n")
+	handler.client.client.Transport = &mockTransport{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(mockResp)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	reqBody := `{
+		"model": "gpt-4",
+		"messages": [{"role": "user", "content": "Read README"}],
+		"tools": [
+			{"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}}
+		],
+		"stream": false
+	}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	handler.HandleOpenAIChat(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	var payload struct {
+		Choices []struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
+				Content   any `json:"content"`
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage Usage `json:"usage"`
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, string(body))
+	}
+	if len(payload.Choices) != 1 {
+		t.Fatalf("expected one choice, got %+v", payload.Choices)
+	}
+	choice := payload.Choices[0]
+	if choice.FinishReason != "tool_calls" {
+		t.Fatalf("finish_reason = %q, want tool_calls", choice.FinishReason)
+	}
+	if len(choice.Message.ToolCalls) != 1 {
+		t.Fatalf("expected one native tool call, got %+v", choice.Message.ToolCalls)
+	}
+	tc := choice.Message.ToolCalls[0]
+	if tc.ID != "call_native" || tc.Type != "function" || tc.Function.Name != "read_file" || tc.Function.Arguments != `{"path":"README.md"}` {
+		t.Fatalf("unexpected tool call: %+v", tc)
+	}
+	if payload.Usage.PromptTokens != 11 || payload.Usage.CompletionTokens != 4 {
+		t.Fatalf("usage = %+v, want 11/4", payload.Usage)
 	}
 }
 

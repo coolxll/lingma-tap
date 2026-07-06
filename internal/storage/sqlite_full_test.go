@@ -99,6 +99,46 @@ func TestStorageFullFlow(t *testing.T) {
 		t.Errorf("Unexpected SSE events in gateway log: %+v", logs[0].SSEEvents)
 	}
 
+	if err := db.SaveGatewayLog(&proto.GatewayLog{
+		Ts:           Now(),
+		Session:      "session-g1",
+		Model:        "gpt-4",
+		Method:       "POST",
+		Path:         "/chat",
+		RequestBody:  "hi",
+		ResponseBody: "hello again",
+		InputTokens:  123,
+		OutputTokens: 45,
+		Status:       200,
+	}); err != nil {
+		t.Fatalf("SaveGatewayLog update failed: %v", err)
+	}
+	logs, err = db.RecentGatewayLogs(10)
+	if err != nil {
+		t.Fatalf("RecentGatewayLogs after update failed: %v", err)
+	}
+	if logs[0].InputTokens != 123 || logs[0].OutputTokens != 45 {
+		t.Errorf("expected updated token usage 123/45, got %d/%d", logs[0].InputTokens, logs[0].OutputTokens)
+	}
+	if err := db.SaveGatewayLog(&proto.GatewayLog{
+		Ts:          Now(),
+		Session:     "session-g1",
+		Model:       "gpt-4",
+		Method:      "POST",
+		Path:        "/chat",
+		RequestBody: "hi",
+		Status:      0,
+	}); err != nil {
+		t.Fatalf("SaveGatewayLog late initial update failed: %v", err)
+	}
+	logs, err = db.RecentGatewayLogs(10)
+	if err != nil {
+		t.Fatalf("RecentGatewayLogs after late initial update failed: %v", err)
+	}
+	if logs[0].Status != 200 || logs[0].InputTokens != 123 || logs[0].OutputTokens != 45 || logs[0].ResponseBody != "hello again" {
+		t.Errorf("late initial log regressed final observability fields: %+v", logs[0])
+	}
+
 	// 8. Test Stats
 	stats := db.Stats()
 	if stats.Records != 1 || stats.Sessions != 1 {
@@ -123,17 +163,17 @@ func TestStorageFullFlow(t *testing.T) {
 func TestStorageMigration(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test_migration.db")
-	
+
 	// Create a legacy 'records' table to test compatibility migration
 	rawDB, err := Open(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to open db: %v", err)
 	}
-	
+
 	// Open already runs migrate, so 'records' should not exist or already be renamed.
 	// But let's check if we can simulate the legacy state.
 	// Actually, Open calls d.migrate() which handles the rename.
-	
+
 	// Let's verify standard tables exist
 	tables := []string{"proxy_records", "sessions", "gateway_logs", "schema_migrations"}
 	for _, table := range tables {

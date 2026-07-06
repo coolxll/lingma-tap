@@ -269,9 +269,17 @@ export function SettingsPanel({
     }
   }, [onClearBefore, clearDays]);
 
+  const parseComparableVersion = (version: string): number[] => {
+    const match = version.match(/^v?(\d+)\.(\d+)\.(\d+)/);
+    if (match) {
+      return match.slice(1).map(Number);
+    }
+    return [0, 0, 0];
+  };
+
   const compareVersions = (a: string, b: string): number => {
-    const aParts = a.replace(/^v/, '').split('.').map(Number);
-    const bParts = b.replace(/^v/, '').split('.').map(Number);
+    const aParts = parseComparableVersion(a);
+    const bParts = parseComparableVersion(b);
     for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
       const aNum = aParts[i] || 0;
       const bNum = bParts[i] || 0;

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -32,8 +33,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// Version is injected at build time via -ldflags.
-// Example: go build -ldflags "-X main.Version=$(git describe --tags --always)"
+// Version is injected at build time via -ldflags for release builds.
+// Example: go build -ldflags "-X main.Version=$(git describe --tags --always --dirty)"
 var Version = "dev"
 
 //go:embed all:web/dist
@@ -59,8 +60,27 @@ type App struct {
 
 func NewApp() *App {
 	return &App{
-		proxyLogging: true,
+		gatewayLogging: true,
+		proxyLogging:   true,
 	}
+}
+
+func gatewayLogSnapshot(l *proto.GatewayLog, includePayloads bool) *proto.GatewayLog {
+	if l == nil {
+		return nil
+	}
+	cp := *l
+	if !includePayloads {
+		cp.RequestBody = ""
+		cp.ResponseBody = ""
+		cp.SSEEvents = nil
+		cp.SSEEventsJSON = ""
+		return &cp
+	}
+	if len(l.SSEEvents) > 0 {
+		cp.SSEEvents = append([]proto.SSEEvent(nil), l.SSEEvents...)
+	}
+	return &cp
 }
 
 func convertGatewayLogToRecord(l *proto.GatewayLog) *proto.Record {
@@ -130,25 +150,33 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("[app] LocalAuth not available (bridge disabled): %v", err)
 	} else {
 		session := auth.NewSession(creds)
-		a.bridgeHandlerField = bridge.NewBridgeHandler(session, func(gLog *proto.GatewayLog) {
+		handler := bridge.NewBridgeHandler(session, func(gLog *proto.GatewayLog) {
 			a.mu.Lock()
-			logging := a.gatewayLogging
+			includePayloads := a.gatewayLogging
 			a.mu.Unlock()
 
-			if logging {
-				if a.db != nil {
-					go func() {
-						if err := a.db.SaveGatewayLog(gLog); err != nil {
-							log.Printf("[app] SaveGatewayLog error: %v", err)
-						}
-					}()
-				}
-				if a.hub != nil {
-					rec := convertGatewayLogToRecord(gLog)
-					a.hub.Broadcast(rec)
-				}
+			snapshot := gatewayLogSnapshot(gLog, includePayloads)
+			if snapshot == nil {
+				return
+			}
+			if a.db != nil {
+				go func(logSnapshot *proto.GatewayLog) {
+					if err := a.db.SaveGatewayLog(logSnapshot); err != nil {
+						log.Printf("[app] SaveGatewayLog error: %v", err)
+					}
+				}(snapshot)
+			}
+			if a.hub != nil {
+				rec := convertGatewayLogToRecord(snapshot)
+				a.hub.Broadcast(rec)
 			}
 		})
+		handler.SetPayloadLoggingFunc(func() bool {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			return a.gatewayLogging
+		})
+		a.bridgeHandlerField = handler
 		if os.Getenv("GATEWAY_DEBUG") == "1" {
 			a.bridgeHandlerField.SetDebug(true)
 		}
@@ -187,10 +215,10 @@ func (a *App) startup(ctx context.Context) {
 	log.Printf("[app] Management API server on %s", a.apiLn.Addr())
 
 	loggingSetting, _ := a.db.GetSetting("gateway_logging")
-	if loggingSetting == "true" {
-		a.gatewayLogging = true
-	} else {
+	if loggingSetting == "false" {
 		a.gatewayLogging = false
+	} else {
+		a.gatewayLogging = true
 	}
 
 	// Proxy logging defaults to true (independent of gateway logging)
@@ -514,7 +542,8 @@ func (a *App) RevealCACert() error {
 	return nil
 }
 
-// SetLogging enables or disables traffic logging to SQLite.
+// SetLogging controls whether full AI Gateway request/response payloads are persisted.
+// Gateway metadata and token usage are always recorded.
 func (a *App) SetLogging(enabled bool) {
 	a.mu.Lock()
 	a.gatewayLogging = enabled
@@ -617,7 +646,85 @@ func (a *App) SaveAnthropicMapping(mapping map[string]string, defaultModel strin
 
 // GetVersion returns the current application version.
 func (a *App) GetVersion() string {
+	return resolveAppVersion()
+}
+
+func resolveAppVersion() string {
+	if Version != "" && Version != "dev" {
+		return Version
+	}
+	if version := gitDescribeVersion(); version != "" {
+		return version
+	}
+	if version := vcsBuildVersion(); version != "" {
+		return version
+	}
 	return Version
+}
+
+var (
+	gitVersionOnce  sync.Once
+	gitVersionCache string
+)
+
+func gitDescribeVersion() string {
+	gitVersionOnce.Do(func() {
+		gitVersionCache = gitDescribeVersionImpl()
+	})
+	return gitVersionCache
+}
+
+func gitDescribeVersionImpl() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	rootCmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	rootOut, err := rootCmd.Output()
+	if err != nil {
+		return ""
+	}
+	repoRoot := strings.TrimSpace(string(rootOut))
+	goMod, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
+	if err != nil || !strings.Contains(string(goMod), "module github.com/coolxll/lingma-tap") {
+		return ""
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "describe", "--tags", "--always", "--dirty")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func vcsBuildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+
+	var revision, modified string
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			modified = setting.Value
+		}
+	}
+	if revision == "" {
+		return ""
+	}
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	if modified == "true" {
+		revision += "-dirty"
+	}
+	return revision
 }
 
 // Implement api.RecordStore interface
