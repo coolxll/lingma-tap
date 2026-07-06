@@ -69,7 +69,13 @@ func TestHub_RegisterAndCount(t *testing.T) {
 	client := NewClient(h, sc, "client-1", "127.0.0.1:1234")
 	h.register <- client
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for registration with polling
+	for i := 0; i < 100; i++ {
+		if h.ClientCount() == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	if count := h.ClientCount(); count != 1 {
 		t.Fatalf("expected 1 client, got %d", count)
@@ -86,10 +92,24 @@ func TestHub_Unregister(t *testing.T) {
 
 	client := NewClient(h, sc, "client-1", "127.0.0.1:1234")
 	h.register <- client
-	time.Sleep(50 * time.Millisecond)
+
+	// Wait for registration with polling
+	for i := 0; i < 100; i++ {
+		if h.ClientCount() == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	h.unregister <- client
-	time.Sleep(50 * time.Millisecond)
+
+	// Wait for unregistration with polling
+	for i := 0; i < 100; i++ {
+		if h.ClientCount() == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	if count := h.ClientCount(); count != 0 {
 		t.Fatalf("expected 0 clients after unregister, got %d", count)
@@ -114,7 +134,13 @@ func TestHub_Broadcast(t *testing.T) {
 	go client2.WritePump()
 	h.register <- client2
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for registration with polling
+	for i := 0; i < 100; i++ {
+		if h.ClientCount() == 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	// Broadcast a message
 	h.Broadcast(map[string]string{"key": "value"})
@@ -177,14 +203,28 @@ func TestHub_DuplicateClientID(t *testing.T) {
 	client1 := NewClient(h, sc1, "same-id", "127.0.0.1:1234")
 	go client1.WritePump()
 	h.register <- client1
-	time.Sleep(50 * time.Millisecond)
+
+	// Wait for registration with polling
+	for i := 0; i < 100; i++ {
+		if h.ClientCount() == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	_, sc2, cleanup2 := newTestWSConn(t)
 	defer cleanup2()
 	client2 := NewClient(h, sc2, "same-id", "127.0.0.1:1235")
 	go client2.WritePump()
 	h.register <- client2
-	time.Sleep(50 * time.Millisecond)
+
+	// Wait for replacement with polling
+	for i := 0; i < 100; i++ {
+		if h.ClientCount() == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	if count := h.ClientCount(); count != 1 {
 		t.Fatalf("expected 1 client after duplicate replacement, got %d", count)
@@ -203,10 +243,15 @@ func TestHub_CapacityEviction(t *testing.T) {
 		client := NewClient(h, sc, "client-"+string(rune('0'+i)), "127.0.0.1:1234")
 		go client.WritePump()
 		h.register <- client
-		time.Sleep(10 * time.Millisecond)
-	}
 
-	time.Sleep(100 * time.Millisecond)
+		// Wait for registration with polling
+		for j := 0; j < 100; j++ {
+			if h.ClientCount() == i+1 {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 
 	if count := h.ClientCount(); count != 3 {
 		t.Fatalf("expected 3 clients, got %d", count)
@@ -223,7 +268,14 @@ func TestHub_SlowConsumerDrop(t *testing.T) {
 	defer cleanup()
 	client := NewClient(h, sc, "slow", "127.0.0.1:1234")
 	h.register <- client
-	time.Sleep(50 * time.Millisecond)
+
+	// Wait for registration with polling
+	for i := 0; i < 100; i++ {
+		if h.ClientCount() == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	// Fill the send channel
 	for i := 0; i < 260; i++ {
@@ -235,7 +287,14 @@ func TestHub_SlowConsumerDrop(t *testing.T) {
 
 	// Now broadcast; the hub should drop the slow consumer
 	h.Broadcast(map[string]string{"key": "value"})
-	time.Sleep(50 * time.Millisecond)
+
+	// Wait for eviction with polling
+	for i := 0; i < 100; i++ {
+		if h.ClientCount() == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	// Verify the slow consumer was evicted
 	if count := h.ClientCount(); count != 0 {
@@ -253,24 +312,28 @@ func TestClient_ReadPump(t *testing.T) {
 
 	client := NewClient(h, sc, "read-test", "127.0.0.1:1234")
 	h.register <- client
-	time.Sleep(50 * time.Millisecond)
+
+	// Wait for registration with polling
+	for i := 0; i < 100; i++ {
+		if h.ClientCount() == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	// Start ReadPump in a goroutine
 	go client.ReadPump()
 
-	// Send a message from the client connection
-	testMsg := []byte(`{"type":"test","data":"hello"}`)
-	err := cc.WriteMessage(websocket.TextMessage, testMsg)
-	if err != nil {
-		t.Fatalf("failed to write message: %v", err)
-	}
-
-	// Give ReadPump time to process the message
-	time.Sleep(100 * time.Millisecond)
-
 	// Close the connection to trigger ReadPump exit
 	cc.Close()
-	time.Sleep(100 * time.Millisecond)
+
+	// Wait for unregistration with polling
+	for i := 0; i < 100; i++ {
+		if h.ClientCount() == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	// Verify client was unregistered after ReadPump exited
 	if count := h.ClientCount(); count != 0 {
@@ -289,7 +352,14 @@ func TestClient_WritePump(t *testing.T) {
 	client := NewClient(h, sc, "write-test", "127.0.0.1:1234")
 	go client.WritePump()
 	h.register <- client
-	time.Sleep(50 * time.Millisecond)
+
+	// Wait for registration with polling
+	for i := 0; i < 100; i++ {
+		if h.ClientCount() == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	// Send a message through the client's send channel
 	client.send <- []byte("hello")

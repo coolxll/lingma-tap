@@ -24,6 +24,8 @@ type Hub struct {
 	register   chan *Client
 	unregister chan *Client
 	done       chan struct{}
+	stopOnce   sync.Once
+	wg         sync.WaitGroup
 }
 
 type Client struct {
@@ -45,9 +47,20 @@ func NewHub() *Hub {
 }
 
 func (h *Hub) Run() {
+	h.wg.Add(1)
+	defer h.wg.Done()
+
 	for {
 		select {
 		case <-h.done:
+			// Cleanup: close all client connections
+			h.mu.Lock()
+			for client := range h.clients {
+				close(client.send)
+				client.conn.Close()
+			}
+			h.clients = make(map[*Client]bool)
+			h.mu.Unlock()
 			return
 		case client := <-h.register:
 			h.mu.Lock()
@@ -103,12 +116,10 @@ func (h *Hub) Run() {
 
 // Stop gracefully shuts down the hub and stops the Run loop
 func (h *Hub) Stop() {
-	select {
-	case <-h.done:
-		// Already closed
-	default:
+	h.stopOnce.Do(func() {
 		close(h.done)
-	}
+	})
+	h.wg.Wait()
 }
 
 // Broadcast sends a record to all connected WebSocket clients.
@@ -160,7 +171,11 @@ func (c *Client) WritePump() {
 
 func (c *Client) ReadPump() {
 	defer func() {
-		c.hub.unregister <- c
+		// Non-blocking send to avoid deadlock if hub is stopped
+		select {
+		case c.hub.unregister <- c:
+		default:
+		}
 		c.conn.Close()
 	}()
 	c.conn.SetReadLimit(maxMessageSize)

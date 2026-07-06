@@ -91,6 +91,8 @@
     "gateway_stopped": "网关已停止",
     "gateway_logging": "AI 网关日志",
     "gateway_logging_hint": "开启后将解析并保存 AI 请求报文，可能会消耗额外性能",
+    "listen_addr": "监听地址",
+    "listen_addr_warning": "绑定所有接口会将网关暴露到局域网且无认证保护，同网络任何人都可使用你的 Lingma 凭证。建议使用 Tailscale IP 进行安全的远程访问。",
     "proxy_logging": "代理抓包记录",
     "proxy_logging_hint": "开启后将保存代理拦截的 HTTP 流量记录",
     "ca_section": "根证书",

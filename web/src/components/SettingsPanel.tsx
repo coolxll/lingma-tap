@@ -12,6 +12,7 @@ interface WailsWindow extends Window {
     main?: {
       App?: {
         GetModels: () => Promise<any[]>;
+        GetNetworkInterfaces: () => Promise<Array<{name: string; addr: string; type: string}>>;
         ClearRecords: () => Promise<void>;
         ClearRecordsBefore: (days: number) => Promise<number>;
         GetAnthropicMapping: () => Promise<any>;
@@ -44,8 +45,10 @@ interface SettingsPanelProps {
   onProxyPortChange?: (port: number) => void;
   gatewayRunning?: boolean;
   gatewayPort?: number;
+  gatewayListenAddr?: string;
   onToggleGateway?: () => void;
   onGatewayPortChange?: (port: number) => void;
+  onGatewayListenAddrChange?: (addr: string) => void;
   loggingEnabled?: boolean;
   onToggleLogging?: () => void;
   proxyLoggingEnabled?: boolean;
@@ -64,8 +67,10 @@ export function SettingsPanel({
   onProxyPortChange,
   gatewayRunning = false,
   gatewayPort = 8080,
+  gatewayListenAddr = "127.0.0.1",
   onToggleGateway,
   onGatewayPortChange,
+  onGatewayListenAddrChange,
   loggingEnabled,
   onToggleLogging,
   proxyLoggingEnabled = true,
@@ -94,6 +99,7 @@ export function SettingsPanel({
   const currentVersionRef = useRef('');
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'latest' | 'available' | 'error'>('idle');
   const [latestVersion, setLatestVersion] = useState('');
+  const [networkInterfaces, setNetworkInterfaces] = useState<Array<{name: string; addr: string; type: string}>>([]);
   const [updateError, setUpdateError] = useState('');
 
   const getCutoffDate = (days: number) => {
@@ -136,6 +142,18 @@ export function SettingsPanel({
     }
   }, []);
 
+  const fetchNetworkInterfaces = useCallback(async () => {
+    try {
+      const w = (window as unknown as WailsWindow).go;
+      const result = await w?.main?.App?.GetNetworkInterfaces();
+      if (result) {
+        setNetworkInterfaces(result);
+      }
+    } catch (err) {
+      console.error('Failed to fetch network interfaces:', err);
+    }
+  }, []);
+
   const fetchAnthropicMapping = useCallback(async () => {
     try {
       const w = (window as unknown as WailsWindow).go;
@@ -152,7 +170,8 @@ export function SettingsPanel({
   useEffect(() => {
     fetchModels();
     fetchAnthropicMapping();
-  }, [fetchModels, fetchAnthropicMapping]);
+    fetchNetworkInterfaces();
+  }, [fetchModels, fetchAnthropicMapping, fetchNetworkInterfaces]);
 
   // Fetch current version from Wails backend
   useEffect(() => {
@@ -394,20 +413,42 @@ export function SettingsPanel({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4">
-                  <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-3">
+                  <div className="flex flex-col gap-1 min-w-0 flex-1">
+                    <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-tighter">{t('settings.listen_addr')}</span>
+                    <select
+                      value={gatewayListenAddr}
+                      onChange={(e) => onGatewayListenAddrChange?.(e.target.value)}
+                      disabled={gatewayRunning}
+                      className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-xs font-mono text-zinc-200 focus:outline-none focus:ring-1 focus:ring-purple-500/50 disabled:opacity-50 transition-all truncate"
+                    >
+                      {networkInterfaces.length > 0 ? (
+                        networkInterfaces.map((iface) => (
+                          <option key={iface.addr} value={iface.addr}>
+                            {iface.name} ({iface.addr})
+                          </option>
+                        ))
+                      ) : (
+                        <>
+                          <option value="127.0.0.1">127.0.0.1 (Local)</option>
+                          <option value="0.0.0.0">0.0.0.0 (All)</option>
+                        </>
+                      )}
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1 shrink-0">
                     <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-tighter">{t('common.port')}</span>
                     <input
                       type="number"
                       value={gatewayPort}
                       onChange={(e) => onGatewayPortChange?.(parseInt(e.target.value) || 0)}
                       disabled={gatewayRunning}
-                      className="w-20 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-sm font-mono text-zinc-200 focus:outline-none focus:ring-1 focus:ring-purple-500/50 disabled:opacity-50 transition-all"
+                      className="w-16 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-xs font-mono text-zinc-200 focus:outline-none focus:ring-1 focus:ring-purple-500/50 disabled:opacity-50 transition-all"
                     />
                   </div>
                   <button
                     onClick={onToggleGateway}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ml-auto ${
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
                       gatewayRunning
                         ? 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20'
                         : 'bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20'
@@ -420,6 +461,12 @@ export function SettingsPanel({
                     )}
                   </button>
                 </div>
+                {gatewayListenAddr === '0.0.0.0' && (
+                  <div className="mt-3 flex items-start gap-2 p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                    <span className="text-amber-400 text-xs">⚠️</span>
+                    <span className="text-[10px] text-amber-300/90 leading-relaxed">{t('settings.listen_addr_warning')}</span>
+                  </div>
+                )}
               </div>
               
               <div className="mt-4 flex items-center justify-between pt-3 border-t border-zinc-800/50">

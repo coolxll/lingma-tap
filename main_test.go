@@ -29,6 +29,7 @@ func newTestApp(t *testing.T) (*App, *storage.DB, func()) {
 	app.proxyLogging = true
 
 	cleanup := func() {
+		hub.Stop()
 		sink.Close()
 		db.Close()
 	}

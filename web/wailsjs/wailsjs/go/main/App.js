@@ -38,6 +38,10 @@ export function GetModels() {
   return window['go']['main']['App']['GetModels']();
 }
 
+export function GetNetworkInterfaces() {
+  return window['go']['main']['App']['GetNetworkInterfaces']();
+}
+
 export function GetRecords(arg1, arg2) {
   return window['go']['main']['App']['GetRecords'](arg1, arg2);
 }
@@ -82,8 +86,8 @@ export function SetProxyLogging(arg1) {
   return window['go']['main']['App']['SetProxyLogging'](arg1);
 }
 
-export function StartGateway(arg1) {
-  return window['go']['main']['App']['StartGateway'](arg1);
+export function StartGateway(arg1, arg2) {
+  return window['go']['main']['App']['StartGateway'](arg1, arg2);
 }
 
 export function StartProxy(arg1) {

@@ -21,6 +21,8 @@ export function GetGatewayLogs(arg1:number,arg2:number):Promise<Array<proto.Gate
 
 export function GetModels():Promise<Array<bridge.ModelInfo>>;
 
+export function GetNetworkInterfaces():Promise<Array<Record<string, string>>>;
+
 export function GetRecords(arg1:number,arg2:number):Promise<Array<proto.Record>>;
 
 export function GetRecordsByType(arg1:number,arg2:number,arg3:string):Promise<Array<proto.Record>>;
@@ -43,7 +45,7 @@ export function SetLogging(arg1:boolean):Promise<void>;
 
 export function SetProxyLogging(arg1:boolean):Promise<void>;
 
-export function StartGateway(arg1:number):Promise<void>;
+export function StartGateway(arg1:number,arg2:string):Promise<void>;
 
 export function StartProxy(arg1:number):Promise<void>;
 

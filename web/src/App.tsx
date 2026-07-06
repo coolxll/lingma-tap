@@ -23,7 +23,7 @@ interface WailsWindow extends Window {
       App?: {
         StartProxy: (port: number) => Promise<void>;
         StopProxy: () => Promise<void>;
-        StartGateway: (port: number) => Promise<void>;
+        StartGateway: (port: number, listenAddr: string) => Promise<void>;
         StopGateway: () => Promise<void>;
         GetRecords: (limit: number, offset: number) => Promise<TrafficRecord[]>;
         GetRecordsByType?: (limit: number, offset: number, recordType: string) => Promise<TrafficRecord[]>;
@@ -158,6 +158,7 @@ function App() {
   const [proxyPort, setProxyPort] = useState(PROXY_PORT);
   const [gatewayRunning, setGatewayRunning] = useState(false);
   const [gatewayPort, setGatewayPort] = useState(DEFAULT_GATEWAY_PORT);
+  const [gatewayListenAddr, setGatewayListenAddr] = useState("127.0.0.1");
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [stats, setStats] = useState<StorageStats | null>(null);
   const [caCertPath, setCaCertPath] = useState("");
@@ -435,13 +436,13 @@ function App() {
       setGatewayRunning(false);
     } else {
       try {
-        if (wails.StartGateway) await wails.StartGateway(gatewayPort);
+        if (wails.StartGateway) await wails.StartGateway(gatewayPort, gatewayListenAddr);
         setGatewayRunning(true);
       } catch (err) {
         console.error("Failed to start gateway:", err);
       }
     }
-  }, [wails, gatewayRunning]);
+  }, [wails, gatewayRunning, gatewayPort, gatewayListenAddr]);
 
   const handleToggleGatewayLogging = useCallback(async () => {
     const newState = !gatewayLoggingEnabled;
@@ -600,8 +601,10 @@ function App() {
             onProxyPortChange={setProxyPort}
             gatewayRunning={gatewayRunning}
             gatewayPort={gatewayPort}
+            gatewayListenAddr={gatewayListenAddr}
             onToggleGateway={handleToggleGateway}
             onGatewayPortChange={setGatewayPort}
+            onGatewayListenAddrChange={setGatewayListenAddr}
             loggingEnabled={gatewayLoggingEnabled}
             onToggleLogging={handleToggleGatewayLogging}
             proxyLoggingEnabled={proxyLoggingEnabled}

@@ -232,7 +232,7 @@ func (a *App) startup(ctx context.Context) {
 	// Auto-start AI Gateway on default port 9090
 	go func() {
 		time.Sleep(600 * time.Millisecond)
-		if err := a.StartGateway(9090); err != nil {
+		if err := a.StartGateway(9090, "127.0.0.1"); err != nil {
 			log.Printf("[app] Auto-start Gateway error: %v", err)
 		} else {
 			log.Printf("[app] Auto-started AI Gateway on port 9090")
@@ -241,6 +241,9 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.hub != nil {
+		a.hub.Stop()
+	}
 	if a.proxy != nil {
 		a.proxy.Stop()
 	}
@@ -270,8 +273,74 @@ func (a *App) StopProxy() {
 	}
 }
 
+// GetNetworkInterfaces returns available network interfaces for binding.
+// Detects Tailscale interfaces and returns their IPs.
+func (a *App) GetNetworkInterfaces() []map[string]string {
+	var interfaces []map[string]string
+
+	// Always include localhost
+	interfaces = append(interfaces, map[string]string{
+		"name": "Localhost",
+		"addr": "127.0.0.1",
+		"type": "loopback",
+	})
+
+	// Scan network interfaces for Tailscale
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		log.Printf("[app] Failed to list interfaces: %v", err)
+		return interfaces
+	}
+
+	for _, iface := range ifaces {
+		// Skip down or loopback interfaces
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+
+			// Check if this is a Tailscale IP (100.64.0.0/10 CGNAT range)
+			if ip4 := ip.To4(); ip4 != nil {
+				if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+					interfaces = append(interfaces, map[string]string{
+						"name": fmt.Sprintf("Tailscale (%s)", iface.Name),
+						"addr": ip4.String(),
+						"type": "tailscale",
+					})
+				}
+			}
+		}
+	}
+
+	// Add "All interfaces" option
+	interfaces = append(interfaces, map[string]string{
+		"name": "All Interfaces",
+		"addr": "0.0.0.0",
+		"type": "all",
+	})
+
+	return interfaces
+}
+
 // StartGateway starts the AI Gateway.
-func (a *App) StartGateway(port int) error {
+func (a *App) StartGateway(port int, listenAddr string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -279,7 +348,28 @@ func (a *App) StartGateway(port int) error {
 		a.gatewayServer.Close()
 	}
 
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	// Validate listenAddr against whitelist
+	validAddrs := map[string]bool{
+		"127.0.0.1": true,
+		"0.0.0.0":   true,
+	}
+
+	// Also allow any detected Tailscale IPs
+	ifaces := a.GetNetworkInterfaces()
+	for _, iface := range ifaces {
+		if iface["type"] == "tailscale" {
+			validAddrs[iface["addr"]] = true
+		}
+	}
+
+	if !validAddrs[listenAddr] {
+		return fmt.Errorf("invalid listen address: %s (allowed: 127.0.0.1, 0.0.0.0, or Tailscale IP)", listenAddr)
+	}
+
+	if listenAddr == "" {
+		listenAddr = "127.0.0.1"
+	}
+	addr := fmt.Sprintf("%s:%d", listenAddr, port)
 	handler := api.NewHandler(a.hub, a, a.bridgeHandlerField)
 	mux := http.NewServeMux()
 	handler.RegisterGatewayRoutes(mux)

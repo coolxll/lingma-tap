@@ -90,6 +90,8 @@
     "gateway_stopped": "Gateway is stopped",
     "gateway_logging": "AI Gateway Logging",
     "gateway_logging_hint": "Parse and save AI traffic logs to SQLite (may affect performance)",
+    "listen_addr": "Listen Address",
+    "listen_addr_warning": "Binding to all interfaces exposes the gateway to your network without authentication. Anyone on the same network can use your Lingma credentials. Use Tailscale IP for secure remote access.",
     "proxy_logging": "Proxy Packet Capture",
     "proxy_logging_hint": "Save HTTP traffic records intercepted by proxy",
     "ca_section": "Root Certificate",
