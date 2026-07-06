@@ -271,6 +271,9 @@ func (a *App) startup(ctx context.Context) {
 			log.Printf("[app] Auto-started AI Gateway on port 9090")
 		}
 	}()
+
+	// Initialize macOS status bar / system tray
+	startTray(a)
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -775,6 +778,7 @@ func main() {
 		Height:    900,
 		MinWidth:  1000,
 		MinHeight: 600,
+		HideWindowOnClose: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
