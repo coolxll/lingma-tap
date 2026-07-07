@@ -529,6 +529,104 @@ func TestSplitContentEventsLoneAngleBracketFlushedAsText(t *testing.T) {
 	}
 }
 
+func TestFlushPendingContentEventsBufferedToolXML(t *testing.T) {
+	open := string([]byte{60}) + "tool_call"
+	state := &streamState{}
+
+	// Chunk with an opening tool_call tag but no closing tag — content is
+	// buffered in toolXMLBuffer with inToolXML set.
+	events := state.splitContentEvents("before "+open+"> some malformed payload", true)
+	if len(events) != 1 || events[0].Content != "before " {
+		t.Fatalf("unexpected events: %+v", events)
+	}
+	if !state.inToolXML || state.toolXMLBuffer.Len() == 0 {
+		t.Fatalf("expected buffered tool XML state, got inToolXML=%v buffer=%q", state.inToolXML, state.toolXMLBuffer.String())
+	}
+
+	// At stream end the buffered XML must be flushed as normal text.
+	flushed := state.flushPendingContentEvents()
+	if len(flushed) != 1 {
+		t.Fatalf("expected 1 flushed event, got %d: %+v", len(flushed), flushed)
+	}
+	if flushed[0].Content != open+"> some malformed payload" {
+		t.Fatalf("flushed content = %q, want %q", flushed[0].Content, open+"> some malformed payload")
+	}
+	if state.inToolXML || state.toolXMLBuffer.Len() != 0 {
+		t.Fatalf("expected cleared state after flush, got inToolXML=%v buffer=%q", state.inToolXML, state.toolXMLBuffer.String())
+	}
+}
+
+func TestFlushPendingContentEventsBufferedToolXMLMultiChunk(t *testing.T) {
+	open := string([]byte{60}) + "tool_call"
+	state := &streamState{}
+
+	// First chunk: opening tag + partial payload, no closing tag.
+	events := state.splitContentEvents("prefix "+open+"> part1", true)
+	if len(events) != 1 || events[0].Content != "prefix " {
+		t.Fatalf("unexpected first events: %+v", events)
+	}
+	if !state.inToolXML {
+		t.Fatal("expected inToolXML after first chunk")
+	}
+
+	// Second chunk: more payload, still no closing tag — accumulates in buffer.
+	events = state.splitContentEvents(" part2", true)
+	if len(events) != 0 {
+		t.Fatalf("expected no events while buffering, got %+v", events)
+	}
+	if !state.inToolXML {
+		t.Fatal("expected inToolXML after second chunk")
+	}
+
+	// At stream end the full buffered content should be flushed as text.
+	flushed := state.flushPendingContentEvents()
+	if len(flushed) != 1 {
+		t.Fatalf("expected 1 flushed event, got %d: %+v", len(flushed), flushed)
+	}
+	want := open + "> part1 part2"
+	if flushed[0].Content != want {
+		t.Fatalf("flushed content = %q, want %q", flushed[0].Content, want)
+	}
+}
+
+func TestFlushPendingContentEventsBothBufferAndPrefix(t *testing.T) {
+	open := string([]byte{60}) + "tool_call"
+	lt := string([]byte{60})
+	state := &streamState{}
+
+	// Chunk with opening tag but no close — buffers in toolXMLBuffer.
+	events := state.splitContentEvents("text "+open+"> payload", true)
+	if len(events) != 1 || events[0].Content != "text " {
+		t.Fatalf("unexpected events: %+v", events)
+	}
+	if !state.inToolXML {
+		t.Fatal("expected inToolXML")
+	}
+
+	// Flush — buffered XML should come out as text.
+	flushed := state.flushPendingContentEvents()
+	if len(flushed) != 1 {
+		t.Fatalf("expected 1 flushed event, got %d: %+v", len(flushed), flushed)
+	}
+	if flushed[0].Content != open+"> payload" {
+		t.Fatalf("flushed content = %q, want %q", flushed[0].Content, open+"> payload")
+	}
+	// State should be fully cleared.
+	if state.inToolXML || state.toolXMLBuffer.Len() != 0 || state.toolXMLPrefix != "" {
+		t.Fatalf("state not cleared: inToolXML=%v buffer=%q prefix=%q", state.inToolXML, state.toolXMLBuffer.String(), state.toolXMLPrefix)
+	}
+
+	// Now test the lone angle bracket prefix path still works after the fix.
+	events = state.splitContentEvents("hello "+lt, true)
+	if len(events) != 1 || events[0].Content != "hello " {
+		t.Fatalf("unexpected events: %+v", events)
+	}
+	flushed = state.flushPendingContentEvents()
+	if len(flushed) != 1 || flushed[0].Content != lt {
+		t.Fatalf("expected lone bracket flushed as text, got %+v", flushed)
+	}
+}
+
 func TestSplitThoughtTags(t *testing.T) {
 	tests := []struct {
 		name          string

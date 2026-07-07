@@ -604,12 +604,19 @@ func (s *streamState) discardPendingToolXML() {
 }
 
 func (s *streamState) flushPendingContentEvents() []SSEEvent {
-	if s.toolXMLPrefix == "" {
-		return nil
+	var events []SSEEvent
+	// Flush any buffered incomplete tool-call XML as normal text, since no
+	// complete tool call was ever parsed.
+	if s.inToolXML && s.toolXMLBuffer.Len() > 0 {
+		events = append(events, s.splitThoughtTags(s.toolXMLBuffer.String())...)
+		s.toolXMLBuffer.Reset()
+		s.inToolXML = false
 	}
-	prefix := s.toolXMLPrefix
-	s.toolXMLPrefix = ""
-	return s.splitThoughtTags(prefix)
+	if s.toolXMLPrefix != "" {
+		events = append(events, s.splitThoughtTags(s.toolXMLPrefix)...)
+		s.toolXMLPrefix = ""
+	}
+	return events
 }
 
 func findToolXMLStart(s string) int {

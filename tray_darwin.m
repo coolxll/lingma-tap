@@ -14,6 +14,10 @@ extern void goHideWindow();
 
 void initTray(const unsigned char* iconData, int iconLength) {
     NSLog(@"[LingmaTap-Tray] initTray called with icon length: %d", iconLength);
+    // Copy bytes into Obj-C-owned storage before dispatching asynchronously,
+    // so the block captures an NSData object instead of a pointer into
+    // Go-managed memory (which may be invalid after C.initTray returns).
+    NSData *iconDataCopy = [NSData dataWithBytes:iconData length:iconLength];
     dispatch_async(dispatch_get_main_queue(), ^{
         NSLog(@"[LingmaTap-Tray] initTray running on main queue");
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
@@ -24,8 +28,7 @@ void initTray(const unsigned char* iconData, int iconLength) {
         NSLog(@"[LingmaTap-Tray] statusItem retained manually (non-ARC)");
 #endif
         
-        NSData *data = [NSData dataWithBytes:iconData length:iconLength];
-        NSImage *image = [[NSImage alloc] initWithData:data];
+        NSImage *image = [[NSImage alloc] initWithData:iconDataCopy];
         if (image) {
             NSLog(@"[LingmaTap-Tray] initTray successfully decoded image");
             [image setSize:NSMakeSize(18, 18)]; // standard macOS menu bar size
