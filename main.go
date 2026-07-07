@@ -191,19 +191,26 @@ func (a *App) startup(ctx context.Context) {
 		// Load Anthropic model mapping from settings
 		mappingJSON, _ := a.db.GetSetting("anthropic_model_mapping")
 		defaultModel, _ := a.db.GetSetting("default_anthropic_model")
+		defaults := map[string]string{
+			"sonnet": "dashscope_qwen3_coder",
+			"haiku":  "dashscope_qmodel",
+			"opus":   "dashscope_qwen_max_latest",
+		}
+		fallbackDefaultModel := defaultModel
+		if fallbackDefaultModel == "" {
+			fallbackDefaultModel = "dashscope_qmodel"
+		}
 		if mappingJSON != "" {
 			var mapping map[string]string
-			if err := json.Unmarshal([]byte(mappingJSON), &mapping); err == nil {
-				a.bridgeHandlerField.UpdateAnthropicMapping(mapping, defaultModel)
+			if err := json.Unmarshal([]byte(mappingJSON), &mapping); err == nil && len(mapping) > 0 {
+				a.bridgeHandlerField.UpdateAnthropicMapping(mapping, fallbackDefaultModel)
+			} else {
+				// Empty mapping (e.g. "{}"), fall through to defaults
+				a.bridgeHandlerField.UpdateAnthropicMapping(defaults, fallbackDefaultModel)
 			}
 		} else {
 			// Fallback to hardcoded defaults if DB migration didn't run or something
-			defaults := map[string]string{
-				"sonnet": "dashscope_qwen3_coder",
-				"haiku":  "dashscope_qmodel",
-				"opus":   "dashscope_qwen_max_latest",
-			}
-			a.bridgeHandlerField.UpdateAnthropicMapping(defaults, "dashscope_qmodel")
+			a.bridgeHandlerField.UpdateAnthropicMapping(defaults, fallbackDefaultModel)
 		}
 	}
 
@@ -773,11 +780,11 @@ func main() {
 
 	app := NewApp()
 	if err := wails.Run(&options.App{
-		Title:     "Lingma Tap",
-		Width:     1400,
-		Height:    900,
-		MinWidth:  1000,
-		MinHeight: 600,
+		Title:             "Lingma Tap",
+		Width:             1400,
+		Height:            900,
+		MinWidth:          1000,
+		MinHeight:         600,
 		HideWindowOnClose: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,

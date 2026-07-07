@@ -233,6 +233,10 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 	finishSent := false
 	firstChunkSent := false
 
+	// TTFB 自测量：记录第一个包含内容的 data 事件时间
+	var firstTokenTime time.Time
+	firstTokenRecorded := false
+
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		if h.Debug {
 			fmt.Printf("[debug] SSE Event: Type=%s, ContentLen=%d, ToolCalls=%d, FinishReason=%s\n",
@@ -241,6 +245,12 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 		switch event.Type {
 		case "data":
+			// 记录第一个包含内容的 token 时间（用于 TTFB 自测量）
+			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "") {
+				firstTokenTime = time.Now()
+				firstTokenRecorded = true
+			}
+
 			// Skip truly empty data events (no content, reasoning, tool calls, or finish reason)
 			if event.Content == "" && event.ReasoningContent == "" && len(event.ToolCalls) == 0 && event.FinishReason == "" {
 				if event.Usage != nil {
@@ -405,6 +415,11 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 			// Finalize Log
 			gLog.Status = 200
+
+			// TTFB fallback: use self-measured value if upstream didn't provide one
+			if gLog.TTFT == 0 && firstTokenRecorded {
+				gLog.TTFT = firstTokenTime.Sub(startTime).Milliseconds()
+			}
 
 			// Synthesize original response structure
 			if finishReason == "" {

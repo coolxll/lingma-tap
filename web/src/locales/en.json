@@ -138,6 +138,13 @@
     "tool_calls": "Tool Calls"
   },
   "monitor": {
+    "time_filter": {
+      "all": "All",
+      "1h": "Last Hour",
+      "today": "Today",
+      "7d": "7 Days",
+      "30d": "30 Days"
+    },
     "logging_status": {
       "active": "Full Payloads",
       "paused": "Metadata Only",

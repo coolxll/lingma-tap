@@ -464,6 +464,10 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	finalized := false
 	recordPayloads := h.shouldRecordPayloads()
 
+	// TTFB self-measurement
+	var firstTokenTime time.Time
+	firstTokenRecorded := false
+
 	stopThinking := func() {
 		if thinkingBlockStarted {
 			writeAnthropicSSE(w, "content_block_stop", map[string]any{
@@ -565,6 +569,12 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
 		case "data":
+			// Record first token time for TTFB self-measurement
+			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "") {
+				firstTokenTime = time.Now()
+				firstTokenRecorded = true
+			}
+
 			// Handle reasoning content (thinking blocks)
 			if event.ReasoningContent != "" {
 				if recordPayloads {
@@ -723,6 +733,10 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			applyFinishEvent(gLog, event)
 			if event.Usage != nil {
 				usage = event.Usage
+			}
+			// TTFB fallback: use self-measured value if upstream didn't provide one
+			if gLog.TTFT == 0 && firstTokenRecorded {
+				gLog.TTFT = firstTokenTime.Sub(startTime).Milliseconds()
 			}
 			finalize()
 		case "done":

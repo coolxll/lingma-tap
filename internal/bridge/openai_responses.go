@@ -196,9 +196,19 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 
 	upstreamErrored := false
 
+	// TTFB self-measurement
+	var firstTokenTime time.Time
+	firstTokenRecorded := false
+
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
 		case "data":
+			// Record first token time for TTFB self-measurement
+			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "") {
+				firstTokenTime = time.Now()
+				firstTokenRecorded = true
+			}
+
 			if event.HasError {
 				upstreamErrored = true
 				errMsg := orDefault(event.ErrorMsg, "unknown upstream error")
@@ -362,6 +372,10 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 			applyFinishEvent(gLog, event)
 			if event.Usage != nil {
 				usage = event.Usage
+			}
+			// TTFB fallback: use self-measured value if upstream didn't provide one
+			if gLog.TTFT == 0 && firstTokenRecorded {
+				gLog.TTFT = firstTokenTime.Sub(startTime).Milliseconds()
 			}
 			// Close reasoning block if open
 			if reasoningBlockStarted {

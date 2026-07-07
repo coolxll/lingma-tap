@@ -93,12 +93,35 @@ export function GatewayMonitor({
   const [requestViewMode, setRequestViewMode] = useState<'friendly' | 'raw'>('friendly');
   const [responseViewMode, setResponseViewMode] = useState<'friendly' | 'raw'>('friendly');
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(() => new Set(DEFAULT_COLUMNS));
+  const [timeRange, setTimeRange] = useState<'all' | '1h' | 'today' | '7d' | '30d'>('all');
   const PAGE_SIZE = 50;
 
   const processedRows = useMemo(() => {
     if (!records) return [];
+
+    // 计算时间范围
+    const now = Date.now();
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const timeLimits: Record<Exclude<typeof timeRange, 'all' | 'today'>, number> = {
+      '1h': 3600_000,
+      '7d': 7 * 24 * 3600_000,
+      '30d': 30 * 24 * 3600_000,
+    };
+
     const filtered = records
       .filter(r => r && r.source === 'gateway')
+      .filter(row => {
+        // 时间过滤
+        if (timeRange !== 'all' && row.ts) {
+          const rowTime = new Date(row.ts).getTime();
+          if (Number.isNaN(rowTime)) return true;
+          if (timeRange === 'today') return rowTime >= startOfToday.getTime();
+          const limit = timeLimits[timeRange];
+          if (now - rowTime > limit) return false;
+        }
+        return true;
+      })
       .map(row => {
         const inputTokens = row.input_tokens || 0;
         const outputTokens = row.output_tokens || 0;
@@ -139,7 +162,7 @@ export function GatewayMonitor({
       });
 
     return filtered;
-  }, [records, filter]);
+  }, [records, filter, timeRange]);
 
   const stats = useMemo(() => {
     const total = processedRows.length;
@@ -160,7 +183,7 @@ export function GatewayMonitor({
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [filter]);
+  }, [filter, timeRange]);
 
   const toggleColumn = (column: ColumnKey) => {
     setVisibleColumns(prev => {
@@ -267,6 +290,22 @@ export function GatewayMonitor({
             onChange={(e) => setFilter(e.target.value)}
             className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-10 pr-4 py-2 text-sm text-zinc-300 focus:outline-none focus:border-zinc-700 transition-all shadow-inner"
           />
+        </div>
+
+        <div className="flex gap-1 items-center">
+          {(['all', '1h', 'today', '7d', '30d'] as const).map((range) => (
+            <button
+              key={range}
+              onClick={() => setTimeRange(range)}
+              className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-colors ${
+                timeRange === range
+                  ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                  : 'bg-zinc-900/50 text-zinc-500 border border-zinc-800 hover:text-zinc-300'
+              }`}
+            >
+              {t(`monitor.time_filter.${range}`)}
+            </button>
+          ))}
         </div>
 
         <div className="flex gap-4 ml-auto items-center">

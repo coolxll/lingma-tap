@@ -13,7 +13,7 @@
     "copy": "复制",
     "copied": "已复制",
     "proxy_tab": "代理抓包",
-    "gateway_tab": "AI Gateway",
+    "gateway_tab": "AI 网关",
     "antigravity_tab": "Antigravity",
     "settings_tab": "设置",
     "all": "全部"
@@ -139,6 +139,13 @@
     "tool_calls": "工具调用"
   },
   "monitor": {
+    "time_filter": {
+      "all": "全部",
+      "1h": "最近1小时",
+      "today": "今天",
+      "7d": "最近7天",
+      "30d": "最近30天"
+    },
     "logging_status": {
       "active": "完整报文",
       "paused": "仅元数据",
