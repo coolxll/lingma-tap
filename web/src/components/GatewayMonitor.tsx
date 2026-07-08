@@ -19,6 +19,7 @@ interface GatewayMonitorProps {
 interface ProcessedRow {
   req: TrafficRecord;
   resp: TrafficRecord | null;
+  timestampValid: boolean;
   details: {
     model: string;
     path: string;
@@ -112,17 +113,20 @@ export function GatewayMonitor({
     const filtered = records
       .filter(r => r && r.source === 'gateway')
       .filter(row => {
-        // 时间过滤
+        // 时间过滤：保留坏时间戳记录，但给它们打标，不参与范围计算
         if (timeRange !== 'all' && row.ts) {
           const rowTime = new Date(row.ts).getTime();
-          if (Number.isNaN(rowTime)) return true;
-          if (timeRange === 'today') return rowTime >= startOfToday.getTime();
-          const limit = timeLimits[timeRange];
-          if (now - rowTime > limit) return false;
+          if (!Number.isNaN(rowTime)) {
+            if (timeRange === 'today') return rowTime >= startOfToday.getTime();
+            const limit = timeLimits[timeRange];
+            if (now - rowTime > limit) return false;
+          }
         }
         return true;
       })
       .map(row => {
+        const rowTime = new Date(row.ts).getTime();
+        const timestampValid = !Number.isNaN(rowTime);
         const inputTokens = row.input_tokens || 0;
         const outputTokens = row.output_tokens || 0;
         const totalTokens = row.total_tokens || inputTokens + outputTokens;
@@ -133,6 +137,7 @@ export function GatewayMonitor({
         return {
           req: row,
           resp: row,
+          timestampValid,
           details: {
             model: row.model || 'Unknown',
             path: row.path || '',
@@ -218,7 +223,18 @@ export function GatewayMonitor({
   const renderCell = (column: ColumnKey, row: ProcessedRow) => {
     switch (column) {
       case 'time':
-        return <span className="text-[10px] text-zinc-500 font-medium whitespace-nowrap">{formatTimestamp(row.req.ts)}</span>;
+        return (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-zinc-500 font-medium whitespace-nowrap">
+              {row.timestampValid ? formatTimestamp(row.req.ts) : (row.req.ts || '-')}
+            </span>
+            {!row.timestampValid && (
+              <span className="inline-flex items-center rounded border border-red-500/25 bg-red-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-red-300">
+                invalid
+              </span>
+            )}
+          </div>
+        );
       case 'model':
         return (
           <div className="flex flex-col min-w-36">
@@ -436,8 +452,15 @@ export function GatewayMonitor({
                   </span>
                   <span className="text-xs text-zinc-500 font-mono">{selectedRow.req.session}</span>
                 </div>
-                <h2 className="text-lg font-bold text-zinc-100">{shortenEndpoint(selectedRow.req.path)} · {formatTimestamp(selectedRow.req.ts)}</h2>
-              </div>
+              <h2 className="text-lg font-bold text-zinc-100">
+                {shortenEndpoint(selectedRow.req.path)} · {selectedRow.timestampValid ? formatTimestamp(selectedRow.req.ts) : (selectedRow.req.ts || '-')}
+              </h2>
+              {!selectedRow.timestampValid && (
+                <span className="inline-flex items-center rounded border border-red-500/25 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                  invalid timestamp
+                </span>
+              )}
+            </div>
               <button
                 onClick={() => setSelectedRow(null)}
                 className="p-2 rounded-full hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition-colors"

@@ -33,6 +33,19 @@ func preserveOnPartialUpdate(col, guard string) string {
 		"\t\t\tEND"
 }
 
+func normalizeTimestamp(ts string) string {
+	if ts == "" {
+		return Now()
+	}
+	if _, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+		return ts
+	}
+	if _, err := time.Parse(time.RFC3339, ts); err == nil {
+		return ts
+	}
+	return Now()
+}
+
 type DB struct {
 	db      *sqlx.DB
 	writeMu sync.Mutex
@@ -100,6 +113,7 @@ func (d *DB) migrate() error {
 // SaveRecord persists a record and upserts its session aggregate.
 func (d *DB) SaveRecord(rec *proto.Record) error {
 	// Prepare helper fields
+	rec.Ts = normalizeTimestamp(rec.Ts)
 	reqHeadersJSON, _ := json.Marshal(rec.ReqHeaders)
 	respHeadersJSON, _ := json.Marshal(rec.RespHeaders)
 	sseEventsJSON, _ := json.Marshal(rec.SSEEvents)
@@ -377,6 +391,7 @@ func (d *DB) MustExec(query string, args ...interface{}) {
 
 // SaveGatewayLog persists a gateway-specific log entry.
 func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
+	log.Ts = normalizeTimestamp(log.Ts)
 	sseEventsJSON, _ := json.Marshal(log.SSEEvents)
 	log.SSEEventsJSON = string(sseEventsJSON)
 

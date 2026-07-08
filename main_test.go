@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/coolxll/lingma-tap/internal/api"
 	"github.com/coolxll/lingma-tap/internal/proto"
@@ -122,7 +123,11 @@ func TestClearRecordsBefore(t *testing.T) {
 	app, _, cleanup := newTestApp(t)
 	defer cleanup()
 
-	app.db.SaveRecord(&proto.Record{Session: "s1", EndpointType: "chat"})
+	app.db.SaveRecord(&proto.Record{
+		Ts:           time.Now().AddDate(0, 0, -200).Format(time.RFC3339),
+		Session:      "s1",
+		EndpointType: "chat",
+	})
 	deleted, err := app.ClearRecordsBefore(100)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)

@@ -230,6 +230,42 @@ func TestClearGatewayLogs(t *testing.T) {
 	}
 }
 
+func TestSaveGatewayLogNormalizesInvalidTimestamp(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_gateway_invalid_ts.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open db: %v", err)
+	}
+	defer db.Close()
+	defer os.RemoveAll(tmpDir)
+
+	glog := &proto.GatewayLog{
+		Ts:           "not-a-timestamp",
+		Session:      "gateway-session-invalid-ts",
+		Model:        "test-model",
+		Method:       "POST",
+		Path:         "/gateway",
+		RequestBody:  "req",
+		ResponseBody: "resp",
+		Status:       200,
+	}
+	if err := db.SaveGatewayLog(glog); err != nil {
+		t.Fatalf("SaveGatewayLog failed: %v", err)
+	}
+
+	logs, err := db.RecentGatewayLogs(10)
+	if err != nil {
+		t.Fatalf("RecentGatewayLogs failed: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 gateway log, got %d", len(logs))
+	}
+	if _, err := time.Parse(time.RFC3339Nano, logs[0].Ts); err != nil {
+		t.Fatalf("expected normalized RFC3339Nano timestamp, got %q: %v", logs[0].Ts, err)
+	}
+}
+
 func TestRecentRecordsByType(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")

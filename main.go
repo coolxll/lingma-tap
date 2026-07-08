@@ -647,16 +647,28 @@ func (a *App) SaveAnthropicMapping(mapping map[string]string, defaultModel strin
 	if a.db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	mappingBytes, _ := json.Marshal(mapping)
+	effectiveMapping := mapping
+	effectiveDefault := defaultModel
+	if len(effectiveMapping) == 0 {
+		effectiveMapping = map[string]string{
+			"sonnet": "dashscope_qwen3_coder",
+			"haiku":  "dashscope_qmodel",
+			"opus":   "dashscope_qwen_max_latest",
+		}
+		if effectiveDefault == "" {
+			effectiveDefault = "dashscope_qmodel"
+		}
+	}
+	mappingBytes, _ := json.Marshal(effectiveMapping)
 	if err := a.db.SaveSetting("anthropic_model_mapping", string(mappingBytes)); err != nil {
 		return err
 	}
-	if err := a.db.SaveSetting("default_anthropic_model", defaultModel); err != nil {
+	if err := a.db.SaveSetting("default_anthropic_model", effectiveDefault); err != nil {
 		return err
 	}
 
 	if a.bridgeHandlerField != nil {
-		a.bridgeHandlerField.UpdateAnthropicMapping(mapping, defaultModel)
+		a.bridgeHandlerField.UpdateAnthropicMapping(effectiveMapping, effectiveDefault)
 	}
 	return nil
 }
