@@ -1,4 +1,5 @@
 //go:build darwin
+
 package main
 
 /*
@@ -9,6 +10,7 @@ void initTray(const unsigned char* iconData, int iconLength);
 import "C"
 import (
 	_ "embed"
+	"log"
 	"unsafe"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -21,14 +23,19 @@ var appInstance *App
 
 func startTray(app *App) {
 	appInstance = app
-	if len(trayIconBytes) > 0 {
-		C.initTray((*C.uchar)(unsafe.Pointer(&trayIconBytes[0])), C.int(len(trayIconBytes)))
+	if len(trayIconBytes) == 0 {
+		log.Printf("[tray] macOS tray icon asset is empty")
+		return
 	}
+
+	log.Printf("[tray] initializing macOS status item with %d-byte icon", len(trayIconBytes))
+	C.initTray((*C.uchar)(unsafe.Pointer(&trayIconBytes[0])), C.int(len(trayIconBytes)))
 }
 
 //export goShowWindow
 func goShowWindow() {
 	if appInstance != nil && appInstance.ctx != nil {
+		runtime.Show(appInstance.ctx)
 		runtime.WindowShow(appInstance.ctx)
 	}
 }
@@ -36,6 +43,6 @@ func goShowWindow() {
 //export goHideWindow
 func goHideWindow() {
 	if appInstance != nil && appInstance.ctx != nil {
-		runtime.WindowHide(appInstance.ctx)
+		runtime.Hide(appInstance.ctx)
 	}
 }

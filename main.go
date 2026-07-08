@@ -27,6 +27,8 @@ import (
 	"github.com/coolxll/lingma-tap/internal/proxy"
 	"github.com/coolxll/lingma-tap/internal/storage"
 	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/menu"
+	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
@@ -125,6 +127,9 @@ func (a *App) startup(ctx context.Context) {
 		log.SetOutput(io.MultiWriter(os.Stderr, logFile))
 		log.Println("--- App Started ---")
 	}
+
+	// Initialize macOS status bar / system tray before services that may fail.
+	startTray(a)
 
 	// Initialize CA
 	c, err := ca.New(dataDir)
@@ -278,9 +283,6 @@ func (a *App) startup(ctx context.Context) {
 			log.Printf("[app] Auto-started AI Gateway on port 9090")
 		}
 	}()
-
-	// Initialize macOS status bar / system tray
-	startTray(a)
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -772,6 +774,23 @@ func (a *App) LogError(message string) {
 	log.Printf("[frontend-error] %s", message)
 }
 
+func buildAppMenu(app *App) *menu.Menu {
+	mainMenu := menu.NewMenu()
+	mainMenu.Append(menu.AppMenu())
+	mainMenu.Append(menu.EditMenu())
+
+	windowMenu := mainMenu.AddSubmenu("Window")
+	windowMenu.AddText("Close Window", keys.CmdOrCtrl("w"), func(_ *menu.CallbackData) {
+		if app.ctx != nil {
+			runtime.Hide(app.ctx)
+		}
+	})
+	windowMenu.AddSeparator()
+	windowMenu.Append(menu.WindowMenu())
+
+	return mainMenu
+}
+
 func main() {
 	assets, err := fs.Sub(webAssets, "web/dist")
 	if err != nil {
@@ -789,6 +808,7 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
+		Menu: buildAppMenu(app),
 		Mac: &mac.Options{
 			TitleBar: mac.TitleBarHiddenInset(),
 		},
