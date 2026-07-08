@@ -895,13 +895,23 @@ func TestUsageUnmarshal_SkipsZeroAliases(t *testing.T) {
 	}
 }
 
-func TestUsageUnmarshal_CacheInputTokenSum(t *testing.T) {
+func TestUsageUnmarshal_CacheReadTokensOnly(t *testing.T) {
 	var u Usage
 	if err := json.Unmarshal([]byte(`{"cache_read_input_tokens":3,"cache_creation_input_tokens":4}`), &u); err != nil {
 		t.Fatalf("unmarshal usage: %v", err)
 	}
-	if u.CachedTokens != 7 {
-		t.Fatalf("cached tokens = %d, want 7", u.CachedTokens)
+	if u.CachedTokens != 3 {
+		t.Fatalf("cached tokens = %d, want 3 (only cache_read_input_tokens, not cache_creation)", u.CachedTokens)
+	}
+}
+
+func TestUsageUnmarshal_CacheCreationNotCounted(t *testing.T) {
+	var u Usage
+	if err := json.Unmarshal([]byte(`{"cache_creation_input_tokens":4}`), &u); err != nil {
+		t.Fatalf("unmarshal usage: %v", err)
+	}
+	if u.CachedTokens != 0 {
+		t.Fatalf("cached tokens = %d, want 0 (cache_creation_input_tokens is not a cache hit)", u.CachedTokens)
 	}
 }
 

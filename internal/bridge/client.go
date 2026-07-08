@@ -135,12 +135,8 @@ func (u *Usage) UnmarshalJSON(data []byte) error {
 	u.InputTokens = firstInt(raw, u.InputTokens, "input_tokens", "inputTokens", "prompt_tokens", "promptTokens", "inputTokenCount")
 	u.OutputTokens = firstInt(raw, u.OutputTokens, "output_tokens", "outputTokens", "completion_tokens", "completionTokens", "outputTokenCount")
 	u.CachedTokens = firstInt(raw, u.CachedTokens, "cached_tokens", "cachedTokens")
-	cacheInputTokens := sumInts(raw,
-		"cache_read_input_tokens", "cacheReadInputTokens",
-		"cache_creation_input_tokens", "cacheCreationInputTokens",
-	)
-	if u.CachedTokens == 0 && cacheInputTokens > 0 {
-		u.CachedTokens = cacheInputTokens
+	if u.CachedTokens == 0 {
+		u.CachedTokens = firstInt(raw, 0, "cache_read_input_tokens", "cacheReadInputTokens")
 	}
 	u.ReasoningTokens = firstInt(raw, u.ReasoningTokens, "reasoning_tokens", "reasoningTokens", "thinking_tokens", "thinkingTokens")
 
@@ -190,16 +186,6 @@ func firstInt(raw map[string]json.RawMessage, current int, keys ...string) int {
 		return 0
 	}
 	return current
-}
-
-func sumInts(raw map[string]json.RawMessage, keys ...string) int {
-	total := 0
-	for _, key := range keys {
-		if n, ok := rawInt(raw, key); ok && n > 0 {
-			total += n
-		}
-	}
-	return total
 }
 
 // TokenDetails holds nested token detail fields.

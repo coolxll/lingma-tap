@@ -155,7 +155,7 @@
     "search_placeholder": "搜索模型、会话或内容...",
     "stats": {
       "tokens": "Tokens",
-      "recent": "近期",
+      "recent": "请求数",
       "total": "总计",
       "ok": "成功",
       "err": "异常"

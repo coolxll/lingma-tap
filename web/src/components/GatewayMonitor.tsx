@@ -171,11 +171,11 @@ export function GatewayMonitor({
 
   const stats = useMemo(() => {
     const total = processedRows.length;
-    const ok = processedRows.filter(r => r.resp && r.resp.status >= 200 && r.resp.status < 300).length;
-    const err = processedRows.filter(r => r.resp && r.resp.status >= 400).length;
     const inputTokens = processedRows.reduce((sum, r) => sum + r.details.inputTokens, 0);
     const outputTokens = processedRows.reduce((sum, r) => sum + r.details.outputTokens, 0);
-    return { total, ok, err, inputTokens, outputTokens };
+    const cachedTokens = processedRows.reduce((sum, r) => sum + r.details.cachedTokens, 0);
+    const totalTokens = processedRows.reduce((sum, r) => sum + r.details.totalTokens, 0);
+    return { total, inputTokens, outputTokens, cachedTokens, totalTokens };
   }, [processedRows]);
 
   const totalPages = Math.ceil(processedRows.length / PAGE_SIZE);
@@ -285,10 +285,11 @@ export function GatewayMonitor({
 
   return (
     <div className="h-full flex flex-col bg-zinc-950">
-      <div className="flex flex-wrap items-center gap-4 px-6 py-4 bg-zinc-950 border-b border-zinc-900">
+      {/* Toolbar */}
+      <div className="flex items-center gap-4 px-6 py-3 bg-zinc-950 border-b border-zinc-900">
         <button
           onClick={onToggleLogging}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border ${loggingEnabled
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border shrink-0 ${loggingEnabled
             ? 'bg-green-500/10 text-green-400 border-green-500/20'
             : 'bg-zinc-900 text-zinc-500 border-zinc-800'
             }`}
@@ -297,7 +298,7 @@ export function GatewayMonitor({
           {loggingEnabled ? t('monitor.logging_status.active') : t('monitor.logging_status.paused')}
         </button>
 
-        <div className="relative flex-1 min-w-64 max-w-md">
+        <div className="relative flex-1 min-w-48 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-600" />
           <input
             type="text"
@@ -308,7 +309,7 @@ export function GatewayMonitor({
           />
         </div>
 
-        <div className="flex gap-1 items-center">
+        <div className="flex gap-1 items-center shrink-0">
           {(['all', '1h', 'today', '7d', '30d'] as const).map((range) => (
             <button
               key={range}
@@ -324,42 +325,61 @@ export function GatewayMonitor({
           ))}
         </div>
 
-        <div className="flex gap-4 ml-auto items-center">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-full">
-            <span className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">{t('monitor.stats.tokens')}</span>
-            <span className="text-xs font-mono text-blue-200">{(stats.inputTokens + stats.outputTokens).toLocaleString()}</span>
-          </div>
-          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-500/10 border border-green-500/20 rounded-full">
-            <span className="text-[10px] font-bold text-green-400 uppercase tracking-wider">{t('monitor.stats.recent')}</span>
-            <span className="text-xs font-mono text-green-200">{stats.total}</span>
-          </div>
-        </div>
-
         <div className="w-px h-6 bg-zinc-800" />
         <button
           onClick={onClear}
-          className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded-full transition-all"
+          className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded-full transition-all shrink-0"
           title={t('common.clear')}
         >
           <Trash2 className="w-5 h-5" />
         </button>
+      </div>
 
-        <div className="basis-full flex flex-wrap items-center gap-2 pt-1">
-          <span className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mr-1">{t('monitor.table.columns')}</span>
-          {ALL_COLUMNS.map(column => (
-            <button
-              key={column}
-              type="button"
-              onClick={() => toggleColumn(column)}
-              className={`px-2.5 py-1 rounded-lg border text-[10px] font-bold transition-colors ${visibleColumns.has(column)
-                ? 'bg-blue-500/10 text-blue-300 border-blue-500/30'
-                : 'bg-zinc-900/50 text-zinc-500 border-zinc-800 hover:text-zinc-300'
-                }`}
-            >
-              {columnLabel(column)}
-            </button>
-          ))}
-        </div>
+      {/* Stats Overview */}
+      <div className="flex flex-wrap items-center gap-3 px-6 py-3 bg-zinc-950 border-b border-zinc-900">
+        <StatCard
+          label={t('monitor.stats.tokens')}
+          value={stats.totalTokens.toLocaleString()}
+          color="zinc"
+        />
+        <StatCard
+          label={t('monitor.table.input')}
+          value={stats.inputTokens.toLocaleString()}
+          color="blue"
+        />
+        <StatCard
+          label={t('monitor.table.output')}
+          value={stats.outputTokens.toLocaleString()}
+          color="purple"
+        />
+        <StatCard
+          label={t('monitor.table.cached')}
+          value={stats.cachedTokens.toLocaleString()}
+          color="emerald"
+        />
+        <StatCard
+          label={t('monitor.stats.recent')}
+          value={String(stats.total)}
+          color="green"
+        />
+      </div>
+
+      {/* Column Selector */}
+      <div className="flex flex-wrap items-center gap-2 px-6 py-2.5 bg-zinc-950 border-b border-zinc-900">
+        <span className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mr-1">{t('monitor.table.columns')}</span>
+        {ALL_COLUMNS.map(column => (
+          <button
+            key={column}
+            type="button"
+            onClick={() => toggleColumn(column)}
+            className={`px-2.5 py-1 rounded-lg border text-[10px] font-bold transition-colors ${visibleColumns.has(column)
+              ? 'bg-blue-500/10 text-blue-300 border-blue-500/30'
+              : 'bg-zinc-900/50 text-zinc-500 border-zinc-800 hover:text-zinc-300'
+              }`}
+          >
+            {columnLabel(column)}
+          </button>
+        ))}
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -624,6 +644,27 @@ export function GatewayMonitor({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function StatCard({ label, value, color }: {
+  label: string;
+  value: string;
+  color: 'zinc' | 'blue' | 'purple' | 'emerald' | 'green';
+}) {
+  const colors = {
+    zinc: { border: 'border-zinc-700/50', labelText: 'text-zinc-500', valueText: 'text-zinc-200' },
+    blue: { border: 'border-blue-500/20', labelText: 'text-blue-400', valueText: 'text-blue-200' },
+    purple: { border: 'border-purple-500/20', labelText: 'text-purple-400', valueText: 'text-purple-200' },
+    emerald: { border: 'border-emerald-500/20', labelText: 'text-emerald-400', valueText: 'text-emerald-200' },
+    green: { border: 'border-green-500/20', labelText: 'text-green-400', valueText: 'text-green-200' },
+  };
+  const c = colors[color];
+  return (
+    <div className={`flex items-center gap-2 px-3 py-1.5 bg-zinc-900/30 border ${c.border} rounded-lg`}>
+      <span className={`text-[10px] font-bold uppercase tracking-wider ${c.labelText}`}>{label}</span>
+      <span className={`text-xs font-mono font-bold ${c.valueText}`}>{value}</span>
     </div>
   );
 }

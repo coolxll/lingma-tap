@@ -154,7 +154,7 @@
     "search_placeholder": "Search models, sessions or content...",
     "stats": {
       "tokens": "Tokens",
-      "recent": "Recent",
+      "recent": "Requests",
       "total": "Total",
       "ok": "Success",
       "err": "Error"
