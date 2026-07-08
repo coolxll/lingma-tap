@@ -46,3 +46,7 @@ func goHideWindow() {
 		runtime.Hide(appInstance.ctx)
 	}
 }
+
+func stopTray() {
+	// The macOS status item is owned by NSApp and is cleaned up on process exit.
+}

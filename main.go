@@ -128,7 +128,7 @@ func (a *App) startup(ctx context.Context) {
 		log.Println("--- App Started ---")
 	}
 
-	// Initialize macOS status bar / system tray before services that may fail.
+	// Initialize status bar / system tray before services that may fail.
 	startTray(a)
 
 	// Initialize CA
@@ -282,6 +282,7 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	stopTray()
 	if a.hub != nil {
 		a.hub.Stop()
 	}
