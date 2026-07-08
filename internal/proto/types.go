@@ -91,6 +91,16 @@ type GatewayLog struct {
 	SSEEventsJSON string `json:"-" db:"sse_events_json"`
 }
 
+// GatewayLogStats represents aggregate statistics for AI Gateway logs.
+type GatewayLogStats struct {
+	Total           int   `json:"total" db:"total"`
+	InputTokens     int64 `json:"input_tokens" db:"input_tokens"`
+	OutputTokens    int64 `json:"output_tokens" db:"output_tokens"`
+	CachedTokens    int64 `json:"cached_tokens" db:"cached_tokens"`
+	ReasoningTokens int64 `json:"reasoning_tokens" db:"reasoning_tokens"`
+	TotalTokens     int64 `json:"total_tokens" db:"total_tokens"`
+}
+
 // Session represents an aggregated view of a request/response pair.
 type Session struct {
 	ID           string `json:"id" db:"id"`

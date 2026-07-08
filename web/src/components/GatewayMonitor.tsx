@@ -14,6 +14,16 @@ interface GatewayMonitorProps {
   onToggleLogging: () => void;
   onLoadMore?: () => void;
   canLoadMore?: boolean;
+  getStats?: (timeRange: TimeRange, filter: string) => Promise<GatewayStats>;
+}
+
+interface GatewayStats {
+  total: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cached_tokens?: number;
+  reasoning_tokens?: number;
+  total_tokens?: number;
 }
 
 interface ProcessedRow {
@@ -51,6 +61,8 @@ type ColumnKey =
   | 'cached'
   | 'totalTokens';
 
+type TimeRange = 'all' | '1h' | 'today' | '7d' | '30d';
+
 const DEFAULT_COLUMNS: ColumnKey[] = ['time', 'model', 'result', 'ttft', 'latency', 'speed', 'input', 'output', 'totalTokens'];
 const ALL_COLUMNS: ColumnKey[] = ['time', 'model', 'endpoint', 'result', 'ttft', 'latency', 'speed', 'input', 'output', 'reasoning', 'cached', 'totalTokens'];
 
@@ -85,7 +97,8 @@ export function GatewayMonitor({
   loggingEnabled,
   onToggleLogging,
   onLoadMore,
-  canLoadMore
+  canLoadMore,
+  getStats
 }: GatewayMonitorProps) {
   const { t } = useTranslation();
   const [filter, setFilter] = useState('');
@@ -94,7 +107,8 @@ export function GatewayMonitor({
   const [requestViewMode, setRequestViewMode] = useState<'friendly' | 'raw'>('friendly');
   const [responseViewMode, setResponseViewMode] = useState<'friendly' | 'raw'>('friendly');
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(() => new Set(DEFAULT_COLUMNS));
-  const [timeRange, setTimeRange] = useState<'all' | '1h' | 'today' | '7d' | '30d'>('all');
+  const [timeRange, setTimeRange] = useState<TimeRange>('all');
+  const [aggregateStats, setAggregateStats] = useState<GatewayStats | null>(null);
   const PAGE_SIZE = 50;
 
   const processedRows = useMemo(() => {
@@ -169,7 +183,7 @@ export function GatewayMonitor({
     return filtered;
   }, [records, filter, timeRange]);
 
-  const stats = useMemo(() => {
+  const loadedStats = useMemo(() => {
     const total = processedRows.length;
     const inputTokens = processedRows.reduce((sum, r) => sum + r.details.inputTokens, 0);
     const outputTokens = processedRows.reduce((sum, r) => sum + r.details.outputTokens, 0);
@@ -177,6 +191,36 @@ export function GatewayMonitor({
     const totalTokens = processedRows.reduce((sum, r) => sum + r.details.totalTokens, 0);
     return { total, inputTokens, outputTokens, cachedTokens, totalTokens };
   }, [processedRows]);
+
+  useEffect(() => {
+    if (!getStats) {
+      setAggregateStats(null);
+      return;
+    }
+    let cancelled = false;
+    getStats(timeRange, filter)
+      .then(stats => {
+        if (!cancelled) setAggregateStats(stats || null);
+      })
+      .catch(err => {
+        console.error('Failed to load gateway stats:', err);
+        if (!cancelled) setAggregateStats(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [getStats, timeRange, filter, records.length]);
+
+  const stats = useMemo(() => {
+    if (!aggregateStats) return loadedStats;
+    return {
+      total: Number(aggregateStats.total) || 0,
+      inputTokens: Number(aggregateStats.input_tokens) || 0,
+      outputTokens: Number(aggregateStats.output_tokens) || 0,
+      cachedTokens: Number(aggregateStats.cached_tokens) || 0,
+      totalTokens: Number(aggregateStats.total_tokens) || 0,
+    };
+  }, [aggregateStats, loadedStats]);
 
   const totalPages = Math.ceil(processedRows.length / PAGE_SIZE);
   const paginatedRows = useMemo(() => {

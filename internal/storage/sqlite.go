@@ -452,6 +452,42 @@ func (d *DB) RecentGatewayLogs(limit int, offset ...int) ([]proto.GatewayLog, er
 	return logs, nil
 }
 
+// GatewayLogStats returns aggregate statistics for gateway logs, optionally
+// scoped by a lower-bound timestamp and the same search fields used by the UI.
+func (d *DB) GatewayLogStats(sinceTs string, filter string) (proto.GatewayLogStats, error) {
+	query := `
+		SELECT
+			COUNT(*) AS total,
+			COALESCE(SUM(input_tokens), 0) AS input_tokens,
+			COALESCE(SUM(output_tokens), 0) AS output_tokens,
+			COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+			COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+			COALESCE(SUM(CASE WHEN total_tokens > 0 THEN total_tokens ELSE input_tokens + output_tokens END), 0) AS total_tokens
+		FROM gateway_logs
+		WHERE 1=1`
+	args := []any{}
+	if sinceTs != "" {
+		query += " AND ts >= ?"
+		args = append(args, sinceTs)
+	}
+	if filter != "" {
+		like := "%" + filter + "%"
+		query += ` AND (
+			LOWER(COALESCE(model, '')) LIKE LOWER(?) OR
+			LOWER(COALESCE(path, '')) LIKE LOWER(?) OR
+			LOWER(COALESCE(session, '')) LIKE LOWER(?) OR
+			LOWER(COALESCE(request_body, '')) LIKE LOWER(?)
+		)`
+		args = append(args, like, like, like, like)
+	}
+
+	var stats proto.GatewayLogStats
+	if err := d.db.Get(&stats, query, args...); err != nil {
+		return proto.GatewayLogStats{}, err
+	}
+	return stats, nil
+}
+
 // GetSetting retrieves a setting value by key.
 func (d *DB) GetSetting(key string) (string, error) {
 	var value string

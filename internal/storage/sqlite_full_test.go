@@ -143,6 +143,21 @@ func TestStorageFullFlow(t *testing.T) {
 		t.Errorf("late initial log regressed final observability fields: %+v", logs[0])
 	}
 
+	gatewayStats, err := db.GatewayLogStats("", "gpt")
+	if err != nil {
+		t.Fatalf("GatewayLogStats failed: %v", err)
+	}
+	if gatewayStats.Total != 1 || gatewayStats.InputTokens != 123 || gatewayStats.OutputTokens != 45 || gatewayStats.CachedTokens != 67 || gatewayStats.ReasoningTokens != 8 || gatewayStats.TotalTokens != 168 {
+		t.Errorf("unexpected gateway stats: %+v", gatewayStats)
+	}
+	gatewayStats, err = db.GatewayLogStats("9999-01-01T00:00:00Z", "")
+	if err != nil {
+		t.Fatalf("GatewayLogStats with since failed: %v", err)
+	}
+	if gatewayStats.Total != 0 || gatewayStats.TotalTokens != 0 {
+		t.Errorf("expected empty future gateway stats, got %+v", gatewayStats)
+	}
+
 	// 8. Test Stats
 	stats := db.Stats()
 	if stats.Records != 1 || stats.Sessions != 1 {

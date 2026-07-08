@@ -28,6 +28,7 @@ interface WailsWindow extends Window {
         GetRecords: (limit: number, offset: number) => Promise<TrafficRecord[]>;
         GetRecordsByType?: (limit: number, offset: number, recordType: string) => Promise<TrafficRecord[]>;
         GetGatewayLogs: (limit: number, offset: number) => Promise<any[]>;
+        GetGatewayStats?: (timeRange: string, filter: string) => Promise<any>;
         LogError: (message: string) => Promise<void>;
         ClearRecords: () => Promise<void>;
         ClearProxyRecords: () => Promise<void>;
@@ -592,6 +593,7 @@ function App() {
             onToggleLogging={handleToggleGatewayLogging}
             onLoadMore={handleLoadMore}
             canLoadMore={canLoadMore}
+            getStats={wails?.GetGatewayStats}
           />
         ) : (
           <SettingsPanel

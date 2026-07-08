@@ -480,6 +480,34 @@ func (a *App) GetGatewayLogs(limit int, offset int) []proto.GatewayLog {
 	return logs
 }
 
+// GetGatewayStats returns aggregate AI Gateway stats for the selected UI time range.
+func (a *App) GetGatewayStats(timeRange string, filter string) proto.GatewayLogStats {
+	if a.db == nil {
+		return proto.GatewayLogStats{}
+	}
+
+	now := time.Now()
+	since := ""
+	switch timeRange {
+	case "1h":
+		since = now.Add(-time.Hour).Format(time.RFC3339Nano)
+	case "today":
+		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		since = start.Format(time.RFC3339Nano)
+	case "7d":
+		since = now.Add(-7 * 24 * time.Hour).Format(time.RFC3339Nano)
+	case "30d":
+		since = now.Add(-30 * 24 * time.Hour).Format(time.RFC3339Nano)
+	}
+
+	stats, err := a.db.GatewayLogStats(since, filter)
+	if err != nil {
+		log.Printf("[app] GatewayLogStats error: %v", err)
+		return proto.GatewayLogStats{}
+	}
+	return stats
+}
+
 // ClearRecords clears all traffic data.
 func (a *App) ClearRecords() error {
 	if a.db == nil {
