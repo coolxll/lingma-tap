@@ -196,14 +196,10 @@ func (a *App) startup(ctx context.Context) {
 		// Load Anthropic model mapping from settings
 		mappingJSON, _ := a.db.GetSetting("anthropic_model_mapping")
 		defaultModel, _ := a.db.GetSetting("default_anthropic_model")
-		defaults := map[string]string{
-			"sonnet": "dashscope_qwen3_coder",
-			"haiku":  "dashscope_qmodel",
-			"opus":   "dashscope_qwen_max_latest",
-		}
+		defaults := bridge.DefaultAnthropicModelMapping()
 		fallbackDefaultModel := defaultModel
 		if fallbackDefaultModel == "" {
-			fallbackDefaultModel = "dashscope_qmodel"
+			fallbackDefaultModel = bridge.DefaultAnthropicModel
 		}
 		if mappingJSON != "" {
 			var mapping map[string]string
@@ -650,13 +646,9 @@ func (a *App) SaveAnthropicMapping(mapping map[string]string, defaultModel strin
 	effectiveMapping := mapping
 	effectiveDefault := defaultModel
 	if len(effectiveMapping) == 0 {
-		effectiveMapping = map[string]string{
-			"sonnet": "dashscope_qwen3_coder",
-			"haiku":  "dashscope_qmodel",
-			"opus":   "dashscope_qwen_max_latest",
-		}
+		effectiveMapping = bridge.DefaultAnthropicModelMapping()
 		if effectiveDefault == "" {
-			effectiveDefault = "dashscope_qmodel"
+			effectiveDefault = bridge.DefaultAnthropicModel
 		}
 	}
 	mappingBytes, _ := json.Marshal(effectiveMapping)

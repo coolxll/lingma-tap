@@ -512,6 +512,10 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 	var toolCalls map[int]*toolCallState
 	var lastErr *SSEEvent
 
+	// TTFB self-measurement
+	var firstTokenTime time.Time
+	firstTokenRecorded := false
+
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		if h.Debug {
 			fmt.Printf("[debug] SSE Event (Non-Stream): Type=%s, ContentLen=%d, ToolCalls=%d, FinishReason=%s\n",
@@ -522,6 +526,11 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 			if event.HasError {
 				lastErr = &event
 				return nil
+			}
+			// Record first token time for TTFB self-measurement
+			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "") {
+				firstTokenTime = time.Now()
+				firstTokenRecorded = true
 			}
 			if event.ReasoningContent != "" {
 				fullReasoning.WriteString(event.ReasoningContent)
@@ -668,6 +677,12 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 	applyUsageToGatewayLog(gLog, usage)
 	gLog.Latency = time.Since(startTime).Milliseconds()
 	gLog.FinishReason = finishReason
+
+	// TTFB fallback: use self-measured value if upstream didn't provide one
+	if gLog.TTFT == 0 && firstTokenRecorded {
+		gLog.TTFT = firstTokenTime.Sub(startTime).Milliseconds()
+	}
+
 	h.recorder(gLog)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -675,9 +690,10 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 }
 
 type toolCallState struct {
-	id   string
-	name string
-	args strings.Builder
+	id          string
+	name        string
+	args        strings.Builder
+	outputIndex int
 }
 
 // resolveModelKey dynamically maps a requested model string to a Lingma model key

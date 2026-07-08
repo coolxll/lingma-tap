@@ -253,6 +253,87 @@ func TestBridgeHandler_HandleOpenAIResponses(t *testing.T) {
 	}
 }
 
+func TestBridgeHandler_OpenAIResponsesStreamToolCallKeepsFirstArgsAndIndex(t *testing.T) {
+	session := &auth.Session{CosyKey: "test-key"}
+	handler := NewBridgeHandler(session, func(log *proto.GatewayLog) {})
+
+	mockResp := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"preface"}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"type":"function","function":{"name":"read_file","arguments":"{\"path"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_late","function":{"arguments":"\":\"README.md\"}"}}]},"finish_reason":"tool_calls"}]}`,
+		`data: {"firstTokenDuration":5,"totalDuration":10}`,
+		`data: [DONE]`,
+	}, "\n\n") + "\n\n"
+
+	handler.client.client.Transport = &mockTransport{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"chat":[]}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(mockResp)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	reqBody := map[string]any{
+		"model":  "gpt-4",
+		"input":  "test input",
+		"stream": true,
+	}
+	reqBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest("POST", "/v1/responses", bytes.NewReader(reqBytes))
+	w := httptest.NewRecorder()
+
+	handler.HandleOpenAIResponses(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", resp.StatusCode)
+	}
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	body := string(bodyBytes)
+	var doneEvent map[string]any
+	for _, chunk := range strings.Split(body, "\n\n") {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(chunk), &event); err != nil {
+			t.Fatalf("invalid SSE JSON chunk %q: %v\nfull body:\n%s", chunk, err, body)
+		}
+		if event["type"] != "response.output_item.done" {
+			continue
+		}
+		item, _ := event["item"].(map[string]any)
+		if item["type"] == "function_call" {
+			doneEvent = event
+			break
+		}
+	}
+	if doneEvent == nil {
+		t.Fatalf("function_call done event not found in body:\n%s", body)
+	}
+	if got := doneEvent["index"]; got != float64(1) {
+		t.Fatalf("function_call done index = %v, want 1; body:\n%s", got, body)
+	}
+	item := doneEvent["item"].(map[string]any)
+	if got := item["id"]; got != "call_late" {
+		t.Fatalf("function_call id = %v, want call_late", got)
+	}
+	if got := item["arguments"]; got != `{"path":"README.md"}` {
+		t.Fatalf("function_call arguments = %v, want first and later chunks joined", got)
+	}
+}
+
 func TestBridgeHandler_HandleOpenAIChat_WithTools(t *testing.T) {
 	session := &auth.Session{CosyKey: "test-key"}
 	var capturedBody map[string]any

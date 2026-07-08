@@ -25,7 +25,7 @@ interface WailsWindow extends Window {
 }
 
 interface ModelInfo {
-  id: string;         // key from Lingma (e.g. "dashscope_qwen3_coder")
+  id: string;         // key from Lingma (e.g. "gm51model")
   object: string;
   display_name?: string;  // friendly name (e.g. "Qwen3-Coder")
   owned_by: string;

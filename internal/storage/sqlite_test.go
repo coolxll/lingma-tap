@@ -3,11 +3,41 @@ package storage
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/coolxll/lingma-tap/internal/proto"
 )
+
+func TestDefaultAnthropicModelSettingsAreCurrent(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_settings.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open db: %v", err)
+	}
+	defer db.Close()
+
+	mappingJSON, err := db.GetSetting("anthropic_model_mapping")
+	if err != nil {
+		t.Fatalf("GetSetting anthropic_model_mapping failed: %v", err)
+	}
+	if strings.Contains(mappingJSON, "dashscope_qwen3_coder") || strings.Contains(mappingJSON, "dashscope_qwen_max_latest") {
+		t.Fatalf("default mapping contains removed model key: %s", mappingJSON)
+	}
+	if !strings.Contains(mappingJSON, "gm51model") {
+		t.Fatalf("default mapping should include gm51model, got: %s", mappingJSON)
+	}
+
+	defaultModel, err := db.GetSetting("default_anthropic_model")
+	if err != nil {
+		t.Fatalf("GetSetting default_anthropic_model failed: %v", err)
+	}
+	if defaultModel != "dashscope_qmodel" {
+		t.Fatalf("default_anthropic_model = %q, want dashscope_qmodel", defaultModel)
+	}
+}
 
 func TestClearTraffic(t *testing.T) {
 	// Create temp db

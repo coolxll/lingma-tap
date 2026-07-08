@@ -84,7 +84,7 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 		maxTokens = MaxTokensLimit
 	}
 
-	modelKey := h.mapAnthropicModelToLingma(model)
+	modelKey := h.mapAnthropicModelToLingma(r.Context(), model)
 
 	// Convert Anthropic messages to OpenAI format
 	messages = anthropicToOpenAIMessages(system, messages)
@@ -295,13 +295,40 @@ func anthropicToOpenAITools(tools []map[string]any) []map[string]any {
 	return result
 }
 
-func (h *BridgeHandler) mapAnthropicModelToLingma(model string) string {
+func (h *BridgeHandler) mapAnthropicModelToLingma(ctx context.Context, model string) string {
+	modelLower := strings.ToLower(strings.TrimSpace(model))
+
+	// Prefer an exact Lingma model key/display-name match so Anthropic clients can
+	// request native Lingma models (for example gm51model) without being forced to
+	// the fallback default.
+	if modelLower != "" {
+		if models, err := h.fetchModelsWithCache(ctx); err == nil {
+			for _, m := range models {
+				if strings.ToLower(m.Key) == modelLower {
+					return m.Key
+				}
+				if strings.ToLower(m.DisplayName) == modelLower {
+					return m.Key
+				}
+			}
+		}
+	}
+
+	// Claude-family names still use the user-configurable keyword mapping.
 	for keyword, target := range h.modelMapping {
-		if strings.Contains(strings.ToLower(model), strings.ToLower(keyword)) {
+		keyword = strings.TrimSpace(keyword)
+		if keyword == "" || target == "" {
+			continue
+		}
+		if strings.Contains(modelLower, strings.ToLower(keyword)) {
 			return target
 		}
 	}
-	return h.defaultModel
+
+	if h.defaultModel != "" {
+		return h.defaultModel
+	}
+	return DefaultAnthropicModel
 }
 
 // sanitizeAnthropicRequest removes fields that may cause upstream rejection:
@@ -838,6 +865,8 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 	var finishReason string
 	toolCalls := make(map[int]*toolCallState)
 	var lastErr *SSEEvent
+	var firstTokenTime time.Time
+	firstTokenRecorded := false
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
@@ -845,6 +874,11 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 			if event.HasError {
 				lastErr = &event
 				return nil
+			}
+			// Record first token time for TTFB self-measurement
+			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "") {
+				firstTokenTime = time.Now()
+				firstTokenRecorded = true
 			}
 			if event.ReasoningContent != "" {
 				fullReasoning.WriteString(event.ReasoningContent)
@@ -975,6 +1009,12 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 	applyUsageToGatewayLog(gLog, &usage)
 	gLog.Latency = time.Since(startTime).Milliseconds()
 	gLog.FinishReason = stopReason
+
+	// TTFB fallback: use self-measured value if upstream didn't provide one
+	if gLog.TTFT == 0 && firstTokenRecorded {
+		gLog.TTFT = firstTokenTime.Sub(startTime).Milliseconds()
+	}
+
 	h.recorder(gLog)
 
 	w.Header().Set("Content-Type", "application/json")

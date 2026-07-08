@@ -99,7 +99,7 @@ func TestIntegration_ThinkingBehavior(t *testing.T) {
 
 	thinkingModel := "dashscope_qwen_plus_20250428_thinking"
 	messages := []map[string]any{{"role": "user", "content": "1.3 和 1.11 哪个大？请详细分析。"}}
-	
+
 	t.Run("ThinkingEnabled", func(t *testing.T) {
 		body := BuildLingmaBody(messages, nil, thinkingModel, nil, nil, true, nil)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -186,7 +186,7 @@ func TestIntegration_OAuthExchange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExchangeCallback failed: %v", err)
 	}
-	
+
 	if creds.UID == "" || creds.OrganizationID == "" {
 		t.Errorf("Exchanged credentials missing basic info: %+v", creds)
 	}
@@ -225,8 +225,7 @@ func TestIntegration_ReasoningMathProblem(t *testing.T) {
 
 	models := []string{
 		"dashscope_qmodel",
-		"dashscope_qwen3_coder",
-		"dashscope_qwen_max_latest",
+		"gm51model",
 		"dashscope_qwen_plus_20250428_thinking",
 		"kmodel",
 		"mmodel",
@@ -373,7 +372,7 @@ func TestIntegration_ReasoningParameterIsolation(t *testing.T) {
 
 	tests := []testCase{
 		{
-			name: "0_baseline_ours",
+			name:   "0_baseline_ours",
 			mutate: func(body map[string]any) {}, // no change
 		},
 		{

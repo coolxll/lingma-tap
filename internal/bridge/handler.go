@@ -29,7 +29,7 @@ func NewBridgeHandler(session *auth.Session, recorder func(*proto.GatewayLog)) *
 		session:      session,
 		recorder:     recorder,
 		modelMapping: make(map[string]string),
-		defaultModel: "dashscope_qmodel",
+		defaultModel: DefaultAnthropicModel,
 		payloads:     func() bool { return true },
 	}
 	return h

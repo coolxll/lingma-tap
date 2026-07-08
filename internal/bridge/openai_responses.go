@@ -188,7 +188,7 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 	reasoningBlockIndex := -1
 	reasoningID := ""
 	toolCalls := make(map[int]*toolCallState)
-	toolCallIndices := make(map[string]int) // call_id → output item index
+	outputItemIndex := 0 // Monotonic counter for output item indices
 	var usage *Usage
 	var fullContent strings.Builder
 	var fullReasoning strings.Builder
@@ -243,7 +243,8 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 				fullReasoning.WriteString(event.ReasoningContent)
 				if !reasoningBlockStarted {
 					reasoningID = "reason_" + newUUID()[:24]
-					reasoningBlockIndex = len(toolCallIndices)
+					reasoningBlockIndex = outputItemIndex
+					outputItemIndex++
 					writeSSE(w, "", map[string]any{
 						"type":  "response.output_item.added",
 						"index": reasoningBlockIndex,
@@ -271,7 +272,8 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 					fullContent.WriteString(event.Content)
 				}
 				if !textBlockStarted {
-					textBlockIndex = len(toolCallIndices)
+					textBlockIndex = outputItemIndex
+					outputItemIndex++
 					// Start a text output block
 					writeSSE(w, "", map[string]any{
 						"type":  "response.output_item.added",
@@ -314,32 +316,35 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 					if id == "" {
 						id = "call_" + newUUID()[:24]
 					}
-					state = &toolCallState{id: id}
+					state = &toolCallState{
+						id:          id,
+						name:        tc.Name,
+						outputIndex: outputItemIndex,
+					}
+					outputItemIndex++
+					state.args.WriteString(tc.Arguments)
 					toolCalls[tc.Index] = state
-				}
-				if tc.ID != "" {
-					state.id = tc.ID
-				}
-				if tc.Name != "" {
-					state.name = tc.Name
-				}
-				state.args.WriteString(tc.Arguments)
 
-				// Emit function_call output item
-				callIndex := len(toolCallIndices)
-				toolCallIndices[state.id] = callIndex
-
-				writeSSE(w, "", map[string]any{
-					"type":  "response.output_item.added",
-					"index": callIndex,
-					"item": map[string]any{
-						"type":      "function_call",
-						"id":        state.id,
-						"name":      state.name,
-						"arguments": state.args.String(),
-						"status":    "in_progress",
-					},
-				})
+					writeSSE(w, "", map[string]any{
+						"type":  "response.output_item.added",
+						"index": state.outputIndex,
+						"item": map[string]any{
+							"type":      "function_call",
+							"id":        state.id,
+							"name":      state.name,
+							"arguments": state.args.String(),
+							"status":    "in_progress",
+						},
+					})
+				} else {
+					if tc.ID != "" {
+						state.id = tc.ID
+					}
+					if tc.Name != "" {
+						state.name = tc.Name
+					}
+					state.args.WriteString(tc.Arguments)
+				}
 
 				// Emit argument delta
 				if tc.Arguments != "" {
@@ -401,7 +406,7 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 			for _, state := range toolCalls {
 				writeSSE(w, "", map[string]any{
 					"type":  "response.output_item.done",
-					"index": toolCallIndices[state.id],
+					"index": state.outputIndex,
 					"item": map[string]any{
 						"type":      "function_call",
 						"id":        state.id,
@@ -498,6 +503,8 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 	var usage *Usage
 	toolCalls := make(map[int]*toolCallState)
 	var lastErr *SSEEvent
+	var firstTokenTime time.Time
+	firstTokenRecorded := false
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
 		switch event.Type {
@@ -505,6 +512,11 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 			if event.HasError {
 				lastErr = &event
 				return nil
+			}
+			// Record first token time for TTFB self-measurement
+			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "") {
+				firstTokenTime = time.Now()
+				firstTokenRecorded = true
 			}
 			if event.ReasoningContent != "" {
 				fullReasoning.WriteString(event.ReasoningContent)
@@ -611,6 +623,12 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 	h.captureResponseBytes(gLog, respBytes)
 	applyUsageToGatewayLog(gLog, usage)
 	gLog.Latency = time.Since(startTime).Milliseconds()
+
+	// TTFB fallback: use self-measured value if upstream didn't provide one
+	if gLog.TTFT == 0 && firstTokenRecorded {
+		gLog.TTFT = firstTokenTime.Sub(startTime).Milliseconds()
+	}
+
 	h.recorder(gLog)
 
 	w.Header().Set("Content-Type", "application/json")

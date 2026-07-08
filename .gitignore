@@ -43,7 +43,7 @@ web/dist
 *.db-wal
 *.db-shm
 data/
-server
+/server
 
 # Claude Code
 .claude/

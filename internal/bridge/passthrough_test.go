@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coolxll/lingma-tap/internal/auth"
 	"github.com/coolxll/lingma-tap/internal/encoding"
@@ -32,7 +33,7 @@ func TestModelPassthrough_OpenAI(t *testing.T) {
 			// Check if the requested model in the body is our unknown model
 			var body map[string]any
 			bodyBytes, _ := io.ReadAll(req.Body)
-			
+
 			// The body is encoded by LingmaClient
 			decodedBytes, err := encoding.Decode(string(bodyBytes))
 			if err == nil {
@@ -68,13 +69,62 @@ func TestModelPassthrough_OpenAI(t *testing.T) {
 
 	resp := w.Result()
 	body, _ := io.ReadAll(resp.Body)
-	
+
 	t.Logf("Got status code: %d, body: %s", resp.StatusCode, string(body))
 
 	if strings.Contains(string(body), "model not found") {
 		t.Log("Successfully passed through and received error from backend")
 	} else if strings.Contains(string(body), "OK") {
 		t.Errorf("Should not have received OK for unknown model")
+	}
+}
+
+func TestAnthropicNativeLingmaModelPassthrough(t *testing.T) {
+	modelCache = nil
+	modelCacheValid = false
+	modelCacheTime = time.Time{}
+
+	session := &auth.Session{CosyKey: "test-key"}
+	handler := NewBridgeHandler(session, func(log *proto.GatewayLog) {})
+	handler.UpdateAnthropicMapping(map[string]string{"sonnet": "mapped-sonnet-model"}, "default-fallback-model")
+
+	handler.client.client.Transport = &mockTransport{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"chat":[{"key":"gm51model","display_name":"GM 5.1"}]}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+
+			var body map[string]any
+			bodyBytes, _ := io.ReadAll(req.Body)
+			decodedBytes, err := encoding.Decode(string(bodyBytes))
+			if err == nil {
+				json.Unmarshal(decodedBytes, &body)
+			} else {
+				json.Unmarshal(bodyBytes, &body)
+			}
+
+			modelConfig, _ := body["model_config"].(map[string]any)
+			modelKey, _ := modelConfig["key"].(string)
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"model: " + modelKey + "\"}}]}\n\ndata: [DONE]\n\n")),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	reqBody := `{"model":"gm51model","messages":[{"role":"user","content":"Hi"}],"max_tokens":1024,"stream":true}`
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(reqBody))
+	w := httptest.NewRecorder()
+	handler.HandleAnthropicMessages(w, req)
+	body, _ := io.ReadAll(w.Result().Body)
+	if !strings.Contains(string(body), "gm51model") {
+		t.Errorf("Expected native Lingma model 'gm51model', got: %s", string(body))
 	}
 }
 
@@ -103,7 +153,7 @@ func TestModelFallback_Anthropic(t *testing.T) {
 			} else {
 				json.Unmarshal(bodyBytes, &body)
 			}
-			
+
 			modelConfig, _ := body["model_config"].(map[string]any)
 			modelKey, _ := modelConfig["key"].(string)
 
