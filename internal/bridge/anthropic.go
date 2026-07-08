@@ -561,6 +561,12 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 		gLog.FinishReason = stopReason
 		gLog.Latency = time.Since(startTime).Milliseconds()
 
+		// TTFB fallback: use self-measured value when upstream does not send
+		// a finish metadata event before [DONE].
+		if gLog.TTFT == 0 && firstTokenRecorded {
+			gLog.TTFT = firstTokenTime.Sub(startTime).Milliseconds()
+		}
+
 		if recordPayloads {
 			var content []map[string]any
 			if fullReasoning.Len() > 0 {
@@ -597,7 +603,7 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 		switch event.Type {
 		case "data":
 			// Record first token time for TTFB self-measurement
-			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "") {
+			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "" || len(event.ToolCalls) > 0) {
 				firstTokenTime = time.Now()
 				firstTokenRecorded = true
 			}
@@ -761,10 +767,6 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			if event.Usage != nil {
 				usage = event.Usage
 			}
-			// TTFB fallback: use self-measured value if upstream didn't provide one
-			if gLog.TTFT == 0 && firstTokenRecorded {
-				gLog.TTFT = firstTokenTime.Sub(startTime).Milliseconds()
-			}
 			finalize()
 		case "done":
 			finalize()
@@ -876,7 +878,7 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 				return nil
 			}
 			// Record first token time for TTFB self-measurement
-			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "") {
+			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "" || len(event.ToolCalls) > 0) {
 				firstTokenTime = time.Now()
 				firstTokenRecorded = true
 			}

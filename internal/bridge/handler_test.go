@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coolxll/lingma-tap/internal/auth"
 	"github.com/coolxll/lingma-tap/internal/proto"
@@ -130,13 +131,17 @@ func TestBridgeHandler_OpenAIChatStreamRecordsUsageOnlyChunk(t *testing.T) {
 
 func TestBridgeHandler_HandleAnthropicMessages(t *testing.T) {
 	session := &auth.Session{CosyKey: "test-key"}
-	recorder := func(log *proto.GatewayLog) {}
+	var logs []proto.GatewayLog
+	recorder := func(log *proto.GatewayLog) {
+		logs = append(logs, *log)
+	}
 	handler := NewBridgeHandler(session, recorder)
 
 	// Mock the LingmaClient
 	mockResp := `data: {"choices":[{"delta":{"content":"Anthropic response"}}]}` + "\n\ndata: [DONE]\n\n"
 	handler.client.client.Transport = &mockTransport{
 		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			time.Sleep(2 * time.Millisecond)
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader(mockResp)),
@@ -163,16 +168,33 @@ func TestBridgeHandler_HandleAnthropicMessages(t *testing.T) {
 	if !strings.Contains(string(body), "message_stop") {
 		t.Errorf("Response body missing message_stop: %s", string(body))
 	}
+
+	var final *proto.GatewayLog
+	for i := range logs {
+		if logs[i].Status == http.StatusOK {
+			final = &logs[i]
+		}
+	}
+	if final == nil {
+		t.Fatalf("expected final successful gateway log, got %+v", logs)
+	}
+	if final.TTFT <= 0 {
+		t.Fatalf("expected Anthropic stream TTFT to be recorded on [DONE] fallback, got %d", final.TTFT)
+	}
 }
 
 func TestBridgeHandler_HandleAnthropicMessages_ToolUseDoneFinalizes(t *testing.T) {
 	session := &auth.Session{CosyKey: "test-key"}
-	recorder := func(log *proto.GatewayLog) {}
+	var logs []proto.GatewayLog
+	recorder := func(log *proto.GatewayLog) {
+		logs = append(logs, *log)
+	}
 	handler := NewBridgeHandler(session, recorder)
 
 	mockResp := `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"London\"}"}}]}}]}` + "\n\ndata: [DONE]\n\n"
 	handler.client.client.Transport = &mockTransport{
 		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			time.Sleep(2 * time.Millisecond)
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader(mockResp)),
@@ -212,6 +234,19 @@ func TestBridgeHandler_HandleAnthropicMessages_ToolUseDoneFinalizes(t *testing.T
 	}
 	if strings.Contains(body, `"stop_reason":"end_turn"`) {
 		t.Errorf("Tool call stream should not finish with end_turn: %s", body)
+	}
+
+	var final *proto.GatewayLog
+	for i := range logs {
+		if logs[i].Status == http.StatusOK {
+			final = &logs[i]
+		}
+	}
+	if final == nil {
+		t.Fatalf("expected final successful gateway log, got %+v", logs)
+	}
+	if final.TTFT <= 0 {
+		t.Fatalf("expected Anthropic tool stream TTFT to be recorded from tool delta, got %d", final.TTFT)
 	}
 }
 
