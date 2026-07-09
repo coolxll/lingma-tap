@@ -37,6 +37,7 @@ const (
 
 	nimAdd        = 0x00000000
 	nimDelete     = 0x00000002
+	nimSetFocus   = 0x00000003
 	nimSetVersion = 0x00000004
 
 	nifMessage = 0x00000001
@@ -335,7 +336,11 @@ func windowsTrayWndProc(hwnd uintptr, message uint32, wParam uintptr, lParam uin
 		if tray == nil {
 			break
 		}
-		switch uint32(lParam) {
+		event, ok := trayCallbackEvent(wParam, lParam)
+		if !ok {
+			break
+		}
+		switch event {
 		case wmLButtonUp, wmLButtonDblClk:
 			go tray.showWindow()
 			return 0
@@ -402,6 +407,20 @@ func (t *windowsTray) deleteTrayIcon() error {
 	return nil
 }
 
+func (t *windowsTray) setTrayFocus() {
+	t.mu.Lock()
+	hwnd := t.hwnd
+	t.mu.Unlock()
+	if hwnd == 0 {
+		return
+	}
+
+	nid := newNotifyIconData(hwnd, 0)
+	if ok, _, err := procShellNotifyIconW.Call(nimSetFocus, uintptr(unsafe.Pointer(&nid))); ok == 0 {
+		log.Printf("[tray] Windows Shell_NotifyIcon set focus error: %v", err)
+	}
+}
+
 func newNotifyIconData(hwnd windows.Handle, icon windows.Handle) notifyIconData {
 	nid := notifyIconData{
 		CbSize:           uint32(unsafe.Sizeof(notifyIconData{})),
@@ -448,9 +467,23 @@ func (t *windowsTray) showMenu() {
 		0,
 	)
 	procPostMessageW.Call(uintptr(hwnd), wmNull, 0, 0)
+	t.setTrayFocus()
 	if cmd != 0 {
 		go t.handleCommand(uint16(cmd))
 	}
+}
+
+func trayCallbackEvent(wParam uintptr, lParam uintptr) (uint32, bool) {
+	event := uint32(lParam & 0xffff)
+	iconID := uint32((lParam >> 16) & 0xffff)
+	if iconID == 0 {
+		iconID = uint32(wParam & 0xffff)
+		event = uint32(lParam)
+	}
+	if iconID != idTrayIcon {
+		return 0, false
+	}
+	return event, true
 }
 
 func appendMenu(menu uintptr, flags uintptr, id uintptr, label string) {
