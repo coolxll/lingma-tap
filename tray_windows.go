@@ -27,6 +27,7 @@ const (
 	wmClose         = 0x0010
 	wmDestroy       = 0x0002
 	wmCommand       = 0x0111
+	wmCancelMode    = 0x001F
 	wmLButtonUp     = 0x0202
 	wmLButtonDblClk = 0x0203
 	wmRButtonUp     = 0x0205
@@ -34,6 +35,13 @@ const (
 	wmApp           = 0x8000
 
 	trayCallbackMessage = wmApp + 1
+
+	// NOTIFYICON_VERSION_4 notification events delivered in LOWORD(lParam).
+	// NIN_SELECT is a plain select (mouse or keyboard Enter); NIN_KEYSELECT
+	// is the keyboard context-menu activation (Shift+F10 / menu key).
+	// WM_USER = 0x0400; balloons (0x0402+) are distinct and unused here.
+	ninSelect     = 0x0400
+	ninKeySelect  = 0x0401
 
 	nimAdd        = 0x00000000
 	nimDelete     = 0x00000002
@@ -207,18 +215,33 @@ func startTray(app *App) {
 func stopTray() {
 	windowsTrayMu.Lock()
 	tray := windowsTrayInstance
-	windowsTrayInstance = nil
-	windowsTrayMu.Unlock()
-
 	if tray == nil {
+		windowsTrayMu.Unlock()
 		return
 	}
 
+	// Mark stopping first so in-flight callbacks and the TaskbarCreated
+	// handler bail out instead of touching a window we are about to destroy.
 	tray.mu.Lock()
 	tray.stopping = true
 	hwnd := tray.hwnd
 	tray.mu.Unlock()
+
+	// Remove the notification-area icon while the instance still resolves
+	// to this tray, so WM_DESTROY's nil-guard does not skip cleanup and the
+	// shell does not orphan the icon when the window is torn down.
+	_ = tray.deleteTrayIcon()
+
+	// Clear the instance last so a WM_CLOSE/WM_DESTROY dispatched from the
+	// menu's modal loop still finds the tray (and DefWindowProc fallback).
+	windowsTrayInstance = nil
+	windowsTrayMu.Unlock()
+
 	if hwnd != 0 {
+		// WM_CANCELMODE breaks an active TrackPopupMenu modal loop cleanly
+		// (its owner is this hwnd), avoiding the owner-destroyed-while-
+		// tracking race that can stall the 2s shutdown wait.
+		procPostMessageW.Call(uintptr(hwnd), wmCancelMode, 0, 0)
 		procPostMessageW.Call(uintptr(hwnd), wmClose, 0, 0)
 	}
 
@@ -325,6 +348,14 @@ func windowsTrayWndProc(hwnd uintptr, message uint32, wParam uintptr, lParam uin
 	tray := windowsTrayInstance
 	windowsTrayMu.Unlock()
 	if tray != nil && tray.taskbarCreated != 0 && message == tray.taskbarCreated {
+		// Ignore Explorer-restart re-add races once shutdown is underway,
+		// otherwise Shell_NotifyIcon(NIM_ADD) targets a doomed window.
+		tray.mu.Lock()
+		stopping := tray.stopping
+		tray.mu.Unlock()
+		if stopping {
+			return 0
+		}
 		if err := tray.addTrayIcon(); err != nil {
 			log.Printf("[tray] Windows re-add tray icon error: %v", err)
 		}
@@ -341,10 +372,10 @@ func windowsTrayWndProc(hwnd uintptr, message uint32, wParam uintptr, lParam uin
 			break
 		}
 		switch event {
-		case wmLButtonUp, wmLButtonDblClk:
+		case wmLButtonUp, wmLButtonDblClk, ninSelect:
 			go tray.showWindow()
 			return 0
-		case wmRButtonUp, wmContextMenu:
+		case wmRButtonUp, wmContextMenu, ninKeySelect:
 			tray.showMenu()
 			return 0
 		}
@@ -435,6 +466,9 @@ func newNotifyIconData(hwnd windows.Handle, icon windows.Handle) notifyIconData 
 }
 
 func (t *windowsTray) showMenu() {
+	if t.isStopping() {
+		return
+	}
 	hMenu, _, err := procCreatePopupMenu.Call()
 	if hMenu == 0 {
 		log.Printf("[tray] Windows CreatePopupMenu error: %v", err)
@@ -455,7 +489,11 @@ func (t *windowsTray) showMenu() {
 
 	t.mu.Lock()
 	hwnd := t.hwnd
+	stopping := t.stopping
 	t.mu.Unlock()
+	if stopping || hwnd == 0 {
+		return
+	}
 	procSetForegroundWindow.Call(uintptr(hwnd))
 	cmd, _, _ := procTrackPopupMenu.Call(
 		hMenu,
@@ -466,9 +504,19 @@ func (t *windowsTray) showMenu() {
 		uintptr(hwnd),
 		0,
 	)
-	procPostMessageW.Call(uintptr(hwnd), wmNull, 0, 0)
-	t.setTrayFocus()
-	if cmd != 0 {
+	// TrackPopupMenu has returned (either the user picked an item, dismissed
+	// the menu, or stopTray's WM_CANCELMODE broke the modal loop). Re-check
+	// before posting the follow-up WM_NULL or dispatching a command, since
+	// shutdown may have destroyed hwnd while the menu was tracking.
+	t.mu.Lock()
+	hwnd = t.hwnd
+	stopping = t.stopping
+	t.mu.Unlock()
+	if hwnd != 0 {
+		procPostMessageW.Call(uintptr(hwnd), wmNull, 0, 0)
+		t.setTrayFocus()
+	}
+	if cmd != 0 && !stopping {
 		go t.handleCommand(uint16(cmd))
 	}
 }
@@ -508,6 +556,9 @@ func (t *windowsTray) handleCommand(command uint16) {
 }
 
 func (t *windowsTray) showWindow() {
+	if t.isStopping() {
+		return
+	}
 	if t.app != nil && t.app.ctx != nil {
 		runtime.Show(t.app.ctx)
 		runtime.WindowShow(t.app.ctx)
@@ -515,15 +566,30 @@ func (t *windowsTray) showWindow() {
 }
 
 func (t *windowsTray) hideWindow() {
+	if t.isStopping() {
+		return
+	}
 	if t.app != nil && t.app.ctx != nil {
 		runtime.Hide(t.app.ctx)
 	}
 }
 
 func (t *windowsTray) quit() {
+	if t.isStopping() {
+		return
+	}
 	if t.app != nil && t.app.ctx != nil {
 		runtime.Quit(t.app.ctx)
 	}
+}
+
+// isStopping reports whether shutdown is in progress. Goroutines spawned for
+// tray callbacks consult this before touching the Wails ctx, so a callback
+// queued against a window that is being torn down does not race the runtime.
+func (t *windowsTray) isStopping() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stopping
 }
 
 func registerWindowMessage(name string) uint32 {
