@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -45,5 +46,14 @@ func TestRecordContextError_OtherError(t *testing.T) {
 	log := &proto.GatewayLog{}
 	if recordContextError(context.Background(), log, time.Now(), errors.New("boom"), nil) {
 		t.Fatal("did not expect unrelated error to be handled")
+	}
+}
+
+func TestNormalizeLingmaUpstreamError(t *testing.T) {
+	if got := normalizeLingmaUpstreamError(io.ErrUnexpectedEOF); got != "lingma upstream connection closed before [DONE]" {
+		t.Fatalf("normalizeLingmaUpstreamError = %q", got)
+	}
+	if got := statusForLingmaUpstreamError(io.ErrUnexpectedEOF); got != 502 {
+		t.Fatalf("statusForLingmaUpstreamError = %d, want 502", got)
 	}
 }

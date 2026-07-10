@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -1036,7 +1037,7 @@ func TestBuildLingmaBody_AgentID(t *testing.T) {
 	}
 }
 
-func TestReadSSE_DoneSafetyInjection(t *testing.T) {
+func TestReadSSE_MissingDoneReturnsUnexpectedEOF(t *testing.T) {
 	session := &auth.Session{CosyKey: "test-key", UID: "test-uid"}
 	client := NewLingmaClient(session)
 
@@ -1060,19 +1061,21 @@ func TestReadSSE_DoneSafetyInjection(t *testing.T) {
 		return nil
 	})
 
-	if err != nil {
-		t.Fatalf("ChatStream failed: %v", err)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("ChatStream error = %v, want %v", err, io.ErrUnexpectedEOF)
 	}
 
-	// Should have content event + injected done event
-	foundDone := false
+	foundContent := false
 	for _, e := range events {
+		if e.Content == "hi" {
+			foundContent = true
+		}
 		if e.Type == "done" {
-			foundDone = true
+			t.Fatalf("unexpected done event: %+v", e)
 		}
 	}
-	if !foundDone {
-		t.Error("expected injected [DONE] event when stream ends without one")
+	if !foundContent {
+		t.Fatalf("expected content event before EOF, got %+v", events)
 	}
 }
 

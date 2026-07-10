@@ -2,7 +2,9 @@ package bridge
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coolxll/lingma-tap/internal/auth"
+	"github.com/coolxll/lingma-tap/internal/encoding"
 	"github.com/coolxll/lingma-tap/internal/proto"
 )
 
@@ -247,6 +250,390 @@ func TestBridgeHandler_HandleAnthropicMessages_ToolUseDoneFinalizes(t *testing.T
 	}
 	if final.TTFT <= 0 {
 		t.Fatalf("expected Anthropic tool stream TTFT to be recorded from tool delta, got %d", final.TTFT)
+	}
+}
+
+func TestBridgeHandler_ThinkingFallbackAcrossEndpoints(t *testing.T) {
+	t.Setenv("LINGMA_THINKING_FALLBACK", "true")
+	t.Setenv("LINGMA_THINKING_FALLBACK_TTL", "2m")
+	primeModelCacheForTests()
+
+	scenarios := []struct {
+		name   string
+		path   string
+		build  func(stream bool) []byte
+		handle func(*BridgeHandler, http.ResponseWriter, *http.Request)
+	}{
+		{
+			name:   "openai_chat",
+			path:   "/v1/chat/completions",
+			build:  largeOpenAIChatRequestBody,
+			handle: (*BridgeHandler).HandleOpenAIChat,
+		},
+		{
+			name:   "openai_responses",
+			path:   "/v1/responses",
+			build:  largeOpenAIResponsesRequestBody,
+			handle: (*BridgeHandler).HandleOpenAIResponses,
+		},
+		{
+			name:   "anthropic_messages",
+			path:   "/v1/messages",
+			build:  largeAnthropicMessagesRequestBody,
+			handle: (*BridgeHandler).HandleAnthropicMessages,
+		},
+	}
+
+	for _, scenario := range scenarios {
+		for _, stream := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s_stream_%t", scenario.name, stream), func(t *testing.T) {
+				handler := NewBridgeHandler(&auth.Session{CosyKey: "test-key", UID: "test-uid"}, func(log *proto.GatewayLog) {})
+				rawBody := scenario.build(stream)
+
+				handler.client.client.Transport = &mockTransport{
+					roundTripFunc: func(req *http.Request) (*http.Response, error) {
+						return nil, req.Context().Err()
+					},
+				}
+
+				cancelCtx, cancel := context.WithCancel(context.Background())
+				cancel()
+				firstReq := httptest.NewRequest(http.MethodPost, scenario.path, bytes.NewReader(rawBody)).WithContext(cancelCtx)
+				firstResp := httptest.NewRecorder()
+				scenario.handle(handler, firstResp, firstReq)
+
+				var secondCaptured map[string]any
+				handler.client.client.Transport = captureLingmaTransport(t, &secondCaptured, successLingmaStreamBody())
+				secondReq := httptest.NewRequest(http.MethodPost, scenario.path, bytes.NewReader(rawBody))
+				secondResp := httptest.NewRecorder()
+				scenario.handle(handler, secondResp, secondReq)
+
+				if got := secondResp.Result().Header.Get(lingmaThinkingFallbackHeaderName); got != lingmaThinkingFallbackHeaderValue {
+					t.Fatalf("second fallback header = %q, want %q", got, lingmaThinkingFallbackHeaderValue)
+				}
+				assertFallbackBody(t, secondCaptured, false)
+
+				var thirdCaptured map[string]any
+				handler.client.client.Transport = captureLingmaTransport(t, &thirdCaptured, successLingmaStreamBody())
+				thirdReq := httptest.NewRequest(http.MethodPost, scenario.path, bytes.NewReader(rawBody))
+				thirdResp := httptest.NewRecorder()
+				scenario.handle(handler, thirdResp, thirdReq)
+
+				if got := thirdResp.Result().Header.Get(lingmaThinkingFallbackHeaderName); got != "" {
+					t.Fatalf("third fallback header = %q, want empty", got)
+				}
+				assertFallbackBody(t, thirdCaptured, true)
+			})
+		}
+	}
+}
+
+func TestBridgeHandler_ThinkingFallbackNotArmedAfterUpstreamData(t *testing.T) {
+	t.Setenv("LINGMA_THINKING_FALLBACK", "true")
+	t.Setenv("LINGMA_THINKING_FALLBACK_TTL", "2m")
+	primeModelCacheForTests()
+
+	handler := NewBridgeHandler(&auth.Session{CosyKey: "test-key", UID: "test-uid"}, func(log *proto.GatewayLog) {})
+	rawBody := largeOpenAIChatRequestBody(true)
+
+	handler.client.client.Transport = &mockTransport{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			pr, pw := io.Pipe()
+			go func() {
+				_, _ = io.WriteString(pw, `data: {"choices":[{"delta":{"content":"partial"}}]}`+"\n\n")
+				<-req.Context().Done()
+				_ = pw.CloseWithError(req.Context().Err())
+			}()
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       pr,
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(rawBody)).WithContext(cancelCtx)
+	resp := httptest.NewRecorder()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+	handler.HandleOpenAIChat(resp, req)
+
+	var captured map[string]any
+	handler.client.client.Transport = captureLingmaTransport(t, &captured, successLingmaStreamBody())
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(rawBody))
+	secondResp := httptest.NewRecorder()
+	handler.HandleOpenAIChat(secondResp, secondReq)
+
+	if got := secondResp.Result().Header.Get(lingmaThinkingFallbackHeaderName); got != "" {
+		t.Fatalf("unexpected fallback header after partial upstream data: %q", got)
+	}
+	assertFallbackBody(t, captured, true)
+}
+
+func TestBridgeHandler_StreamWithoutDoneReturnsErrorEvent(t *testing.T) {
+	primeModelCacheForTests()
+	handler := NewBridgeHandler(&auth.Session{CosyKey: "test-key", UID: "test-uid"}, func(log *proto.GatewayLog) {})
+	handler.client.client.Transport = captureLingmaTransportRaw(t, `data: {"choices":[{"delta":{"content":"partial"}}]}`+"\n\n")
+
+	reqBody := `{"model":"gpt-4","messages":[{"role":"user","content":"Hi"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	handler.HandleOpenAIChat(w, req)
+
+	body, _ := io.ReadAll(w.Result().Body)
+	if !strings.Contains(string(body), "partial") {
+		t.Fatalf("response missing streamed partial content: %s", string(body))
+	}
+	if !strings.Contains(string(body), "lingma upstream connection closed before [DONE]") {
+		t.Fatalf("response missing upstream EOF error: %s", string(body))
+	}
+	if strings.Contains(string(body), "data: [DONE]") {
+		t.Fatalf("response should not synthesize [DONE]: %s", string(body))
+	}
+}
+
+func largeOpenAIChatRequestBody(stream bool) []byte {
+	filler := strings.Repeat("x", 140*1024)
+	messages := []map[string]any{
+		{"role": "user", "content": filler},
+	}
+	for i := 0; i < 10; i++ {
+		callID := fmt.Sprintf("call_%d", i)
+		messages = append(messages, map[string]any{
+			"role":    "assistant",
+			"content": nil,
+			"tool_calls": []map[string]any{{
+				"id":   callID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      "tool",
+					"arguments": fmt.Sprintf(`{"index":%d}`, i),
+				},
+			}},
+		})
+		messages = append(messages, map[string]any{
+			"role":         "tool",
+			"tool_call_id": callID,
+			"content":      fmt.Sprintf("result-%d", i),
+		})
+	}
+	return marshalJSON(tolerantMap{
+		"model":            "gm51model",
+		"messages":         messages,
+		"tools":            testTools(),
+		"reasoning_effort": "medium",
+		"stream":           stream,
+	})
+}
+
+func largeOpenAIResponsesRequestBody(stream bool) []byte {
+	filler := strings.Repeat("x", 140*1024)
+	input := []any{
+		map[string]any{"type": "message", "role": "user", "content": filler},
+	}
+	for i := 0; i < 10; i++ {
+		callID := fmt.Sprintf("call_%d", i)
+		input = append(input,
+			map[string]any{
+				"type":      "function_call",
+				"call_id":   callID,
+				"name":      "tool",
+				"arguments": fmt.Sprintf(`{"index":%d}`, i),
+			},
+			map[string]any{
+				"type":    "function_call_output",
+				"call_id": callID,
+				"output":  fmt.Sprintf("result-%d", i),
+			},
+		)
+	}
+	return marshalJSON(tolerantMap{
+		"model":            "gm51model",
+		"input":            input,
+		"tools":            testTools(),
+		"reasoning_effort": "medium",
+		"stream":           stream,
+	})
+}
+
+func largeAnthropicMessagesRequestBody(stream bool) []byte {
+	filler := strings.Repeat("x", 140*1024)
+	messages := []any{
+		map[string]any{
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "text", "text": filler},
+			},
+		},
+	}
+	for i := 0; i < 10; i++ {
+		callID := fmt.Sprintf("call_%d", i)
+		messages = append(messages,
+			map[string]any{
+				"role": "assistant",
+				"content": []any{
+					map[string]any{
+						"type":  "tool_use",
+						"id":    callID,
+						"name":  "tool",
+						"input": map[string]any{"index": i},
+					},
+				},
+			},
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":        "tool_result",
+						"tool_use_id": callID,
+						"content":     fmt.Sprintf("result-%d", i),
+					},
+				},
+			},
+		)
+	}
+	return marshalJSON(tolerantMap{
+		"model":      "gm51model",
+		"messages":   messages,
+		"tools":      anthropicTestTools(),
+		"thinking":   map[string]any{"type": "enabled", "budget_tokens": 1024},
+		"max_tokens": 2048,
+		"stream":     stream,
+	})
+}
+
+type tolerantMap map[string]any
+
+func marshalJSON(value tolerantMap) []byte {
+	data, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
+func testTools() []map[string]any {
+	return []map[string]any{
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "tool",
+				"description": "test tool",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"index": map[string]any{"type": "integer"},
+					},
+				},
+			},
+		},
+	}
+}
+
+func anthropicTestTools() []map[string]any {
+	return []map[string]any{
+		{
+			"name":        "tool",
+			"description": "test tool",
+			"input_schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"index": map[string]any{"type": "integer"},
+				},
+			},
+		},
+	}
+}
+
+func successLingmaStreamBody() string {
+	return strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+		`data: {"firstTokenDuration":1,"totalDuration":2,"serverDuration":2,"usage":{"input_tokens":1,"output_tokens":1}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n\n")
+}
+
+func captureLingmaTransport(t *testing.T, captured *map[string]any, responseBody string) *mockTransport {
+	t.Helper()
+	return &mockTransport{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			payload, err := decodeLingmaRequestBody(req)
+			if err != nil {
+				t.Fatalf("decode Lingma request body: %v", err)
+			}
+			*captured = payload
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(responseBody)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+}
+
+func captureLingmaTransportRaw(t *testing.T, responseBody string) *mockTransport {
+	t.Helper()
+	return &mockTransport{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(responseBody)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+}
+
+func decodeLingmaRequestBody(req *http.Request) (map[string]any, error) {
+	encodedBody, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	decodedBody, err := encoding.Decode(string(encodedBody))
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(decodedBody, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func primeModelCacheForTests() {
+	modelCache = []ModelInfo{{Key: "gm51model", DisplayName: "GM 5.1"}}
+	modelCacheTime = time.Now()
+	modelCacheValid = true
+}
+
+func assertFallbackBody(t *testing.T, payload map[string]any, wantReasoning bool) {
+	t.Helper()
+	if got := payload["agent_id"]; got != "agent_chat" && wantReasoning {
+		t.Fatalf("agent_id = %v, want agent_chat", got)
+	}
+	if got := payload["agent_id"]; got != "agent_common" && !wantReasoning {
+		t.Fatalf("agent_id = %v, want agent_common", got)
+	}
+
+	modelConfig, ok := payload["model_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("model_config missing from payload: %+v", payload)
+	}
+	if got, ok := modelConfig["is_reasoning"].(bool); !ok || got != wantReasoning {
+		t.Fatalf("model_config.is_reasoning = %v, want %v", modelConfig["is_reasoning"], wantReasoning)
+	}
+
+	wantSource := ""
+	if wantReasoning {
+		wantSource = "system"
+	}
+	if got := modelConfig["source"]; got != wantSource {
+		t.Fatalf("model_config.source = %v, want %q", got, wantSource)
 	}
 }
 

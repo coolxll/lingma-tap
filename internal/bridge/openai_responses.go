@@ -63,6 +63,11 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 	isReasoning := openaiIsReasoning(req.ReasoningEffort)
 
 	body := BuildLingmaBody(messages, req.Tools, modelKey, params, rawBody, isReasoning, req.ToolChoice)
+	profile := inspectLingmaRequest(body, modelKey)
+	fallback := h.applyThinkingFallback("openai_responses", modelKey, rawBody, body, profile)
+	if !fallback.Applied {
+		h.warnLargeThinkingRequest(modelKey, "openai_responses", profile)
+	}
 
 	respID := "resp_" + newUUID()[:24]
 
@@ -80,9 +85,9 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 	h.recorder(gLog)
 
 	if req.Stream {
-		h.streamResponses(r.Context(), w, respID, modelKey, body, gLog, startTime)
+		h.streamResponses(r.Context(), w, respID, modelKey, body, gLog, startTime, profile, fallback)
 	} else {
-		h.nonStreamResponses(r.Context(), w, respID, modelKey, body, gLog, startTime)
+		h.nonStreamResponses(r.Context(), w, respID, modelKey, body, gLog, startTime, profile, fallback)
 	}
 }
 
@@ -146,9 +151,12 @@ func responsesInputToMessages(input any) []map[string]any {
 	return nil
 }
 
-func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWriter, respID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
+func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWriter, respID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time, profile lingmaRequestProfile, fallback lingmaThinkingFallbackDecision) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	if fallback.Applied {
+		w.Header().Set(lingmaThinkingFallbackHeaderName, lingmaThinkingFallbackHeaderValue)
+	}
 	w.WriteHeader(http.StatusOK)
 
 	flusher, canFlush := w.(http.Flusher)
@@ -195,12 +203,14 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 	recordPayloads := h.shouldRecordPayloads()
 
 	upstreamErrored := false
+	sawUpstreamEvent := false
 
 	// TTFB self-measurement
 	var firstTokenTime time.Time
 	firstTokenRecorded := false
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+		sawUpstreamEvent = true
 		switch event.Type {
 		case "data":
 			// Record first token time for TTFB self-measurement
@@ -378,11 +388,25 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 			if event.Usage != nil {
 				usage = event.Usage
 			}
-			// TTFB fallback: use self-measured value if upstream didn't provide one
+		case "done":
+			if upstreamErrored {
+				return nil
+			}
 			if gLog.TTFT == 0 && firstTokenRecorded {
 				gLog.TTFT = firstTokenTime.Sub(startTime).Milliseconds()
 			}
-			// Close reasoning block if open
+			if textBlockStarted {
+				writeSSE(w, "", map[string]any{
+					"type":       "response.content_part.done",
+					"item_index": textBlockIndex,
+					"part":       map[string]any{"type": "text", "text": ""},
+				})
+				writeSSE(w, "", map[string]any{
+					"type":       "response.output_item.done",
+					"item_index": textBlockIndex,
+				})
+				textBlockStarted = false
+			}
 			if reasoningBlockStarted {
 				writeSSE(w, "", map[string]any{
 					"type":    "response.reasoning_text.done",
@@ -402,7 +426,6 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 				})
 				reasoningBlockStarted = false
 			}
-			// Complete any open function calls
 			for _, state := range toolCalls {
 				writeSSE(w, "", map[string]any{
 					"type":  "response.output_item.done",
@@ -417,7 +440,6 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 				})
 			}
 
-			// Send response.completed
 			writeSSE(w, "", map[string]any{
 				"type": "response.completed",
 				"response": map[string]any{
@@ -431,7 +453,6 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 				flusher.Flush()
 			}
 
-			// Finalize Log
 			gLog.Status = 200
 			gLog.Latency = time.Since(startTime).Milliseconds()
 			applyUsageToGatewayLog(gLog, usage)
@@ -480,16 +501,19 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 	})
 
 	if err != nil {
+		h.rememberThinkingFallback(err, fallback, profile, modelKey, "openai_responses", sawUpstreamEvent)
 		if recordContextError(ctx, gLog, startTime, err, h.recorder) {
 			return
 		}
-		gLog.Error = err.Error()
-		gLog.Status = 500
+		message := normalizeLingmaUpstreamError(err)
+		gLog.Error = message
+		gLog.Status = statusForLingmaUpstreamError(err)
+		gLog.Latency = time.Since(startTime).Milliseconds()
 		h.recorder(gLog)
 
 		writeSSE(w, "", map[string]any{
 			"type":  "response.failed",
-			"error": map[string]any{"message": err.Error()},
+			"error": map[string]any{"message": message},
 		})
 		if canFlush {
 			flusher.Flush()
@@ -497,7 +521,7 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 	}
 }
 
-func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseWriter, respID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
+func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseWriter, respID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time, profile lingmaRequestProfile, fallback lingmaThinkingFallbackDecision) {
 	var fullContent strings.Builder
 	var fullReasoning strings.Builder
 	var usage *Usage
@@ -505,8 +529,10 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 	var lastErr *SSEEvent
 	var firstTokenTime time.Time
 	firstTokenRecorded := false
+	sawUpstreamEvent := false
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+		sawUpstreamEvent = true
 		switch event.Type {
 		case "data":
 			if event.HasError {
@@ -547,10 +573,11 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 	})
 
 	if err != nil {
+		h.rememberThinkingFallback(err, fallback, profile, modelKey, "openai_responses", sawUpstreamEvent)
 		if recordStreamError(ctx, gLog, startTime, err, h.recorder) {
 			return
 		}
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error())
+		writeOpenAIError(w, statusForLingmaUpstreamError(err), normalizeLingmaUpstreamError(err))
 		return
 	}
 
@@ -631,6 +658,9 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 
 	h.recorder(gLog)
 
+	if fallback.Applied {
+		w.Header().Set(lingmaThinkingFallbackHeaderName, lingmaThinkingFallbackHeaderValue)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(respBytes)
 }

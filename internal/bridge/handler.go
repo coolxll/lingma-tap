@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/coolxll/lingma-tap/internal/auth"
 	"github.com/coolxll/lingma-tap/internal/proto"
@@ -14,23 +15,30 @@ const MaxTokensLimit = 16384
 // BridgeHandler serves OpenAI-compatible and Anthropic-compatible API endpoints
 // that translate requests to the Lingma API.
 type BridgeHandler struct {
-	client       *LingmaClient
-	session      *auth.Session
-	recorder     func(*proto.GatewayLog)
-	modelMapping map[string]string
-	defaultModel string
-	payloads     func() bool
-	Debug        bool
+	client                  *LingmaClient
+	session                 *auth.Session
+	recorder                func(*proto.GatewayLog)
+	modelMapping            map[string]string
+	defaultModel            string
+	payloads                func() bool
+	thinkingFallback        *oneShotTTLSet
+	thinkingFallbackTTL     time.Duration
+	thinkingFallbackEnabled bool
+	Debug                   bool
 }
 
 func NewBridgeHandler(session *auth.Session, recorder func(*proto.GatewayLog)) *BridgeHandler {
+	fallbackEnabled, fallbackTTL := loadLingmaThinkingFallbackConfig()
 	h := &BridgeHandler{
-		client:       NewLingmaClient(session),
-		session:      session,
-		recorder:     recorder,
-		modelMapping: make(map[string]string),
-		defaultModel: DefaultAnthropicModel,
-		payloads:     func() bool { return true },
+		client:                  NewLingmaClient(session),
+		session:                 session,
+		recorder:                recorder,
+		modelMapping:            make(map[string]string),
+		defaultModel:            DefaultAnthropicModel,
+		payloads:                func() bool { return true },
+		thinkingFallback:        newOneShotTTLSet(lingmaThinkingFallbackMaxEntries),
+		thinkingFallbackTTL:     fallbackTTL,
+		thinkingFallbackEnabled: fallbackEnabled,
 	}
 	return h
 }

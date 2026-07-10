@@ -109,6 +109,11 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 	rawReqJSON, _ := json.Marshal(rawReq)
 
 	body := BuildLingmaBody(messages, openAITools, modelKey, params, rawReqJSON, isReasoning, nil)
+	profile := inspectLingmaRequest(body, modelKey)
+	fallback := h.applyThinkingFallback("anthropic_messages", modelKey, rawReqJSON, body, profile)
+	if !fallback.Applied {
+		h.warnLargeThinkingRequest(modelKey, "anthropic_messages", profile)
+	}
 
 	msgID := "msg_" + newUUID()[:24]
 
@@ -126,9 +131,9 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 	h.recorder(gLog)
 
 	if stream {
-		h.streamAnthropic(r.Context(), w, msgID, modelKey, body, gLog, startTime)
+		h.streamAnthropic(r.Context(), w, msgID, modelKey, body, gLog, startTime, profile, fallback)
 	} else {
-		h.nonStreamAnthropic(r.Context(), w, msgID, modelKey, body, gLog, startTime)
+		h.nonStreamAnthropic(r.Context(), w, msgID, modelKey, body, gLog, startTime, profile, fallback)
 	}
 }
 
@@ -449,9 +454,12 @@ func sanitizeMessage(msg map[string]any) map[string]any {
 	return msg
 }
 
-func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
+func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time, profile lingmaRequestProfile, fallback lingmaThinkingFallbackDecision) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	if fallback.Applied {
+		w.Header().Set(lingmaThinkingFallbackHeaderName, lingmaThinkingFallbackHeaderValue)
+	}
 	w.WriteHeader(http.StatusOK)
 
 	flusher, canFlush := w.(http.Flusher)
@@ -490,6 +498,7 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	toolCalls := make(map[int]*toolCallState)
 	finalized := false
 	recordPayloads := h.shouldRecordPayloads()
+	sawUpstreamEvent := false
 
 	// TTFB self-measurement
 	var firstTokenTime time.Time
@@ -600,6 +609,7 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	}
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+		sawUpstreamEvent = true
 		switch event.Type {
 		case "data":
 			// Record first token time for TTFB self-measurement
@@ -767,7 +777,6 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			if event.Usage != nil {
 				usage = event.Usage
 			}
-			finalize()
 		case "done":
 			finalize()
 		}
@@ -775,15 +784,17 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 	})
 
 	if err != nil {
+		h.rememberThinkingFallback(err, fallback, profile, modelKey, "anthropic_messages", sawUpstreamEvent)
 		if recordStreamError(ctx, gLog, startTime, err, h.recorder) {
 			return
 		}
 
+		message := normalizeLingmaUpstreamError(err)
 		writeAnthropicSSE(w, "error", map[string]any{
 			"type": "error",
 			"error": map[string]any{
 				"type":    "api_error",
-				"message": err.Error(),
+				"message": message,
 			},
 		})
 		if canFlush {
@@ -860,7 +871,7 @@ func anthropicIsReasoning(req map[string]any) bool {
 	return true
 }
 
-func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
+func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseWriter, msgID, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time, profile lingmaRequestProfile, fallback lingmaThinkingFallbackDecision) {
 	var fullContent strings.Builder
 	var fullReasoning strings.Builder
 	var usage Usage
@@ -869,8 +880,10 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 	var lastErr *SSEEvent
 	var firstTokenTime time.Time
 	firstTokenRecorded := false
+	sawUpstreamEvent := false
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+		sawUpstreamEvent = true
 		switch event.Type {
 		case "data":
 			if event.HasError {
@@ -917,10 +930,11 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 	})
 
 	if err != nil {
+		h.rememberThinkingFallback(err, fallback, profile, modelKey, "anthropic_messages", sawUpstreamEvent)
 		if recordStreamError(ctx, gLog, startTime, err, h.recorder) {
 			return
 		}
-		writeAnthropicError(w, http.StatusInternalServerError, "api_error", err.Error())
+		writeAnthropicError(w, statusForLingmaUpstreamError(err), "api_error", normalizeLingmaUpstreamError(err))
 		return
 	}
 
@@ -1019,6 +1033,9 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 
 	h.recorder(gLog)
 
+	if fallback.Applied {
+		w.Header().Set(lingmaThinkingFallbackHeaderName, lingmaThinkingFallbackHeaderValue)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(respBytes)
 }

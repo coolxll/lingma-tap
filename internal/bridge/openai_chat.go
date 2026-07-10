@@ -185,6 +185,11 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 
 	// Build Lingma body
 	body := BuildLingmaBody(req.Messages, req.Tools, modelKey, params, rawBody, isReasoning, req.ToolChoice)
+	profile := inspectLingmaRequest(body, modelKey)
+	fallback := h.applyThinkingFallback("openai_chat", modelKey, rawBody, body, profile)
+	if !fallback.Applied {
+		h.warnLargeThinkingRequest(modelKey, "openai_chat", profile)
+	}
 
 	// Generate request ID for OpenAI response
 	reqID := "chatcmpl-" + newUUID()[:24]
@@ -206,16 +211,19 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 	h.recorder(gLog)
 
 	if req.Stream {
-		h.streamOpenAIChat(r.Context(), w, reqID, created, modelKey, body, gLog, startTime)
+		h.streamOpenAIChat(r.Context(), w, reqID, created, modelKey, body, gLog, startTime, profile, fallback)
 	} else {
-		h.nonStreamOpenAIChat(r.Context(), w, reqID, created, modelKey, body, gLog, startTime)
+		h.nonStreamOpenAIChat(r.Context(), w, reqID, created, modelKey, body, gLog, startTime, profile, fallback)
 	}
 }
 
-func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWriter, reqID string, created json.Number, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
+func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWriter, reqID string, created json.Number, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time, profile lingmaRequestProfile, fallback lingmaThinkingFallbackDecision) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	if fallback.Applied {
+		w.Header().Set(lingmaThinkingFallbackHeaderName, lingmaThinkingFallbackHeaderValue)
+	}
 	w.WriteHeader(http.StatusOK)
 
 	flusher, canFlush := w.(http.Flusher)
@@ -232,12 +240,14 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 	finishSent := false
 	firstChunkSent := false
+	sawUpstreamEvent := false
 
 	// TTFB 自测量：记录第一个包含内容的 data 事件时间
 	var firstTokenTime time.Time
 	firstTokenRecorded := false
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+		sawUpstreamEvent = true
 		if h.Debug {
 			fmt.Printf("[debug] SSE Event: Type=%s, ContentLen=%d, ToolCalls=%d, FinishReason=%s\n",
 				event.Type, len(event.Content), len(event.ToolCalls), event.FinishReason)
@@ -408,20 +418,37 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 					finishReason = fReason
 				}
 			}
+		case "done":
+			if !finishSent {
+				fReason := "stop"
+				if len(toolCallIDs) > 0 {
+					fReason = "tool_calls"
+				}
+				chunk := map[string]any{
+					"id":      reqID,
+					"object":  "chat.completion.chunk",
+					"created": created,
+					"model":   modelKey,
+					"choices": []map[string]any{{
+						"index":         0,
+						"delta":         map[string]any{},
+						"finish_reason": fReason,
+					}},
+				}
+				writeSSE(w, "data: ", chunk)
+				finishReason = fReason
+				finishSent = true
+			}
+
 			io.WriteString(w, "data: [DONE]\n\n")
 			if canFlush {
 				flusher.Flush()
 			}
 
-			// Finalize Log
 			gLog.Status = 200
-
-			// TTFB fallback: use self-measured value if upstream didn't provide one
 			if gLog.TTFT == 0 && firstTokenRecorded {
 				gLog.TTFT = firstTokenTime.Sub(startTime).Milliseconds()
 			}
-
-			// Synthesize original response structure
 			if finishReason == "" {
 				finishReason = "stop"
 			}
@@ -442,7 +469,6 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 						"content": fullContent.String(),
 					},
 				}
-				// Add tool calls if we tracked them
 				if len(toolCallIDs) > 0 {
 					var tcList []map[string]any
 					var keys []int
@@ -482,41 +508,42 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 			}
 			gLog.Latency = time.Since(startTime).Milliseconds()
 			h.recorder(gLog)
-
-		case "done":
-			// Already handled in finish
 		}
 		return nil
 	})
 
 	if err != nil {
+		h.rememberThinkingFallback(err, fallback, profile, modelKey, "openai_chat", sawUpstreamEvent)
 		if recordContextError(ctx, gLog, startTime, err, h.recorder) {
 			return
 		}
-		// Error after headers sent — log but can't change status
-		gLog.Error = err.Error()
-		gLog.Status = 500
+		message := normalizeLingmaUpstreamError(err)
+		gLog.Error = message
+		gLog.Status = statusForLingmaUpstreamError(err)
+		gLog.Latency = time.Since(startTime).Milliseconds()
 		h.recorder(gLog)
-		fmt.Fprintf(w, `data: {"error":{"message":"%s","type":"server_error"}}\n\n`, escapeJSON(err.Error()))
+		fmt.Fprintf(w, `data: {"error":{"message":"%s","type":"server_error"}}`+"\n\n", escapeJSON(message))
 		if canFlush {
 			flusher.Flush()
 		}
 	}
 }
 
-func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.ResponseWriter, reqID string, created json.Number, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time) {
+func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.ResponseWriter, reqID string, created json.Number, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time, profile lingmaRequestProfile, fallback lingmaThinkingFallbackDecision) {
 	var fullContent strings.Builder
 	var fullReasoning strings.Builder
 	var finishReason string
 	var usage *Usage
 	var toolCalls map[int]*toolCallState
 	var lastErr *SSEEvent
+	sawUpstreamEvent := false
 
 	// TTFB self-measurement
 	var firstTokenTime time.Time
 	firstTokenRecorded := false
 
 	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+		sawUpstreamEvent = true
 		if h.Debug {
 			fmt.Printf("[debug] SSE Event (Non-Stream): Type=%s, ContentLen=%d, ToolCalls=%d, FinishReason=%s\n",
 				event.Type, len(event.Content), len(event.ToolCalls), event.FinishReason)
@@ -569,10 +596,11 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 	})
 
 	if err != nil {
+		h.rememberThinkingFallback(err, fallback, profile, modelKey, "openai_chat", sawUpstreamEvent)
 		if recordStreamError(ctx, gLog, startTime, err, h.recorder) {
 			return
 		}
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error())
+		writeOpenAIError(w, statusForLingmaUpstreamError(err), normalizeLingmaUpstreamError(err))
 		return
 	}
 
@@ -685,6 +713,9 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 
 	h.recorder(gLog)
 
+	if fallback.Applied {
+		w.Header().Set(lingmaThinkingFallbackHeaderName, lingmaThinkingFallbackHeaderValue)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(respBytes)
 }

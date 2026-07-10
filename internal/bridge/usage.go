@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -40,8 +41,9 @@ func recordStreamError(ctx context.Context, gLog *proto.GatewayLog, startTime ti
 	if recordContextError(ctx, gLog, startTime, err, recorder) {
 		return true
 	}
-	gLog.Error = err.Error()
-	gLog.Status = 500
+	gLog.Error = normalizeLingmaUpstreamError(err)
+	gLog.Status = statusForLingmaUpstreamError(err)
+	gLog.Latency = time.Since(startTime).Milliseconds()
 	if recorder != nil {
 		recorder(gLog)
 	}
@@ -93,4 +95,31 @@ func recordContextError(ctx context.Context, gLog *proto.GatewayLog, startTime t
 		recorder(gLog)
 	}
 	return true
+}
+
+func statusForLingmaUpstreamError(err error) int {
+	if isLingmaUpstreamEOF(err) {
+		return http.StatusBadGateway
+	}
+	return http.StatusInternalServerError
+}
+
+func normalizeLingmaUpstreamError(err error) string {
+	if isLingmaUpstreamEOF(err) {
+		return "lingma upstream connection closed before [DONE]"
+	}
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func isLingmaUpstreamEOF(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "unexpected eof")
 }

@@ -309,16 +309,16 @@ func (c *LingmaClient) readSSE(body io.Reader, cb func(SSEEvent) error, state *s
 			}
 		}
 	}
-	// Safety: inject [DONE] if the stream ended without one
-	if !doneReceived {
-		for _, event := range state.flushPendingContentEvents() {
-			if err := cb(event); err != nil {
-				return err
-			}
-		}
-		return cb(SSEEvent{Type: "done"})
+	if doneReceived {
+		return nil
 	}
-	return nil
+
+	for _, event := range state.flushPendingContentEvents() {
+		if err := cb(event); err != nil {
+			return err
+		}
+	}
+	return io.ErrUnexpectedEOF
 }
 
 func (c *LingmaClient) parseSSEData(data string, state *streamState) ([]SSEEvent, error) {
