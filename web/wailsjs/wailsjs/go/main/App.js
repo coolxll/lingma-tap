@@ -34,6 +34,10 @@ export function GetGatewayLogs(arg1, arg2) {
   return window['go']['main']['App']['GetGatewayLogs'](arg1, arg2);
 }
 
+export function GetGatewayStats(arg1, arg2) {
+  return window['go']['main']['App']['GetGatewayStats'](arg1, arg2);
+}
+
 export function GetModels() {
   return window['go']['main']['App']['GetModels']();
 }
@@ -88,6 +92,10 @@ export function SetProxyLogging(arg1) {
 
 export function StartGateway(arg1, arg2) {
   return window['go']['main']['App']['StartGateway'](arg1, arg2);
+}
+
+export function StartOAuthLogin() {
+  return window['go']['main']['App']['StartOAuthLogin']();
 }
 
 export function StartProxy(arg1) {

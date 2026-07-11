@@ -19,6 +19,8 @@ export function GetCACertPath():Promise<string>;
 
 export function GetGatewayLogs(arg1:number,arg2:number):Promise<Array<proto.GatewayLog>>;
 
+export function GetGatewayStats(arg1:string,arg2:string):Promise<proto.GatewayLogStats>;
+
 export function GetModels():Promise<Array<bridge.ModelInfo>>;
 
 export function GetNetworkInterfaces():Promise<Array<Record<string, string>>>;
@@ -46,6 +48,8 @@ export function SetLogging(arg1:boolean):Promise<void>;
 export function SetProxyLogging(arg1:boolean):Promise<void>;
 
 export function StartGateway(arg1:number,arg2:string):Promise<void>;
+
+export function StartOAuthLogin():Promise<void>;
 
 export function StartProxy(arg1:number):Promise<void>;
 

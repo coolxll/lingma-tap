@@ -29,6 +29,7 @@ export namespace bridge {
 
 }
 
+
 export namespace proto {
 	
 	export class SSEEvent {
@@ -114,6 +115,28 @@ export namespace proto {
 		    }
 		    return a;
 		}
+	}
+	export class GatewayLogStats {
+	    total: number;
+	    input_tokens: number;
+	    output_tokens: number;
+	    cached_tokens: number;
+	    reasoning_tokens: number;
+	    total_tokens: number;
+
+	    static createFrom(source: any = {}) {
+	        return new GatewayLogStats(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total = source["total"];
+	        this.input_tokens = source["input_tokens"];
+	        this.output_tokens = source["output_tokens"];
+	        this.cached_tokens = source["cached_tokens"];
+	        this.reasoning_tokens = source["reasoning_tokens"];
+	        this.total_tokens = source["total_tokens"];
+	    }
 	}
 	export class Record {
 	    id: number;
@@ -217,4 +240,3 @@ export namespace proto {
 	}
 
 }
-
