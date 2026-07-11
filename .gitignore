@@ -55,3 +55,6 @@ web/package.json.md5
 
 # Environment Variables
 .env
+
+# WorkBuddy agent workspace data (not project source)
+.workbuddy/
