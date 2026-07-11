@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/coolxll/lingma-tap/internal/proto"
+	"github.com/golang-migrate/migrate/v4"
+	migratesqlite "github.com/golang-migrate/migrate/v4/database/sqlite"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
 func TestStorageFullFlow(t *testing.T) {
@@ -176,6 +179,79 @@ func TestStorageFullFlow(t *testing.T) {
 	}
 	if count := db.RecordCount(); count != 0 {
 		t.Errorf("Expected 0 records after clear before, got %d", count)
+	}
+}
+
+func TestCompletedCancellationMigration(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "completed_cancellation.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	sourceDriver, err := iofs.New(migrationsFS, "migrations")
+	if err != nil {
+		t.Fatalf("create migration source: %v", err)
+	}
+	dbDriver, err := migratesqlite.WithInstance(db.db.DB, &migratesqlite.Config{})
+	if err != nil {
+		t.Fatalf("create migration database driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance("iofs", sourceDriver, "sqlite", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	if err = migrator.Steps(-1); err != nil {
+		t.Fatalf("roll back migration 5: %v", err)
+	}
+
+	rows := []struct {
+		session      string
+		isSSE        int
+		finishReason string
+	}{
+		{session: "completed-sse", isSSE: 1, finishReason: "tool_calls"},
+		{session: "unfinished-sse", isSSE: 1, finishReason: ""},
+		{session: "completed-non-sse", isSSE: 0, finishReason: "stop"},
+	}
+	for _, row := range rows {
+		if _, err = db.db.Exec(`
+			INSERT INTO gateway_logs (ts, session, status, error, is_sse, finish_reason)
+			VALUES (?, ?, 499, 'client canceled request', ?, ?)
+		`, Now(), row.session, row.isSSE, row.finishReason); err != nil {
+			t.Fatalf("insert %s: %v", row.session, err)
+		}
+	}
+
+	if err = migrator.Steps(1); err != nil {
+		t.Fatalf("apply migration 5: %v", err)
+	}
+
+	var completed struct {
+		Status int    `db:"status"`
+		Error  string `db:"error"`
+	}
+	if err = db.db.Get(&completed, "SELECT status, error FROM gateway_logs WHERE session = ?", "completed-sse"); err != nil {
+		t.Fatalf("load completed SSE row: %v", err)
+	}
+	if completed.Status != 200 || completed.Error != "" {
+		t.Fatalf("completed SSE row = %+v, want status 200 with no error", completed)
+	}
+
+	for _, session := range []string{"unfinished-sse", "completed-non-sse"} {
+		var untouched struct {
+			Status int    `db:"status"`
+			Error  string `db:"error"`
+		}
+		if err = db.db.Get(&untouched, "SELECT status, error FROM gateway_logs WHERE session = ?", session); err != nil {
+			t.Fatalf("load %s: %v", session, err)
+		}
+		if untouched.Status != 499 || untouched.Error != "client canceled request" {
+			t.Fatalf("%s row changed unexpectedly: %+v", session, untouched)
+		}
 	}
 }
 
