@@ -7,7 +7,7 @@ import (
 
 func TestSanitizeAnthropicRequest(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		input map[string]any
 		check func(t *testing.T, result map[string]any)
 	}{
@@ -78,7 +78,7 @@ func TestSanitizeAnthropicRequest(t *testing.T) {
 			name: "caps budget_tokens at 2048",
 			input: map[string]any{
 				"thinking": map[string]any{
-					"type":         "enabled",
+					"type":          "enabled",
 					"budget_tokens": 10000.0,
 				},
 			},
@@ -195,9 +195,9 @@ func TestAnthropicToOpenAIMessages(t *testing.T) {
 					"content": []any{
 						map[string]any{"type": "text", "text": "Let me check."},
 						map[string]any{
-							"type": "tool_use",
-							"id":   "tu_123",
-							"name": "get_weather",
+							"type":  "tool_use",
+							"id":    "tu_123",
+							"name":  "get_weather",
 							"input": map[string]any{"location": "Beijing"},
 						},
 					},
@@ -230,9 +230,9 @@ func TestAnthropicToOpenAIMessages(t *testing.T) {
 					"role": "user",
 					"content": []any{
 						map[string]any{
-							"type":       "tool_result",
+							"type":        "tool_result",
 							"tool_use_id": "tu_123",
-							"content":    "Sunny, 25°C",
+							"content":     "Sunny, 25°C",
 						},
 					},
 				},
@@ -249,6 +249,44 @@ func TestAnthropicToOpenAIMessages(t *testing.T) {
 				}
 				if !found {
 					t.Error("expected a tool message")
+				}
+			},
+		},
+		{
+			name: "places tool_result before user text in same message",
+			messages: []map[string]any{
+				{
+					"role": "assistant",
+					"content": []any{
+						map[string]any{
+							"type":  "tool_use",
+							"id":    "tu_mixed",
+							"name":  "read_file",
+							"input": map[string]any{"path": "x"},
+						},
+					},
+				},
+				{
+					"role": "user",
+					"content": []any{
+						map[string]any{"type": "text", "text": "continue after the tool result"},
+						map[string]any{
+							"type":        "tool_result",
+							"tool_use_id": "tu_mixed",
+							"content":     "file content",
+						},
+					},
+				},
+			},
+			check: func(t *testing.T, result []map[string]any) {
+				if len(result) != 3 {
+					t.Fatalf("expected assistant, tool, user messages; got %d", len(result))
+				}
+				if result[0]["role"] != "assistant" || result[1]["role"] != "tool" || result[2]["role"] != "user" {
+					t.Fatalf("unexpected roles: %v, %v, %v", result[0]["role"], result[1]["role"], result[2]["role"])
+				}
+				if result[1]["tool_call_id"] != "tu_mixed" {
+					t.Fatalf("expected tool_result to answer tu_mixed, got %v", result[1]["tool_call_id"])
 				}
 			},
 		},
