@@ -64,8 +64,8 @@ Lingma Tap 是一个专为 Lingma API 设计的数据包可视化与抓取工具
 
 或者，你可以在终端中运行以下命令来手动清除隔离标记并重新签名：
 ```bash
-xattr -cr /Applications/Lingma\ Tap.app
-codesign --force --deep --sign - /Applications/Lingma\ Tap.app
+xattr -cr /Applications/lingma-tap.app
+codesign --force --deep --sign - /Applications/lingma-tap.app
 ```
 
 ## 调试与日志
@@ -79,7 +79,7 @@ codesign --force --deep --sign - /Applications/Lingma\ Tap.app
   GATEWAY_DEBUG=1 wails dev
   
   # 运行打包后的应用 (macOS)
-  GATEWAY_DEBUG=1 /Applications/Lingma\ Tap.app/Contents/MacOS/Lingma\ Tap
+  GATEWAY_DEBUG=1 /Applications/lingma-tap.app/Contents/MacOS/Lingma\ Tap
   ```
 - **UI 容错**：前端集成了全局错误边界（Error Boundary）。如果界面发生崩溃，会显示红色错误页面并自动将堆栈信息记录到上述日志文件中。
 
