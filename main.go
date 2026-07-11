@@ -65,6 +65,7 @@ type App struct {
 	gatewayServer      *http.Server
 	gatewayLogging     bool
 	proxyLogging       bool
+	lingmaHTTP2        bool
 }
 
 func NewApp() *App {
@@ -165,6 +166,10 @@ func (a *App) buildBridge(creds *auth.Credentials) *bridge.BridgeHandler {
 	if os.Getenv("GATEWAY_DEBUG") == "1" {
 		handler.SetDebug(true)
 	}
+	a.mu.Lock()
+	lingmaHTTP2 := a.lingmaHTTP2
+	a.mu.Unlock()
+	handler.SetLingmaHTTP2(lingmaHTTP2)
 
 	mappingJSON := ""
 	defaultModel := ""
@@ -242,6 +247,13 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.db = db
 	a.sink = storage.NewAsyncSink(db, 10000)
+
+	lingmaHTTP2Setting, _ := a.db.GetSetting("lingma_http2")
+	if lingmaHTTP2Setting == "" {
+		a.lingmaHTTP2 = bridge.DefaultLingmaHTTP2Enabled()
+	} else {
+		a.lingmaHTTP2 = lingmaHTTP2Setting == "true"
+	}
 
 	// Initialize WebSocket Hub
 	a.hub = api.NewHub()
@@ -661,6 +673,25 @@ func (a *App) SetProxyLogging(enabled bool) {
 	}
 }
 
+// SetLingmaHTTP2 controls whether Lingma upstream requests may use HTTP/2.
+func (a *App) SetLingmaHTTP2(enabled bool) {
+	a.mu.Lock()
+	a.lingmaHTTP2 = enabled
+	bridgeHandler := a.bridgeHandlerField
+	a.mu.Unlock()
+
+	if bridgeHandler != nil {
+		bridgeHandler.SetLingmaHTTP2(enabled)
+	}
+	if a.db != nil {
+		val := "false"
+		if enabled {
+			val = "true"
+		}
+		a.db.SaveSetting("lingma_http2", val)
+	}
+}
+
 // GetStatus returns the current status.
 func (a *App) GetStatus() map[string]interface{} {
 	a.mu.Lock()
@@ -669,6 +700,7 @@ func (a *App) GetStatus() map[string]interface{} {
 		"gateway_running":  a.gatewayServer != nil,
 		"gateway_logging":  a.gatewayLogging,
 		"proxy_logging":    a.proxyLogging,
+		"lingma_http2":     a.lingmaHTTP2,
 		"authenticated":    a.bridgeHandlerField != nil,
 		"auth_user":        a.authUser,
 		"auth_expire_time": a.authExpireTime,

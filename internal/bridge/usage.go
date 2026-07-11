@@ -113,6 +113,10 @@ func recordContextError(ctx context.Context, gLog *proto.GatewayLog, startTime t
 }
 
 func statusForLingmaUpstreamError(err error) int {
+	var upstreamErr lingmaUpstreamEventError
+	if errors.As(err, &upstreamErr) {
+		return http.StatusBadGateway
+	}
 	if isLingmaUpstreamEOF(err) {
 		return http.StatusBadGateway
 	}
@@ -120,6 +124,10 @@ func statusForLingmaUpstreamError(err error) int {
 }
 
 func normalizeLingmaUpstreamError(err error) string {
+	var upstreamErr lingmaUpstreamEventError
+	if errors.As(err, &upstreamErr) {
+		return upstreamErr.Error()
+	}
 	if isLingmaUpstreamEOF(err) {
 		return "lingma upstream connection closed before [DONE]"
 	}

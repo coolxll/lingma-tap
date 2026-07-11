@@ -209,39 +209,20 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 	var firstTokenTime time.Time
 	firstTokenRecorded := false
 
-	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+	handleEvent := func(event SSEEvent) error {
 		sawUpstreamEvent = true
 		switch event.Type {
 		case "data":
 			// Record first token time for TTFB self-measurement
-			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "") {
+			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "" || len(event.ToolCalls) > 0) {
 				firstTokenTime = time.Now()
 				firstTokenRecorded = true
 			}
 
 			if event.HasError {
-				upstreamErrored = true
-				errMsg := orDefault(event.ErrorMsg, "unknown upstream error")
-				errType := orDefault(event.ErrorType, "api_error")
-				writeSSE(w, "", map[string]any{
-					"type": "response.failed",
-					"response": map[string]any{
-						"id":     respID,
-						"status": "failed",
-						"model":  modelKey,
-						"error": map[string]any{
-							"type":    errType,
-							"message": errMsg,
-						},
-					},
-				})
-				if canFlush {
-					flusher.Flush()
+				if err := errorFromSSEEvent(event); err != nil {
+					return err
 				}
-				gLog.Error = errMsg
-				gLog.Status = http.StatusBadGateway
-				gLog.Latency = time.Since(startTime).Milliseconds()
-				h.recorder(gLog)
 				return nil
 			}
 			if event.Usage != nil {
@@ -498,7 +479,21 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 			h.recorder(gLog)
 		}
 		return nil
-	})
+	}
+
+	var err error
+	for {
+		err = h.client.ChatStream(ctx, body, handleEvent)
+		if err != nil {
+			emittedContent := firstTokenRecorded || textBlockStarted || reasoningBlockStarted || len(toolCalls) > 0 || upstreamErrored
+			if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("openai_responses", modelKey, body, profile, fallback, err, emittedContent); ok {
+				body = retryBody
+				fallback = retryFallback
+				continue
+			}
+		}
+		break
+	}
 
 	if err != nil {
 		h.rememberThinkingFallback(err, fallback, profile, modelKey, "openai_responses", sawUpstreamEvent)
@@ -573,6 +568,10 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 	})
 
 	if err != nil {
+		if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("openai_responses", modelKey, body, profile, fallback, err, false); ok {
+			h.nonStreamResponses(ctx, w, respID, modelKey, retryBody, gLog, startTime, profile, retryFallback)
+			return
+		}
 		h.rememberThinkingFallback(err, fallback, profile, modelKey, "openai_responses", sawUpstreamEvent)
 		if recordStreamError(ctx, gLog, startTime, err, h.recorder) {
 			return
@@ -583,6 +582,10 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 
 	// Check for upstream error in SSE events
 	if lastErr != nil {
+		if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("openai_responses", modelKey, body, profile, fallback, errorFromSSEEvent(*lastErr), false); ok {
+			h.nonStreamResponses(ctx, w, respID, modelKey, retryBody, gLog, startTime, profile, retryFallback)
+			return
+		}
 		errMsg := orDefault(lastErr.ErrorMsg, "unknown upstream error")
 		gLog.Error = errMsg
 		gLog.Status = http.StatusBadGateway

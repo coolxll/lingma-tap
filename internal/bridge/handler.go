@@ -90,6 +90,12 @@ func (h *BridgeHandler) SetDebug(debug bool) {
 	}
 }
 
+func (h *BridgeHandler) SetLingmaHTTP2(enabled bool) {
+	if h.client != nil {
+		h.client.SetHTTP2Enabled(enabled)
+	}
+}
+
 // UpdateAnthropicMapping updates the internal model mapping for Anthropic models.
 func (h *BridgeHandler) UpdateAnthropicMapping(mapping map[string]string, defaultModel string) {
 	h.modelMapping = mapping

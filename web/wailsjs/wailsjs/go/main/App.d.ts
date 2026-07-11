@@ -43,6 +43,8 @@ export function RevealCACert():Promise<void>;
 
 export function SaveAnthropicMapping(arg1:Record<string, string>,arg2:string):Promise<void>;
 
+export function SetLingmaHTTP2(arg1:boolean):Promise<void>;
+
 export function SetLogging(arg1:boolean):Promise<void>;
 
 export function SetProxyLogging(arg1:boolean):Promise<void>;
