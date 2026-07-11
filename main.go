@@ -45,12 +45,19 @@ var webAssets embed.FS
 type App struct {
 	ctx                context.Context
 	mu                 sync.Mutex
+	dataDir            string
 	ca                 *ca.CA
 	db                 *storage.DB
 	sink               *storage.AsyncSink
 	hub                *api.Hub
 	proxy              *proxy.Server
 	bridgeHandlerField *bridge.BridgeHandler
+	managementHandler  *api.Handler
+	gatewayHandler     *api.Handler
+	oauthLogin         *auth.OAuthLogin
+	authUser           string
+	authExpireTime     int64
+	openURL            func(string)
 	apiLn              net.Listener
 	proxyRunning       bool
 	proxyPort          int
@@ -61,10 +68,15 @@ type App struct {
 }
 
 func NewApp() *App {
-	return &App{
+	a := &App{
 		gatewayLogging: true,
 		proxyLogging:   true,
+		oauthLogin:     auth.NewOAuthLogin(),
 	}
+	a.openURL = func(url string) {
+		runtime.BrowserOpenURL(a.ctx, url)
+	}
+	return a
 }
 
 func gatewayLogSnapshot(l *proto.GatewayLog, includePayloads bool) *proto.GatewayLog {
@@ -114,12 +126,94 @@ func convertGatewayLogToRecord(l *proto.GatewayLog) *proto.Record {
 	}
 }
 
+func (a *App) loadDesktopCredentials(dataDir string) (*auth.Credentials, error) {
+	creds, err := auth.LoadCredentialsFromDir(filepath.Join(dataDir, "auth"))
+	if err == nil {
+		return creds, nil
+	}
+	return auth.LoadCredentials()
+}
+
+func (a *App) buildBridge(creds *auth.Credentials) *bridge.BridgeHandler {
+	session := auth.NewSession(creds)
+	handler := bridge.NewBridgeHandler(session, func(gLog *proto.GatewayLog) {
+		a.mu.Lock()
+		includePayloads := a.gatewayLogging
+		a.mu.Unlock()
+
+		snapshot := gatewayLogSnapshot(gLog, includePayloads)
+		if snapshot == nil {
+			return
+		}
+		if a.db != nil {
+			go func(logSnapshot *proto.GatewayLog) {
+				if err := a.db.SaveGatewayLog(logSnapshot); err != nil {
+					log.Printf("[app] SaveGatewayLog error: %v", err)
+				}
+			}(snapshot)
+		}
+		if a.hub != nil {
+			rec := convertGatewayLogToRecord(snapshot)
+			a.hub.Broadcast(rec)
+		}
+	})
+	handler.SetPayloadLoggingFunc(func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.gatewayLogging
+	})
+	if os.Getenv("GATEWAY_DEBUG") == "1" {
+		handler.SetDebug(true)
+	}
+
+	mappingJSON := ""
+	defaultModel := ""
+	if a.db != nil {
+		mappingJSON, _ = a.db.GetSetting("anthropic_model_mapping")
+		defaultModel, _ = a.db.GetSetting("default_anthropic_model")
+	}
+	fallbackDefaultModel := defaultModel
+	if fallbackDefaultModel == "" {
+		fallbackDefaultModel = bridge.DefaultAnthropicModel
+	}
+	if mappingJSON != "" {
+		var mapping map[string]string
+		if err := json.Unmarshal([]byte(mappingJSON), &mapping); err == nil && len(mapping) > 0 {
+			handler.UpdateAnthropicMapping(mapping, fallbackDefaultModel)
+			return handler
+		}
+	}
+	handler.UpdateAnthropicMapping(bridge.DefaultAnthropicModelMapping(), fallbackDefaultModel)
+	return handler
+}
+
+func (a *App) installCredentials(creds *auth.Credentials) {
+	bridgeHandler := a.buildBridge(creds)
+
+	a.mu.Lock()
+	a.bridgeHandlerField = bridgeHandler
+	a.authUser = creds.Name
+	a.authExpireTime = creds.ExpireTime
+	managementHandler := a.managementHandler
+	gatewayHandler := a.gatewayHandler
+	a.mu.Unlock()
+
+	if managementHandler != nil {
+		managementHandler.SetBridge(bridgeHandler)
+	}
+	if gatewayHandler != nil {
+		gatewayHandler.SetBridge(bridgeHandler)
+	}
+	log.Printf("[app] Bridge initialized for user %s", creds.Name)
+}
+
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
 	home, _ := os.UserHomeDir()
 	dataDir := filepath.Join(home, ".lingma-tap")
 	os.MkdirAll(dataDir, 0755)
+	a.dataDir = dataDir
 
 	// Persist logs to file
 	logFile, err := os.OpenFile(filepath.Join(dataDir, "app.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
@@ -154,68 +248,15 @@ func (a *App) startup(ctx context.Context) {
 	go a.hub.Run()
 
 	// Start API server (WebSocket + REST + Bridge)
-	var bridgeHandler api.BridgeHandler
-	creds, err := auth.LoadCredentials()
+	creds, err := a.loadDesktopCredentials(dataDir)
 	if err != nil {
 		log.Printf("[app] LocalAuth not available (bridge disabled): %v", err)
 	} else {
-		session := auth.NewSession(creds)
-		handler := bridge.NewBridgeHandler(session, func(gLog *proto.GatewayLog) {
-			a.mu.Lock()
-			includePayloads := a.gatewayLogging
-			a.mu.Unlock()
-
-			snapshot := gatewayLogSnapshot(gLog, includePayloads)
-			if snapshot == nil {
-				return
-			}
-			if a.db != nil {
-				go func(logSnapshot *proto.GatewayLog) {
-					if err := a.db.SaveGatewayLog(logSnapshot); err != nil {
-						log.Printf("[app] SaveGatewayLog error: %v", err)
-					}
-				}(snapshot)
-			}
-			if a.hub != nil {
-				rec := convertGatewayLogToRecord(snapshot)
-				a.hub.Broadcast(rec)
-			}
-		})
-		handler.SetPayloadLoggingFunc(func() bool {
-			a.mu.Lock()
-			defer a.mu.Unlock()
-			return a.gatewayLogging
-		})
-		a.bridgeHandlerField = handler
-		if os.Getenv("GATEWAY_DEBUG") == "1" {
-			a.bridgeHandlerField.SetDebug(true)
-		}
-		bridgeHandler = a.bridgeHandlerField
-		log.Printf("[app] Bridge initialized for user %s", creds.Name)
-
-		// Load Anthropic model mapping from settings
-		mappingJSON, _ := a.db.GetSetting("anthropic_model_mapping")
-		defaultModel, _ := a.db.GetSetting("default_anthropic_model")
-		defaults := bridge.DefaultAnthropicModelMapping()
-		fallbackDefaultModel := defaultModel
-		if fallbackDefaultModel == "" {
-			fallbackDefaultModel = bridge.DefaultAnthropicModel
-		}
-		if mappingJSON != "" {
-			var mapping map[string]string
-			if err := json.Unmarshal([]byte(mappingJSON), &mapping); err == nil && len(mapping) > 0 {
-				a.bridgeHandlerField.UpdateAnthropicMapping(mapping, fallbackDefaultModel)
-			} else {
-				// Empty mapping (e.g. "{}"), fall through to defaults
-				a.bridgeHandlerField.UpdateAnthropicMapping(defaults, fallbackDefaultModel)
-			}
-		} else {
-			// Fallback to hardcoded defaults if DB migration didn't run or something
-			a.bridgeHandlerField.UpdateAnthropicMapping(defaults, fallbackDefaultModel)
-		}
+		a.installCredentials(creds)
 	}
 
-	handler := api.NewHandler(a.hub, a, bridgeHandler)
+	handler := api.NewHandler(a.hub, a, a.bridgeHandlerField)
+	a.managementHandler = handler
 	mux := http.NewServeMux()
 	handler.RegisterInternalRoutes(mux)
 
@@ -283,6 +324,9 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) shutdown(ctx context.Context) {
 	stopTray()
+	if a.oauthLogin != nil {
+		a.oauthLogin.Close()
+	}
 	if a.hub != nil {
 		a.hub.Stop()
 	}
@@ -415,6 +459,7 @@ func (a *App) StartGateway(port int, listenAddr string) error {
 
 	addr := fmt.Sprintf("%s:%d", listenAddr, port)
 	handler := api.NewHandler(a.hub, a, a.bridgeHandlerField)
+	a.gatewayHandler = handler
 	mux := http.NewServeMux()
 	handler.RegisterGatewayRoutes(mux)
 
@@ -442,6 +487,7 @@ func (a *App) StopGateway() {
 		log.Printf("[app] Stopping AI Gateway...")
 		a.gatewayServer.Close()
 		a.gatewayServer = nil
+		a.gatewayHandler = nil
 	}
 }
 
@@ -618,13 +664,14 @@ func (a *App) SetProxyLogging(enabled bool) {
 // GetStatus returns the current status.
 func (a *App) GetStatus() map[string]interface{} {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	status := map[string]interface{}{
-		"proxy_running":   a.proxy != nil && a.proxy.Port() != 0,
-		"gateway_running": a.gatewayServer != nil,
-		"gateway_logging": a.gatewayLogging,
-		"proxy_logging":   a.proxyLogging,
+		"proxy_running":    a.proxy != nil && a.proxy.Port() != 0,
+		"gateway_running":  a.gatewayServer != nil,
+		"gateway_logging":  a.gatewayLogging,
+		"proxy_logging":    a.proxyLogging,
+		"authenticated":    a.bridgeHandlerField != nil,
+		"auth_user":        a.authUser,
+		"auth_expire_time": a.authExpireTime,
 	}
 	if a.db != nil {
 		status["stats"] = a.db.Stats()
@@ -632,20 +679,75 @@ func (a *App) GetStatus() map[string]interface{} {
 	if a.hub != nil {
 		status["ws_clients"] = a.hub.ClientCount()
 	}
+	oauthLogin := a.oauthLogin
+	a.mu.Unlock()
+	if oauthLogin != nil {
+		oauthStatus := oauthLogin.Status()
+		status["oauth_in_progress"] = oauthStatus.InProgress
+		oauthExpiresAt := int64(0)
+		if !oauthStatus.ExpiresAt.IsZero() {
+			oauthExpiresAt = oauthStatus.ExpiresAt.UnixMilli()
+		}
+		status["oauth_expires_at"] = oauthExpiresAt
+		status["oauth_error"] = oauthStatus.Error
+	}
 	return status
 }
 
 // GetModels returns the model list via Wails binding (avoids CORS issues).
 func (a *App) GetModels() ([]bridge.ModelInfo, error) {
-	if a.bridgeHandlerField == nil {
+	a.mu.Lock()
+	bridgeHandler := a.bridgeHandlerField
+	a.mu.Unlock()
+	if bridgeHandler == nil {
 		return nil, fmt.Errorf("bridge not initialized")
 	}
-	return a.bridgeHandlerField.GetModels()
+	return bridgeHandler.GetModels()
 }
 
 // OpenExternal opens a URL in the default browser.
 func (a *App) OpenExternal(url string) {
-	runtime.BrowserOpenURL(a.ctx, url)
+	a.mu.Lock()
+	openURL := a.openURL
+	a.mu.Unlock()
+	if openURL != nil {
+		openURL(url)
+	}
+}
+
+// StartOAuthLogin starts a browser-based Lingma OAuth flow for the desktop app.
+func (a *App) StartOAuthLogin() error {
+	a.mu.Lock()
+	dataDir := a.dataDir
+	oauthLogin := a.oauthLogin
+	openURL := a.openURL
+	a.mu.Unlock()
+	if dataDir == "" {
+		return fmt.Errorf("application data directory is not initialized")
+	}
+	if oauthLogin == nil {
+		return fmt.Errorf("OAuth login is not initialized")
+	}
+	if openURL == nil {
+		return fmt.Errorf("browser opener is not initialized")
+	}
+
+	machineID, err := auth.OAuthMachineID(dataDir)
+	if err != nil {
+		return fmt.Errorf("prepare OAuth machine ID: %w", err)
+	}
+	loginURL, err := oauthLogin.Start(machineID, func(creds *auth.Credentials) error {
+		if err := auth.SaveExchangedCredentials(creds, dataDir); err != nil {
+			return err
+		}
+		a.installCredentials(creds)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	openURL(loginURL)
+	return nil
 }
 
 // GetAnthropicMapping returns the current Anthropic model mapping.
@@ -688,8 +790,11 @@ func (a *App) SaveAnthropicMapping(mapping map[string]string, defaultModel strin
 		return err
 	}
 
-	if a.bridgeHandlerField != nil {
-		a.bridgeHandlerField.UpdateAnthropicMapping(effectiveMapping, effectiveDefault)
+	a.mu.Lock()
+	bridgeHandler := a.bridgeHandlerField
+	a.mu.Unlock()
+	if bridgeHandler != nil {
+		bridgeHandler.UpdateAnthropicMapping(effectiveMapping, effectiveDefault)
 	}
 	return nil
 }

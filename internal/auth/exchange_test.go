@@ -1,18 +1,23 @@
 package auth
 
 import (
-	"fmt"
+	"os"
 	"testing"
 )
 
+func requireAuthIntegration(t *testing.T) {
+	t.Helper()
+	if os.Getenv("LINGMA_AUTH_INTEGRATION") != "1" {
+		t.Skip("set LINGMA_AUTH_INTEGRATION=1 to run tests against a real Lingma account")
+	}
+}
+
 func TestGrantAuthInfos(t *testing.T) {
+	requireAuthIntegration(t)
 	creds, err := LoadCredentials()
 	if err != nil {
 		t.Skipf("auth files not found: %v", err)
 	}
-
-	fmt.Printf("UID: %s\n", creds.UID)
-	fmt.Printf("OrgID: %s\n", creds.OrganizationID)
 
 	// Test grantAuthInfos (pass CosyKey as encryptedKey for testing)
 	err = grantAuthInfos(creds, creds.CosyKey)
@@ -22,6 +27,7 @@ func TestGrantAuthInfos(t *testing.T) {
 }
 
 func TestFetchUserStatus(t *testing.T) {
+	requireAuthIntegration(t)
 	creds, err := LoadCredentials()
 	if err != nil {
 		t.Skipf("auth files not found: %v", err)
@@ -32,7 +38,6 @@ func TestFetchUserStatus(t *testing.T) {
 		t.Errorf("fetchUserStatus failed: %v", err)
 	}
 
-	fmt.Printf("Fetched Name: %s\n", fullCreds.Name)
 	if fullCreds.Name == "" {
 		t.Error("empty name in fetched status")
 	}

@@ -41,6 +41,7 @@ interface WailsWindow extends Window {
         SetLogging: (enabled: boolean) => Promise<void>;
         SetProxyLogging: (enabled: boolean) => Promise<void>;
         GetModels: () => Promise<ModelInfo[]>;
+        StartOAuthLogin: () => Promise<void>;
       };
     };
   };
@@ -165,6 +166,11 @@ function App() {
   const [caCertPath, setCaCertPath] = useState("");
   const [gatewayLoggingEnabled, setGatewayLoggingEnabled] = useState(true);
   const [proxyLoggingEnabled, setProxyLoggingEnabled] = useState(true);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authUser, setAuthUser] = useState('');
+  const [authExpireTime, setAuthExpireTime] = useState(0);
+  const [oauthInProgress, setOAuthInProgress] = useState(false);
+  const [oauthError, setOAuthError] = useState('');
   const [displayCount, setDisplayCount] = useState(PROXY_PAGE_SIZE);
   const [canLoadMore, setCanLoadMore] = useState(true);
   const [proxyTypeFilter, setProxyTypeFilter] = useState<ProxyTypeFilter>("chat");
@@ -221,6 +227,29 @@ function App() {
 
   // Wails bindings
   const wails = (window as unknown as WailsWindow).go?.main?.App;
+
+  const applyStatus = useCallback((s: Record<string, unknown>) => {
+    const st = s?.stats as StorageStats | null;
+    if (st) setStats(st);
+    if (s?.proxy_running !== undefined)
+      setProxyRunning(s.proxy_running as boolean);
+    if (s?.gateway_running !== undefined)
+      setGatewayRunning(s.gateway_running as boolean);
+    if (s?.gateway_logging !== undefined)
+      setGatewayLoggingEnabled(s.gateway_logging as boolean);
+    if (s?.proxy_logging !== undefined)
+      setProxyLoggingEnabled(s.proxy_logging as boolean);
+    if (s?.authenticated !== undefined)
+      setAuthenticated(s.authenticated as boolean);
+    if (typeof s?.auth_user === 'string')
+      setAuthUser(s.auth_user);
+    if (typeof s?.auth_expire_time === 'number')
+      setAuthExpireTime(s.auth_expire_time);
+    if (s?.oauth_in_progress !== undefined)
+      setOAuthInProgress(s.oauth_in_progress as boolean);
+    if (typeof s?.oauth_error === 'string')
+      setOAuthError(s.oauth_error);
+  }, []);
 
   const fetchProxyRecords = useCallback(async (filter: ProxyTypeFilter, offset: number) => {
     if (!wails) return [];
@@ -337,19 +366,8 @@ function App() {
     });
 
     wails.GetCACertPath().then(setCaCertPath);
-    wails.GetStatus().then((s) => {
-      const st = s?.stats as StorageStats | null;
-      if (st) setStats(st);
-      if (s?.proxy_running !== undefined)
-        setProxyRunning(s.proxy_running as boolean);
-      if (s?.gateway_running !== undefined)
-        setGatewayRunning(s.gateway_running as boolean);
-      if (s?.gateway_logging !== undefined)
-        setGatewayLoggingEnabled(s.gateway_logging as boolean);
-      if (s?.proxy_logging !== undefined)
-        setProxyLoggingEnabled(s.proxy_logging as boolean);
-    });
-  }, [wails, updateRecords, setSelectedRecord, fetchProxyRecords]);
+    wails.GetStatus().then(applyStatus);
+  }, [wails, updateRecords, setSelectedRecord, fetchProxyRecords, applyStatus]);
 
   // WebSocket connection
   useEffect(() => {
@@ -399,20 +417,21 @@ function App() {
   useEffect(() => {
     const interval = setInterval(() => {
       wails?.GetStatus().then((s) => {
-        const st = s?.stats as StorageStats | null;
-        if (st) setStats(st);
-        if (s?.proxy_running !== undefined)
-          setProxyRunning(s.proxy_running as boolean);
-        if (s?.gateway_running !== undefined)
-          setGatewayRunning(s.gateway_running as boolean);
-        if (s?.gateway_logging !== undefined)
-          setGatewayLoggingEnabled(s.gateway_logging as boolean);
-        if (s?.proxy_logging !== undefined)
-          setProxyLoggingEnabled(s.proxy_logging as boolean);
+        applyStatus(s);
       });
     }, 5000);
     return () => clearInterval(interval);
-  }, [wails]);
+  }, [wails, applyStatus]);
+
+  useEffect(() => {
+    if (!oauthInProgress || !wails) return;
+    const interval = setInterval(() => {
+      wails.GetStatus().then(applyStatus).catch((err) => {
+        console.error('Failed to refresh OAuth status:', err);
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [wails, oauthInProgress, applyStatus]);
 
   // Handlers
   const handleToggleProxy = useCallback(async () => {
@@ -444,6 +463,19 @@ function App() {
       }
     }
   }, [wails, gatewayRunning, gatewayPort, gatewayListenAddr]);
+
+  const handleStartOAuthLogin = useCallback(async () => {
+    if (!wails?.StartOAuthLogin) return;
+    try {
+      await wails.StartOAuthLogin();
+      const status = await wails.GetStatus();
+      applyStatus(status);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start OAuth login';
+      setOAuthError(message);
+      console.error('Failed to start OAuth login:', err);
+    }
+  }, [wails, applyStatus]);
 
   const handleToggleGatewayLogging = useCallback(async () => {
     const newState = !gatewayLoggingEnabled;
@@ -611,6 +643,12 @@ function App() {
             onToggleLogging={handleToggleGatewayLogging}
             proxyLoggingEnabled={proxyLoggingEnabled}
             onToggleProxyLogging={handleToggleProxyLogging}
+            authenticated={authenticated}
+            authUser={authUser}
+            authExpireTime={authExpireTime}
+            oauthInProgress={oauthInProgress}
+            oauthError={oauthError}
+            onStartOAuthLogin={handleStartOAuthLogin}
             stats={stats || null}
             onClearAll={handleClear}
             onClearBefore={async (days) => {
