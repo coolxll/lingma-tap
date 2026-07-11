@@ -16,6 +16,7 @@ import (
 type Credentials struct {
 	MachineID          string `json:"machine_id"`
 	UID                string `json:"uid"`
+	AID                string `json:"aid"`
 	OrganizationID     string `json:"organization_id"`
 	CosyKey            string `json:"key"`
 	EncryptUserInfo    string `json:"encrypt_user_info"`
@@ -24,6 +25,19 @@ type Credentials struct {
 	RefreshToken       string `json:"refresh_token"`
 	ExpireTime         int64  `json:"expire_time"`
 	Name               string `json:"name"`
+}
+
+type storedCredentials struct {
+	Name               string `json:"name"`
+	UID                string `json:"uid"`
+	AID                string `json:"aid"`
+	OrganizationID     string `json:"organization_id"`
+	UserType           string `json:"user_type"`
+	Key                string `json:"key"`
+	EncryptUserInfo    string `json:"encrypt_user_info"`
+	SecurityOAuthToken string `json:"security_oauth_token"`
+	RefreshToken       string `json:"refresh_token"`
+	ExpireTime         int64  `json:"expire_time"`
 }
 
 // LoadCredentials reads and decrypts the local Lingma IDE auth files.
@@ -74,6 +88,7 @@ func authDirCandidates() []string {
 
 	// Fallback: VSCode extension path (all platforms)
 	candidates = append(candidates,
+		filepath.Join(home, ".lingma", "cache"),
 		filepath.Join(home, ".lingma", "vscode", "sharedClientCache", "cache"),
 	)
 
@@ -82,10 +97,11 @@ func authDirCandidates() []string {
 
 func loadFromDir(dir string) (*Credentials, error) {
 	// Read machineId
-	machineID, err := readTrimmed(filepath.Join(dir, "id"))
+	machineIDContent, err := readTrimmed(filepath.Join(dir, "id"))
 	if err != nil {
 		return nil, fmt.Errorf("read machine id: %w", err)
 	}
+	machineID := parseMachineID(machineIDContent)
 
 	// Read and decrypt user file
 	userB64, err := readTrimmed(filepath.Join(dir, "user"))
@@ -98,33 +114,12 @@ func loadFromDir(dir string) (*Credentials, error) {
 		return nil, fmt.Errorf("decrypt user file: %w", err)
 	}
 
-	var user struct {
-		Name               string `json:"name"`
-		UID                string `json:"uid"`
-		OrganizationID     string `json:"organization_id"`
-		UserType           string `json:"user_type"`
-		Key                string `json:"key"`
-		EncryptUserInfo    string `json:"encrypt_user_info"`
-		SecurityOAuthToken string `json:"security_oauth_token"`
-		RefreshToken       string `json:"refresh_token"`
-		ExpireTime         int64  `json:"expire_time"`
-	}
+	var user storedCredentials
 	if err := json.Unmarshal(userJSON, &user); err != nil {
 		return nil, fmt.Errorf("parse user json: %w", err)
 	}
 
-	return &Credentials{
-		MachineID:          machineID,
-		UID:                user.UID,
-		OrganizationID:     user.OrganizationID,
-		CosyKey:            user.Key,
-		EncryptUserInfo:    user.EncryptUserInfo,
-		UserType:           user.UserType,
-		SecurityOAuthToken: user.SecurityOAuthToken,
-		RefreshToken:       user.RefreshToken,
-		ExpireTime:         user.ExpireTime,
-		Name:               user.Name,
-	}, nil
+	return credentialsFromStored(machineID, user), nil
 }
 
 func decryptUser(b64, machineID string) ([]byte, error) {
@@ -177,36 +172,26 @@ func readTrimmed(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// LoadCredentialsFromBytes loads credentials from raw file content strings
-// instead of reading from the local filesystem. Used for server mode where
-// auth files are uploaded via HTTP.
-func LoadCredentialsFromBytes(idContent, userContent string) (*Credentials, error) {
-	machineID := strings.TrimSpace(idContent)
-	userB64 := strings.TrimSpace(userContent)
-
-	userJSON, err := decryptUser(userB64, machineID)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt user: %w", err)
+func parseMachineID(content string) string {
+	machineID := strings.TrimSpace(content)
+	if !strings.HasPrefix(machineID, "{") {
+		return machineID
 	}
 
-	var user struct {
-		Name               string `json:"name"`
-		UID                string `json:"uid"`
-		OrganizationID     string `json:"organization_id"`
-		UserType           string `json:"user_type"`
-		Key                string `json:"key"`
-		EncryptUserInfo    string `json:"encrypt_user_info"`
-		SecurityOAuthToken string `json:"security_oauth_token"`
-		RefreshToken       string `json:"refresh_token"`
-		ExpireTime         int64  `json:"expire_time"`
+	var legacy struct {
+		MachineID string `json:"machine_id"`
 	}
-	if err := json.Unmarshal(userJSON, &user); err != nil {
-		return nil, fmt.Errorf("parse user json: %w", err)
+	if err := json.Unmarshal([]byte(machineID), &legacy); err == nil && legacy.MachineID != "" {
+		return legacy.MachineID
 	}
+	return machineID
+}
 
+func credentialsFromStored(machineID string, user storedCredentials) *Credentials {
 	return &Credentials{
 		MachineID:          machineID,
 		UID:                user.UID,
+		AID:                user.AID,
 		OrganizationID:     user.OrganizationID,
 		CosyKey:            user.Key,
 		EncryptUserInfo:    user.EncryptUserInfo,
@@ -215,26 +200,46 @@ func LoadCredentialsFromBytes(idContent, userContent string) (*Credentials, erro
 		RefreshToken:       user.RefreshToken,
 		ExpireTime:         user.ExpireTime,
 		Name:               user.Name,
-	}, nil
+	}
+}
+
+// LoadCredentialsFromBytes loads credentials from raw file content strings
+// instead of reading from the local filesystem. Used for server mode where
+// auth files are uploaded via HTTP.
+func LoadCredentialsFromBytes(idContent, userContent string) (*Credentials, error) {
+	machineID := parseMachineID(idContent)
+	userB64 := strings.TrimSpace(userContent)
+
+	userJSON, err := decryptUser(userB64, machineID)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt user: %w", err)
+	}
+
+	var user storedCredentials
+	if err := json.Unmarshal(userJSON, &user); err != nil {
+		return nil, fmt.Errorf("parse user json: %w", err)
+	}
+
+	return credentialsFromStored(machineID, user), nil
 }
 
 // SaveExchangedCredentials serializes and encrypts credentials for persistent storage.
 func SaveExchangedCredentials(creds *Credentials, dataDir string) error {
-	// 1. Prepare id file content
-	idObj := map[string]string{"machine_id": creds.MachineID}
-	idJSON, _ := json.Marshal(idObj)
+	if creds == nil {
+		return fmt.Errorf("credentials are required")
+	}
 
-	// 2. Prepare user file content (encrypted)
-	userObj := map[string]interface{}{
-		"name":                 creds.Name,
-		"uid":                  creds.UID,
-		"organization_id":      creds.OrganizationID,
-		"user_type":            creds.UserType,
-		"key":                  creds.CosyKey,
-		"encrypt_user_info":    creds.EncryptUserInfo,
-		"security_oauth_token": creds.SecurityOAuthToken,
-		"refresh_token":        creds.RefreshToken,
-		"expire_time":         creds.ExpireTime,
+	userObj := storedCredentials{
+		Name:               creds.Name,
+		UID:                creds.UID,
+		AID:                creds.AID,
+		OrganizationID:     creds.OrganizationID,
+		UserType:           creds.UserType,
+		Key:                creds.CosyKey,
+		EncryptUserInfo:    creds.EncryptUserInfo,
+		SecurityOAuthToken: creds.SecurityOAuthToken,
+		RefreshToken:       creds.RefreshToken,
+		ExpireTime:         creds.ExpireTime,
 	}
 	userJSON, _ := json.Marshal(userObj)
 	encryptedUser, err := encryptUser(userJSON, creds.MachineID)
@@ -242,7 +247,7 @@ func SaveExchangedCredentials(creds *Credentials, dataDir string) error {
 		return fmt.Errorf("encrypt user data: %w", err)
 	}
 
-	return SaveCredentialsToDir(dataDir, string(idJSON), encryptedUser)
+	return SaveCredentialsToDir(dataDir, creds.MachineID, encryptedUser)
 }
 
 func encryptUser(plaintext []byte, machineID string) (string, error) {
@@ -271,20 +276,63 @@ func encryptUser(plaintext []byte, machineID string) (string, error) {
 // SaveCredentialsToDir persists uploaded auth files to disk so they survive restarts.
 func SaveCredentialsToDir(dataDir, idContent, userContent string) error {
 	authDir := filepath.Join(dataDir, "auth")
-	if err := os.MkdirAll(authDir, 0755); err != nil {
+	if err := os.MkdirAll(authDir, 0700); err != nil {
 		return fmt.Errorf("create auth dir: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(authDir, "id"), []byte(strings.TrimSpace(idContent)), 0600); err != nil {
+	if err := os.Chmod(authDir, 0700); err != nil {
+		return fmt.Errorf("secure auth dir: %w", err)
+	}
+	if err := writeFileAtomic(filepath.Join(authDir, "id"), []byte(strings.TrimSpace(idContent)), 0600); err != nil {
 		return fmt.Errorf("write id file: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(authDir, "user"), []byte(strings.TrimSpace(userContent)), 0600); err != nil {
+	if err := writeFileAtomic(filepath.Join(authDir, "user"), []byte(strings.TrimSpace(userContent)), 0600); err != nil {
 		return fmt.Errorf("write user file: %w", err)
 	}
 	return nil
+}
+
+func writeFileAtomic(path string, contents []byte, mode os.FileMode) (err error) {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err = tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err = tmp.Write(contents); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // LoadCredentialsFromDir loads credentials from a specific directory.
 // Used to reload persisted auth files in server mode.
 func LoadCredentialsFromDir(dir string) (*Credentials, error) {
 	return loadFromDir(dir)
+}
+
+// OAuthMachineID returns the persisted app machine ID when available, or a
+// new ID that is persisted only after a successful OAuth callback.
+func OAuthMachineID(dataDir string) (string, error) {
+	content, err := readTrimmed(filepath.Join(dataDir, "auth", "id"))
+	if err == nil {
+		machineID := parseMachineID(content)
+		if machineID != "" {
+			return machineID, nil
+		}
+	}
+	return newUUID(), nil
 }

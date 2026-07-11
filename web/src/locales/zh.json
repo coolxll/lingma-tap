@@ -76,6 +76,17 @@
     "close": "关闭"
   },
   "settings": {
+    "authentication": "账号认证",
+    "authenticated": "已登录",
+    "not_authenticated": "未登录",
+    "oauth_login": "使用灵码登录",
+    "oauth_reauthenticate": "重新登录",
+    "oauth_waiting": "正在等待浏览器认证，请在已打开的浏览器窗口中完成灵码登录。",
+    "oauth_waiting_button": "等待登录完成",
+    "oauth_hint": "通过浏览器登录后即可启用灵码网关，无需导入本地缓存文件。",
+    "authenticated_hint": "当前登录账号：{{user}}。令牌过期时间：{{expires}}。",
+    "authenticated_user_hint": "当前登录账号：{{user}}。",
+    "unknown_user": "灵码账号",
     "models": "模型",
     "friendly_name": "友好名称",
     "model_id": "模型 ID",

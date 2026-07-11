@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/coolxll/lingma-tap/internal/bridge"
 	"github.com/coolxll/lingma-tap/internal/proto"
@@ -17,9 +18,10 @@ type RecordStore interface {
 }
 
 type Handler struct {
-	hub    *Hub
-	store  RecordStore
-	bridge BridgeHandler
+	hub      *Hub
+	store    RecordStore
+	bridgeMu sync.RWMutex
+	bridge   BridgeHandler
 }
 
 type BridgeHandler interface {
@@ -42,6 +44,8 @@ func NewGatewayHandler(bridge BridgeHandler) *Handler {
 
 // SetBridge hot-reloads the bridge handler (e.g. after auth file upload).
 func (h *Handler) SetBridge(bridge BridgeHandler) {
+	h.bridgeMu.Lock()
+	defer h.bridgeMu.Unlock()
 	h.bridge = bridge
 }
 
@@ -58,25 +62,70 @@ func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux) {
 }
 
 func (h *Handler) RegisterGatewayRoutes(mux *http.ServeMux) {
-	// Bridge endpoints (OpenAI / Anthropic compatible)
-	if h.bridge != nil && !h.isBridgeNil() {
-		mux.HandleFunc("/v1/models", corsMiddleware(h.bridge.HandleModels))
-		mux.HandleFunc("/v1/models/", corsMiddleware(h.bridge.HandleModels))
-		mux.HandleFunc("/v1/chat/completions", corsMiddleware(h.bridge.HandleOpenAIChat))
-		mux.HandleFunc("/v1/responses", corsMiddleware(h.bridge.HandleOpenAIResponses))
-		mux.HandleFunc("/v1/messages", corsMiddleware(h.bridge.HandleAnthropicMessages))
-	}
+	// Keep routes available before login so a bridge can be installed later
+	// without restarting the desktop gateway.
+	mux.HandleFunc("/v1/models", corsMiddleware(h.handleModels))
+	mux.HandleFunc("/v1/models/", corsMiddleware(h.handleModels))
+	mux.HandleFunc("/v1/chat/completions", corsMiddleware(h.handleOpenAIChat))
+	mux.HandleFunc("/v1/responses", corsMiddleware(h.handleOpenAIResponses))
+	mux.HandleFunc("/v1/messages", corsMiddleware(h.handleAnthropicMessages))
 }
 
 func (h *Handler) isBridgeNil() bool {
-	if h.bridge == nil {
+	return isNilBridge(h.currentBridge())
+}
+
+func isNilBridge(handler BridgeHandler) bool {
+	if handler == nil {
 		return true
 	}
 	// Check if the interface contains a nil pointer
-	if bh, ok := h.bridge.(*bridge.BridgeHandler); ok {
+	if bh, ok := handler.(*bridge.BridgeHandler); ok {
 		return bh == nil
 	}
 	return false
+}
+
+func (h *Handler) currentBridge() BridgeHandler {
+	h.bridgeMu.RLock()
+	defer h.bridgeMu.RUnlock()
+	return h.bridge
+}
+
+func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
+	if bridge := h.currentBridge(); !isNilBridge(bridge) {
+		bridge.HandleModels(w, r)
+		return
+	}
+	bridgeUnavailable(w)
+}
+
+func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
+	if bridge := h.currentBridge(); !isNilBridge(bridge) {
+		bridge.HandleOpenAIChat(w, r)
+		return
+	}
+	bridgeUnavailable(w)
+}
+
+func (h *Handler) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
+	if bridge := h.currentBridge(); !isNilBridge(bridge) {
+		bridge.HandleOpenAIResponses(w, r)
+		return
+	}
+	bridgeUnavailable(w)
+}
+
+func (h *Handler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
+	if bridge := h.currentBridge(); !isNilBridge(bridge) {
+		bridge.HandleAnthropicMessages(w, r)
+		return
+	}
+	bridgeUnavailable(w)
+}
+
+func bridgeUnavailable(w http.ResponseWriter) {
+	http.Error(w, "Lingma authentication is not available", http.StatusServiceUnavailable)
 }
 
 func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {

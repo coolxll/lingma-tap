@@ -84,7 +84,7 @@ func TestNewHandler(t *testing.T) {
 	if h == nil {
 		t.Fatal("expected non-nil Handler")
 	}
-	if h.hub != hub || h.store != store || h.bridge != bh {
+	if h.hub != hub || h.store != store || h.currentBridge() != bh {
 		t.Error("handler fields not set correctly")
 	}
 }
@@ -98,7 +98,7 @@ func TestNewGatewayHandler(t *testing.T) {
 	if h.hub != nil || h.store != nil {
 		t.Error("gateway handler should have nil hub and store")
 	}
-	if h.bridge != bh {
+	if h.currentBridge() != bh {
 		t.Error("gateway handler bridge not set")
 	}
 }
@@ -107,7 +107,7 @@ func TestSetBridge(t *testing.T) {
 	h := NewHandler(NewHub(), &mockRecordStore{}, nil)
 	bh := newMockBridgeHandler()
 	h.SetBridge(bh)
-	if h.bridge != bh {
+	if h.currentBridge() != bh {
 		t.Error("SetBridge did not update bridge")
 	}
 }
@@ -316,8 +316,35 @@ func TestRegisterGatewayRoutes_WithoutBridge(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 when bridge is nil, got %d", w.Code)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when bridge is nil, got %d", w.Code)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("expected CORS header on unauthenticated response, got %q", got)
+	}
+}
+
+func TestRegisterGatewayRoutes_HotSwapBridge(t *testing.T) {
+	h := NewHandler(NewHub(), &mockRecordStore{}, nil)
+	mux := http.NewServeMux()
+	h.RegisterGatewayRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("before SetBridge status = %d, want 503", w.Code)
+	}
+
+	bh := newMockBridgeHandler()
+	h.SetBridge(bh)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("after SetBridge status = %d, want 200", w.Code)
+	}
+	if bh.handleCalls["HandleModels"] != 1 {
+		t.Fatalf("HandleModels calls = %d, want 1", bh.handleCalls["HandleModels"])
 	}
 }
 

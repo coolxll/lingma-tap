@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/coolxll/lingma-tap/internal/api"
+	"github.com/coolxll/lingma-tap/internal/auth"
 	"github.com/coolxll/lingma-tap/internal/proto"
 	"github.com/coolxll/lingma-tap/internal/storage"
 )
@@ -229,6 +230,57 @@ func TestGetModels_NoBridge(t *testing.T) {
 	_, err := app.GetModels()
 	if err == nil {
 		t.Error("expected error when bridge is nil")
+	}
+}
+
+func TestStartOAuthLoginOpensBrowserAndUpdatesStatus(t *testing.T) {
+	app, _, cleanup := newTestApp(t)
+	defer cleanup()
+	app.dataDir = t.TempDir()
+	app.oauthLogin = auth.NewOAuthLogin()
+	defer app.oauthLogin.Close()
+
+	openedURL := ""
+	app.openURL = func(url string) { openedURL = url }
+	if err := app.StartOAuthLogin(); err != nil {
+		t.Fatalf("StartOAuthLogin error: %v", err)
+	}
+	if openedURL == "" {
+		t.Fatal("expected OAuth login URL to be opened")
+	}
+
+	status := app.GetStatus()
+	if status["oauth_in_progress"] != true {
+		t.Fatalf("oauth_in_progress = %v, want true", status["oauth_in_progress"])
+	}
+	if status["authenticated"] != false {
+		t.Fatalf("authenticated = %v, want false before callback", status["authenticated"])
+	}
+}
+
+func TestInstallCredentialsUpdatesAuthenticationStatus(t *testing.T) {
+	app, _, cleanup := newTestApp(t)
+	defer cleanup()
+
+	app.installCredentials(&auth.Credentials{
+		MachineID:       "12345678-1234-1234-1234-123456789012",
+		UID:             "uid-123",
+		AID:             "aid-456",
+		Name:            "Ada Lovelace",
+		CosyKey:         "cosy-key",
+		EncryptUserInfo: "encrypted-user-info",
+		ExpireTime:      1783605791090,
+	})
+
+	status := app.GetStatus()
+	if status["authenticated"] != true {
+		t.Fatalf("authenticated = %v, want true", status["authenticated"])
+	}
+	if status["auth_user"] != "Ada Lovelace" {
+		t.Fatalf("auth_user = %v, want Ada Lovelace", status["auth_user"])
+	}
+	if status["auth_expire_time"] != int64(1783605791090) {
+		t.Fatalf("auth_expire_time = %v, want 1783605791090", status["auth_expire_time"])
 	}
 }
 

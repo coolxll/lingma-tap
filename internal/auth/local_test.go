@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -18,14 +17,6 @@ func TestLoadCredentials(t *testing.T) {
 	if err != nil {
 		t.Skipf("auth files not found: %v", err)
 	}
-
-	fmt.Printf("MachineID: %s\n", creds.MachineID)
-	fmt.Printf("UID: %s\n", creds.UID)
-	fmt.Printf("OrgID: %s\n", creds.OrganizationID)
-	fmt.Printf("UserType: %s\n", creds.UserType)
-	fmt.Printf("Name: %s\n", creds.Name)
-	fmt.Printf("CosyKey: %s...\n", creds.CosyKey[:40])
-	fmt.Printf("EncryptUserInfo: %s...\n", creds.EncryptUserInfo[:40])
 
 	if creds.MachineID == "" {
 		t.Error("empty MachineID")
@@ -45,14 +36,11 @@ func TestSessionSignRequest(t *testing.T) {
 	}
 
 	sess := NewSession(creds)
-	cosyDate := fmt.Sprintf("%d", time.Now().Unix())
+	cosyDate := time.Now().Format("20060102150405")
 	bearer, err := sess.BuildBearer("test-body", "https://lingma-api.tongyi.aliyun.com/algo/api/v2/service/pro/sse/agent_chat_generation?Encode=1", cosyDate)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	fmt.Printf("Date: %s\n", cosyDate)
-	fmt.Printf("Bearer: %s...\n", bearer[:80])
 
 	if bearer == "" {
 		t.Error("empty bearer")
