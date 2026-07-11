@@ -76,14 +76,29 @@ func isContextDeadlineExceeded(ctx context.Context, err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "context deadline exceeded")
 }
 
+func gatewayLogHasCompletedResult(gLog *proto.GatewayLog) bool {
+	if gLog == nil {
+		return false
+	}
+	if gLog.Status >= http.StatusOK && gLog.Status < http.StatusMultipleChoices {
+		return true
+	}
+	return strings.TrimSpace(gLog.FinishReason) != ""
+}
+
 func recordContextError(ctx context.Context, gLog *proto.GatewayLog, startTime time.Time, err error, recorder func(*proto.GatewayLog)) bool {
 	if gLog == nil || err == nil {
 		return false
 	}
 	switch {
 	case isContextCanceled(ctx, err):
-		gLog.Error = "client canceled request"
-		gLog.Status = statusClientClosedRequest
+		if gatewayLogHasCompletedResult(gLog) {
+			gLog.Error = ""
+			gLog.Status = http.StatusOK
+		} else {
+			gLog.Error = "client canceled request"
+			gLog.Status = statusClientClosedRequest
+		}
 	case isContextDeadlineExceeded(ctx, err):
 		gLog.Error = "request deadline exceeded"
 		gLog.Status = http.StatusGatewayTimeout

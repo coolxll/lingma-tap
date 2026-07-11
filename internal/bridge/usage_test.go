@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"testing"
 	"time"
 
@@ -29,6 +30,48 @@ func TestRecordContextError_ClientCanceled(t *testing.T) {
 	}
 	if log.Error != "client canceled request" {
 		t.Fatalf("error = %q", log.Error)
+	}
+}
+
+func TestRecordContextError_ClientCanceledAfterCompletedResult(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	log := &proto.GatewayLog{
+		FinishReason: "tool_calls",
+		InputTokens:  100,
+		OutputTokens: 20,
+	}
+	var recorded *proto.GatewayLog
+	if !recordContextError(ctx, log, time.Now(), context.Canceled, func(g *proto.GatewayLog) {
+		recorded = g
+	}) {
+		t.Fatal("expected context cancellation to be handled")
+	}
+	if recorded == nil {
+		t.Fatal("expected recorder to be called")
+	}
+	if log.Status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", log.Status, http.StatusOK)
+	}
+	if log.Error != "" {
+		t.Fatalf("error = %q, want empty", log.Error)
+	}
+	if log.InputTokens != 100 || log.OutputTokens != 20 || log.FinishReason != "tool_calls" {
+		t.Fatalf("completed result fields changed: %+v", log)
+	}
+}
+
+func TestRecordContextError_ClientCanceledAfterSuccessfulStatus(t *testing.T) {
+	log := &proto.GatewayLog{Status: http.StatusOK}
+	if !recordContextError(context.Background(), log, time.Now(), context.Canceled, nil) {
+		t.Fatal("expected context cancellation to be handled")
+	}
+	if log.Status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", log.Status, http.StatusOK)
+	}
+	if log.Error != "" {
+		t.Fatalf("error = %q, want empty", log.Error)
 	}
 }
 

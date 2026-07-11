@@ -18,6 +18,14 @@ import (
 	"github.com/coolxll/lingma-tap/internal/proto"
 )
 
+type terminalErrorReader struct {
+	err error
+}
+
+func (r terminalErrorReader) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
 func TestMain(m *testing.M) {
 	// Use a fixed UUID generator for tests to ensure deterministic IDs
 	uuidGenerator = func() string {
@@ -129,6 +137,52 @@ func TestBridgeHandler_OpenAIChatStreamRecordsUsageOnlyChunk(t *testing.T) {
 	}
 	if final.InputTokens != 7 || final.OutputTokens != 3 {
 		t.Fatalf("gateway log tokens = %d/%d, want 7/3", final.InputTokens, final.OutputTokens)
+	}
+}
+
+func TestBridgeHandler_OpenAIChatStreamCancellationAfterFinishRecordsSuccess(t *testing.T) {
+	session := &auth.Session{CosyKey: "test-key"}
+	var logs []proto.GatewayLog
+	handler := NewBridgeHandler(session, func(log *proto.GatewayLog) {
+		logs = append(logs, *log)
+	})
+
+	mockResp := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}`,
+		``,
+	}, "\n\n")
+	handler.client.client.Transport = &mockTransport{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			body := io.MultiReader(strings.NewReader(mockResp), terminalErrorReader{err: context.Canceled})
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(body),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	reqBody := `{"model":"gpt-4","messages":[{"role":"user","content":"Hi"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	handler.HandleOpenAIChat(w, req)
+
+	if len(logs) < 2 {
+		t.Fatalf("expected initial and final gateway logs, got %+v", logs)
+	}
+	final := logs[len(logs)-1]
+	if final.Status != http.StatusOK {
+		t.Fatalf("final status = %d, want %d", final.Status, http.StatusOK)
+	}
+	if final.Error != "" {
+		t.Fatalf("final error = %q, want empty", final.Error)
+	}
+	if final.FinishReason != "stop" {
+		t.Fatalf("finish reason = %q, want stop", final.FinishReason)
+	}
+	if final.InputTokens != 7 || final.OutputTokens != 3 || final.TotalTokens != 10 {
+		t.Fatalf("usage = input:%d output:%d total:%d", final.InputTokens, final.OutputTokens, final.TotalTokens)
 	}
 }
 
