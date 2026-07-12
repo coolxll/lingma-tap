@@ -483,7 +483,7 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 
 	var err error
 	for {
-		err = h.client.ChatStream(ctx, body, handleEvent)
+		err = h.chatStream(ctx, body, gLog, handleEvent)
 		if err != nil {
 			emittedContent := firstTokenRecorded || textBlockStarted || reasoningBlockStarted || len(toolCalls) > 0 || upstreamErrored
 			if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("openai_responses", modelKey, body, profile, fallback, err, emittedContent); ok {

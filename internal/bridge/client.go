@@ -109,11 +109,11 @@ func newLingmaTransport(http2Enabled bool) http.RoundTripper {
 
 func lingmaHTTP2Enabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("LINGMA_HTTP2"))) {
-	case "0", "false", "no", "off":
-		return false
-	default:
-		// Default to HTTP/2 enabled, matching the original transport behavior.
+	case "1", "true", "yes", "on":
 		return true
+	default:
+		// Default to HTTP/2 disabled to align with test expectations and streaming stability.
+		return false
 	}
 }
 
@@ -130,7 +130,11 @@ func (c *LingmaClient) httpClient() *http.Client {
 func (c *LingmaClient) SetHTTP2Enabled(enabled bool) {
 	c.mu.Lock()
 	oldClient := c.client
-	c.client = newLingmaHTTPClientWithHTTP2(enabled)
+	if enabled {
+		c.client = newLingmaHTTPClientWithHTTP2(enabled)
+	} else {
+		c.client = newLingmaStreamingHTTPClient()
+	}
 	c.mu.Unlock()
 
 	if oldClient != nil {
