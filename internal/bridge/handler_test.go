@@ -450,6 +450,105 @@ func TestBridgeHandler_StreamWithoutDoneReturnsErrorEvent(t *testing.T) {
 	}
 }
 
+func TestBridgeHandlerRecoversTransientFailureAcrossAgentProtocols(t *testing.T) {
+	primeModelCacheForTests()
+
+	scenarios := []struct {
+		name       string
+		path       string
+		request    string
+		handle     func(*BridgeHandler, http.ResponseWriter, *http.Request)
+		wantMarker string
+	}{
+		{
+			name: "openai_chat_hermes_style",
+			path: "/v1/chat/completions",
+			request: `{
+				"model":"gm51model",
+				"messages":[
+					{"role":"system","content":"You are Hermes, a coding agent."},
+					{"role":"user","content":"Inspect the repository."}
+				],
+				"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}}],
+				"stream":true
+			}`,
+			handle:     (*BridgeHandler).HandleOpenAIChat,
+			wantMarker: "data: [DONE]",
+		},
+		{
+			name: "openai_responses_agent_style",
+			path: "/v1/responses",
+			request: `{
+				"model":"gm51model",
+				"input":[{"role":"user","content":"Inspect the repository."}],
+				"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}}],
+				"stream":true
+			}`,
+			handle:     (*BridgeHandler).HandleOpenAIResponses,
+			wantMarker: "response.completed",
+		},
+		{
+			name: "anthropic_claude_code_style",
+			path: "/v1/messages",
+			request: `{
+				"model":"gm51model",
+				"system":"x-anthropic-billing-header: cc_version=test\nYou are Claude Code.",
+				"messages":[{"role":"user","content":"Inspect the repository."}],
+				"tools":[{"name":"read_file","description":"Read a file","input_schema":{"type":"object"}}],
+				"max_tokens":4096,
+				"stream":true
+			}`,
+			handle:     (*BridgeHandler).HandleAnthropicMessages,
+			wantMarker: "message_stop",
+		},
+	}
+
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			var logs []proto.GatewayLog
+			handler := NewBridgeHandler(&auth.Session{CosyKey: "test-key", UID: "test-uid"}, func(log *proto.GatewayLog) {
+				logs = append(logs, *log)
+			})
+			handler.client.maxAttempts = 2
+			handler.client.retryBaseDelay = time.Millisecond
+			handler.client.firstActionableTimeout = 0
+
+			upstreamCalls := 0
+			handler.client.client.Transport = &mockTransport{roundTripFunc: func(req *http.Request) (*http.Response, error) {
+				upstreamCalls++
+				if upstreamCalls == 1 {
+					return retryTestResponse(http.StatusServiceUnavailable, `{"error":"temporary overload"}`), nil
+				}
+				return retryTestResponse(http.StatusOK, successLingmaStreamBody()), nil
+			}}
+
+			req := httptest.NewRequest(http.MethodPost, scenario.path, strings.NewReader(scenario.request))
+			resp := httptest.NewRecorder()
+			scenario.handle(handler, resp, req)
+
+			if resp.Code != http.StatusOK {
+				t.Fatalf("response status = %d, want 200: %s", resp.Code, resp.Body.String())
+			}
+			if upstreamCalls != 2 {
+				t.Fatalf("upstream calls = %d, want 2", upstreamCalls)
+			}
+			if !strings.Contains(resp.Body.String(), "ok") || !strings.Contains(resp.Body.String(), scenario.wantMarker) {
+				t.Fatalf("response did not complete cleanly: %s", resp.Body.String())
+			}
+			if strings.Contains(resp.Body.String(), "temporary overload") {
+				t.Fatalf("transient upstream error leaked downstream: %s", resp.Body.String())
+			}
+			if len(logs) < 2 || logs[len(logs)-1].Status != http.StatusOK {
+				t.Fatalf("final gateway log is not successful: %+v", logs)
+			}
+			final := logs[len(logs)-1]
+			if final.UpstreamAttempts != 2 || final.RecoveryApplied || final.UpstreamErrorClass != "http_503" || final.FirstActionableMS <= 0 || final.RequestedProfile == "" || final.EffectiveProfile == "" {
+				t.Fatalf("gateway log missing upstream recovery metrics: %+v", final)
+			}
+		})
+	}
+}
+
 func largeOpenAIChatRequestBody(stream bool) []byte {
 	filler := strings.Repeat("x", 140*1024)
 	messages := []map[string]any{

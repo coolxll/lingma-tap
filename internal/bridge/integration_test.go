@@ -3,11 +3,15 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,6 +57,125 @@ func TestIntegration_RealChatStream(t *testing.T) {
 	} else if !receivedContent {
 		t.Errorf("Failed to receive any content")
 	}
+}
+
+func TestIntegration_CodingAgentLongToolHistory(t *testing.T) {
+	if os.Getenv("LINGMA_LONG_HISTORY_INTEGRATION") != "1" {
+		t.Skip("set LINGMA_LONG_HISTORY_INTEGRATION=1 to run the long-history recovery test")
+	}
+	creds, err := auth.LoadCredentials()
+	if err != nil {
+		t.Skip("Skipping: no local credentials found")
+	}
+
+	client := NewLingmaClient(auth.NewSession(creds))
+	transport := &profileObservingTransport{base: http.DefaultTransport}
+	client.client.Transport = transport
+
+	messages := syntheticCodingAgentHistory()
+	tools := []map[string]any{{
+		"type": "function",
+		"function": map[string]any{
+			"name":        "read_file",
+			"description": "Read a repository file",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string"},
+				},
+				"required": []string{"path"},
+			},
+		},
+	}}
+	body := BuildLingmaBody(messages, tools, "gm51model", map[string]any{"max_tokens": 1024}, []byte(`{"agent":"synthetic-long-history"}`), true, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	var stats LingmaUpstreamStats
+	actionable := false
+	done := false
+	err = client.ChatStreamObserved(ctx, body, func(event SSEEvent) error {
+		if event.Content != "" || len(event.ToolCalls) > 0 || event.FinishReason != "" {
+			actionable = true
+		}
+		if event.Type == "done" {
+			done = true
+		}
+		return nil
+	}, func(current LingmaUpstreamStats) {
+		stats = current
+	})
+	if err != nil {
+		t.Fatalf("long-history ChatStream failed: %v (stats=%+v profiles=%v)", err, stats, transport.Profiles())
+	}
+	if !actionable || !done {
+		t.Fatalf("long-history stream incomplete: actionable=%v done=%v stats=%+v profiles=%v", actionable, done, stats, transport.Profiles())
+	}
+	if stats.Attempts < 1 || stats.FirstActionableMS <= 0 {
+		t.Fatalf("long-history stats incomplete: %+v", stats)
+	}
+	t.Logf("long-history completed attempts=%d recovery=%v first_actionable_ms=%d reasoning_only_bytes=%d error_class=%s profiles=%v",
+		stats.Attempts, stats.RecoveryApplied, stats.FirstActionableMS, stats.ReasoningOnlyBytes, stats.ErrorClass, transport.Profiles())
+}
+
+func syntheticCodingAgentHistory() []map[string]any {
+	messages := []map[string]any{
+		{"role": "system", "content": "You are Claude Code, a coding agent. Use repository tools when needed."},
+		{"role": "user", "content": strings.Repeat("synthetic repository context line\n", 5000)},
+	}
+	for i := 0; i < 10; i++ {
+		callID := fmt.Sprintf("call_%d", i)
+		messages = append(messages,
+			map[string]any{
+				"role":    "assistant",
+				"content": nil,
+				"tool_calls": []map[string]any{{
+					"id":   callID,
+					"type": "function",
+					"function": map[string]any{
+						"name":      "read_file",
+						"arguments": fmt.Sprintf(`{"path":"synthetic/file_%d.go"}`, i),
+					},
+				}},
+			},
+			map[string]any{
+				"role":         "tool",
+				"tool_call_id": callID,
+				"content":      fmt.Sprintf("synthetic file %d inspected successfully", i),
+			},
+		)
+	}
+	return append(messages, map[string]any{"role": "user", "content": "The inspection is complete. Reply READY and do not call another tool."})
+}
+
+type profileObservingTransport struct {
+	base     http.RoundTripper
+	mu       sync.Mutex
+	profiles []string
+}
+
+func (t *profileObservingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	encodedBody, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	req.Body = io.NopCloser(bytes.NewReader(encodedBody))
+	if decodedBody, decodeErr := encoding.Decode(string(encodedBody)); decodeErr == nil {
+		var body map[string]any
+		if json.Unmarshal(decodedBody, &body) == nil {
+			t.mu.Lock()
+			t.profiles = append(t.profiles, lingmaProfileString(body))
+			t.mu.Unlock()
+		}
+	}
+	return t.base.RoundTrip(req)
+}
+
+func (t *profileObservingTransport) Profiles() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.profiles...)
 }
 
 func TestIntegration_ModelDifferentiation(t *testing.T) {
