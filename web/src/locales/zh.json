@@ -102,6 +102,8 @@
     "gateway_stopped": "网关已停止",
     "gateway_logging": "保存完整报文",
     "gateway_logging_hint": "状态、延迟和 token 会始终记录；关闭后不保存提示词和完整响应",
+    "lingma_http2": "Lingma HTTP/2",
+    "lingma_http2_hint": "关闭可缓解上游 HTTP/2 stream reset；开启则恢复 HTTP/2",
     "listen_addr": "监听地址",
     "listen_addr_warning": "绑定所有接口会将网关暴露到局域网且无认证保护，同网络任何人都可使用你的 Lingma 凭证。建议使用 Tailscale IP 进行安全的远程访问。",
     "proxy_logging": "代理抓包记录",

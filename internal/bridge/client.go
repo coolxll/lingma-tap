@@ -11,7 +11,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,6 +46,7 @@ func buildLingmaChatURL(agentID string) string {
 }
 
 type LingmaClient struct {
+	mu                      sync.RWMutex
 	session                 *auth.Session
 	client                  *http.Client
 	maxAttempts             int
@@ -74,6 +77,64 @@ func NewLingmaClient(session *auth.Session) *LingmaClient {
 		firstActionableTimeout:  firstActionableTimeout,
 		thinkingRecoveryEnabled: thinkingRecoveryEnabled,
 		client:                  newLingmaStreamingHTTPClient(),
+	}
+}
+
+func newLingmaHTTPClient() *http.Client {
+	return newLingmaHTTPClientWithHTTP2(lingmaHTTP2Enabled())
+}
+
+func newLingmaHTTPClientWithHTTP2(enabled bool) *http.Client {
+	return &http.Client{
+		Timeout:   5 * time.Minute,
+		Transport: newLingmaTransport(enabled),
+	}
+}
+
+func newLingmaTransport(http2Enabled bool) http.RoundTripper {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return http.DefaultTransport
+	}
+	tr := base.Clone()
+	if http2Enabled {
+		tr.ForceAttemptHTTP2 = true
+		return tr
+	}
+
+	tr.ForceAttemptHTTP2 = false
+	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	return tr
+}
+
+func lingmaHTTP2Enabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LINGMA_HTTP2"))) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		// Default to HTTP/2 enabled, matching the original transport behavior.
+		return true
+	}
+}
+
+func DefaultLingmaHTTP2Enabled() bool {
+	return lingmaHTTP2Enabled()
+}
+
+func (c *LingmaClient) httpClient() *http.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.client
+}
+
+func (c *LingmaClient) SetHTTP2Enabled(enabled bool) {
+	c.mu.Lock()
+	oldClient := c.client
+	c.client = newLingmaHTTPClientWithHTTP2(enabled)
+	c.mu.Unlock()
+
+	if oldClient != nil {
+		oldClient.CloseIdleConnections()
 	}
 }
 
@@ -116,6 +177,8 @@ type SSEEvent struct {
 	ErrorMsg string
 	// ErrorType is the error type if HasError is true
 	ErrorType string
+	// ErrorCode is the upstream error code if present.
+	ErrorCode string
 	// Raw is the raw inner JSON bytes
 	Raw []byte
 }
@@ -284,11 +347,14 @@ func (c *LingmaClient) chatStreamOnce(ctx context.Context, body map[string]any, 
 		req.Header.Set(k, v)
 	}
 
-	resp, err := c.client.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
+	if c.Debug {
+		fmt.Printf("[debug] Lingma response: status=%d proto=%s\n", resp.StatusCode, resp.Proto)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
@@ -367,6 +433,10 @@ func (c *LingmaClient) parseSSEData(data string, state *streamState) ([]SSEEvent
 		return c.parseInnerJSON(envelope.Body, state)
 	}
 
+	if event, ok := parseLingmaErrorEnvelope([]byte(data)); ok {
+		return []SSEEvent{event}, nil
+	}
+
 	// 2. Try to parse as finish event: {"firstTokenDuration":...,"totalDuration":...,"serverDuration":...,"usage":...}
 	var finish struct {
 		FirstTokenDuration int    `json:"firstTokenDuration"`
@@ -426,6 +496,10 @@ func (c *LingmaClient) parseSSEData(data string, state *streamState) ([]SSEEvent
 }
 
 func (c *LingmaClient) parseInnerJSON(body string, state *streamState) ([]SSEEvent, error) {
+	if event, ok := parseLingmaErrorEnvelope([]byte(body)); ok {
+		return []SSEEvent{event}, nil
+	}
+
 	var inner struct {
 		Choices []struct {
 			Delta struct {
@@ -466,6 +540,25 @@ func (c *LingmaClient) parseInnerJSON(body string, state *streamState) ([]SSEEve
 	}
 
 	return c.buildEventsFromChoices(inner.Choices, inner.Usage, []byte(body), state)
+}
+
+func parseLingmaErrorEnvelope(raw []byte) (SSEEvent, bool) {
+	var upstream struct {
+		Code    any    `json:"code"`
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &upstream); err != nil || upstream.Message == "" || upstream.Code == nil {
+		return SSEEvent{}, false
+	}
+	return SSEEvent{
+		Type:      "data",
+		HasError:  true,
+		ErrorMsg:  upstream.Message,
+		ErrorType: upstream.Type,
+		ErrorCode: fmt.Sprint(upstream.Code),
+		Raw:       raw,
+	}, true
 }
 
 // buildEventsFromChoices processes choices array and produces SSEEvents with thought tag extraction.
@@ -1043,11 +1136,14 @@ func (c *LingmaClient) FetchModels(ctx context.Context) ([]ModelInfo, error) {
 		req.Header.Set(k, v)
 	}
 
-	resp, err := c.client.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
+	if c.Debug {
+		fmt.Printf("[debug] Lingma model list response: status=%d proto=%s\n", resp.StatusCode, resp.Proto)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)

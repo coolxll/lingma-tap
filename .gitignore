@@ -29,9 +29,12 @@ Thumbs.db
 # Build output
 /dist/
 
-# Wails build
+# Wails build artifacts (generated; app icon source kept tracked)
 /build/bin/
 /build/obj/
+/build/windows/
+/build/darwin/Info*.plist
+/build/darwin/icon.png
 
 # Node
 node_modules/
@@ -52,3 +55,6 @@ web/package.json.md5
 
 # Environment Variables
 .env
+
+# WorkBuddy agent workspace data (not project source)
+.workbuddy/

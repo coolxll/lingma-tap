@@ -20,6 +20,41 @@ func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return m.roundTripFunc(req)
 }
 
+func TestLingmaHTTPClientDisablesHTTP2ByDefault(t *testing.T) {
+	t.Setenv("LINGMA_HTTP2", "")
+
+	client := newLingmaHTTPClient()
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport = %T, want *http.Transport", client.Transport)
+	}
+	if tr.ForceAttemptHTTP2 {
+		t.Fatal("ForceAttemptHTTP2 = true, want false")
+	}
+	if tr.TLSNextProto == nil {
+		t.Fatal("TLSNextProto = nil, want empty map to disable HTTP/2")
+	}
+	if _, ok := tr.TLSNextProto["h2"]; ok {
+		t.Fatal("TLSNextProto contains h2, want HTTP/2 disabled")
+	}
+}
+
+func TestLingmaHTTPClientCanEnableHTTP2(t *testing.T) {
+	t.Setenv("LINGMA_HTTP2", "true")
+
+	client := newLingmaHTTPClient()
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport = %T, want *http.Transport", client.Transport)
+	}
+	if !tr.ForceAttemptHTTP2 {
+		t.Fatal("ForceAttemptHTTP2 = false, want true")
+	}
+	if tr.TLSNextProto != nil {
+		t.Fatal("TLSNextProto is set, want nil so net/http can enable HTTP/2")
+	}
+}
+
 func TestLingmaClient_ChatStream(t *testing.T) {
 	mockResp := `data: {"headers":{},"body":"{\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}","statusCodeValue":200,"statusCode":"OK"}
 
@@ -767,6 +802,133 @@ func TestParseSSEData_ErrorDetection(t *testing.T) {
 	}
 	if events[0].ErrorType != "rate_limit_error" {
 		t.Errorf("expected error type 'rate_limit_error', got %q", events[0].ErrorType)
+	}
+}
+
+func TestParseSSEData_LingmaErrorEnvelope(t *testing.T) {
+	client := &LingmaClient{}
+
+	data := `{"headers":{"Content-Type":["application/json"]},"body":"{\"code\":\"418\",\"message\":\"Unknown sse issue\"}","statusCodeValue":418,"statusCode":"I_AM_A_TEAPOT"}`
+	state := &streamState{}
+	events, err := client.parseSSEData(data, state)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if !events[0].HasError {
+		t.Fatal("expected HasError=true")
+	}
+	if events[0].ErrorCode != "418" {
+		t.Fatalf("ErrorCode = %q, want 418", events[0].ErrorCode)
+	}
+	if events[0].ErrorMsg != "Unknown sse issue" {
+		t.Fatalf("ErrorMsg = %q", events[0].ErrorMsg)
+	}
+}
+
+func TestRetryLingmaThinkingFallbackBodyDisablesThinkingOnClone(t *testing.T) {
+	handler := NewBridgeHandler(&auth.Session{CosyKey: "test-key"}, nil)
+	body := map[string]any{
+		"agent_id": "agent_chat",
+		"model_config": map[string]any{
+			"is_reasoning": true,
+			"source":       "system",
+		},
+	}
+	profile := lingmaRequestProfile{LargeThinking: true, BodyBytes: 240934, Messages: 62, ToolCalls: 26, ToolResults: 26, Tools: 48}
+	retryBody, retryFallback, ok := handler.retryLingmaThinkingFallbackBody(
+		"anthropic_messages",
+		"gm51model",
+		body,
+		profile,
+		lingmaThinkingFallbackDecision{Eligible: true},
+		lingmaUpstreamEventError{Code: "418", Message: "Unknown sse issue"},
+		false,
+	)
+	if !ok {
+		t.Fatal("expected retry body")
+	}
+	if !retryFallback.Applied {
+		t.Fatal("expected retry fallback to be marked applied")
+	}
+	originalConfig := body["model_config"].(map[string]any)
+	if originalConfig["is_reasoning"] != true || body["agent_id"] != "agent_chat" {
+		t.Fatal("original body was mutated")
+	}
+	retryConfig := retryBody["model_config"].(map[string]any)
+	if retryConfig["is_reasoning"] != false || retryConfig["source"] != "" {
+		t.Fatalf("retry model_config = %+v", retryConfig)
+	}
+	if retryBody["agent_id"] != "agent_common" {
+		t.Fatalf("retry agent_id = %v", retryBody["agent_id"])
+	}
+}
+
+func TestRetryLingmaThinkingFallbackBodyRedactsLatestToolTurnOn418(t *testing.T) {
+	handler := NewBridgeHandler(&auth.Session{CosyKey: "test-key"}, nil)
+	body := map[string]any{
+		"agent_id": "agent_chat",
+		"model_config": map[string]any{
+			"is_reasoning": true,
+			"source":       "system",
+		},
+		"messages": []any{
+			map[string]any{"role": "assistant", "tool_calls": []any{
+				map[string]any{
+					"id":   "call_1",
+					"type": "function",
+					"function": map[string]any{
+						"name":      "Read",
+						"arguments": `{"file_path":"sensitive.py"}`,
+					},
+				},
+			}},
+			map[string]any{
+				"role":         "tool",
+				"tool_call_id": "call_1",
+				"content":      "sensitive tool result",
+			},
+		},
+	}
+	profile := lingmaRequestProfile{LargeThinking: true, BodyBytes: 278839, Messages: 2, ToolCalls: 1, ToolResults: 1, Tools: 49}
+	retryBody, _, ok := handler.retryLingmaThinkingFallbackBody(
+		"anthropic_messages",
+		"gm51model",
+		body,
+		profile,
+		lingmaThinkingFallbackDecision{Eligible: true},
+		lingmaUpstreamEventError{Code: "418", Message: "Unknown sse issue"},
+		false,
+	)
+	if !ok {
+		t.Fatal("expected retry body")
+	}
+	if retryBody["agent_id"] != "agent_chat" {
+		t.Fatalf("expected agent_chat to be preserved, got %v", retryBody["agent_id"])
+	}
+	retryConfig := retryBody["model_config"].(map[string]any)
+	if retryConfig["is_reasoning"] != true {
+		t.Fatalf("expected reasoning to be preserved, got %+v", retryConfig)
+	}
+	messages := retryBody["messages"].([]any)
+	assistant := messages[0].(map[string]any)
+	calls := assistant["tool_calls"].([]any)
+	call := calls[0].(map[string]any)
+	fn := call["function"].(map[string]any)
+	if fn["arguments"] != `{"redacted":true}` {
+		t.Fatalf("tool call arguments were not redacted: %v", fn["arguments"])
+	}
+	tool := messages[1].(map[string]any)
+	if !strings.Contains(tool["content"].(string), "omitted by Lingma Tap") {
+		t.Fatalf("tool content was not redacted: %v", tool["content"])
+	}
+
+	originalMessages := body["messages"].([]any)
+	originalTool := originalMessages[1].(map[string]any)
+	if originalTool["content"] != "sensitive tool result" {
+		t.Fatal("original body was mutated")
 	}
 }
 

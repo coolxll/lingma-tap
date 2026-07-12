@@ -120,7 +120,11 @@ func statusForLingmaUpstreamError(err error) int {
 	if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusTooManyRequests {
 		return http.StatusTooManyRequests
 	}
-	if isLingmaUpstreamFailure(err) {
+	var upstreamErr lingmaUpstreamEventError
+	if errors.As(err, &upstreamErr) {
+		return http.StatusBadGateway
+	}
+	if isLingmaUpstreamFailure(err) || isLingmaUpstreamEOF(err) {
 		return http.StatusBadGateway
 	}
 	return http.StatusInternalServerError
@@ -129,6 +133,10 @@ func statusForLingmaUpstreamError(err error) int {
 func normalizeLingmaUpstreamError(err error) string {
 	if isLingmaFirstActionableTimeout(err) {
 		return err.Error()
+	}
+	var upstreamErr lingmaUpstreamEventError
+	if errors.As(err, &upstreamErr) {
+		return upstreamErr.Error()
 	}
 	if isLingmaUpstreamEOF(err) {
 		return "lingma upstream connection closed before [DONE]"

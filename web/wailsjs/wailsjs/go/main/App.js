@@ -82,6 +82,10 @@ export function SaveAnthropicMapping(arg1, arg2) {
   return window['go']['main']['App']['SaveAnthropicMapping'](arg1, arg2);
 }
 
+export function SetLingmaHTTP2(arg1) {
+  return window['go']['main']['App']['SetLingmaHTTP2'](arg1);
+}
+
 export function SetLogging(arg1) {
   return window['go']['main']['App']['SetLogging'](arg1);
 }
