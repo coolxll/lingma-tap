@@ -85,7 +85,7 @@
 | 上游存在独立的不稳定分支 | 可成立 | 原生客户端可出现同类卡住，第三方对照可处理同一结构 |
 | `task_id` 会改变计费 | 未证实 | 模型和价格字段同时变化，缺少账户侧对照 |
 
-## 7. 现有 fallback 与缺口
+## 7. 当前恢复实现
 
 当前 `thinking_fallback.go` 已经实现：
 
@@ -95,9 +95,20 @@ is_reasoning:  true        -> false
 source:        system      -> ""
 ```
 
-它仅面向 `gm51model` 的大 reasoning 请求：body 至少 128 KiB、tool calls 与 tool results 总数至少 20。只有在客户端取消且尚未收到任何上游事件时，才为相同 raw request fingerprint 标记一次；下一次相同请求在两分钟 TTL 内才应用 fallback。
+`upstream_retry.go` 在共同上游层处理 Chat Completions、Responses 和 Messages：
 
-因此当前实现不会处理 EOF、HTTP/2 错误、504、空事件后的失败或 reasoning-only 卡住。后续工作是扩展错误分类和可观测性，而不是重复实现三元组改写。
+- 在尚未向调用方提交可见输出时，对 HTTP 408/425/429/5xx、EOF、HTTP/2 stream error、连接 reset/timeout 和可恢复 SSE error 默认最多尝试 3 次。
+- 重试刷新 `request_id`、`chat_record_id` 和 business ID，设置 `is_retry=true`，但保持 `session_id` 不变。
+- 对 `gm51model` 的大 reasoning 请求（body 至少 128 KiB、tool calls 与 tool results 总数至少 20），可在显式配置首输出 watchdog 后暂存 reasoning-only delta；超时仍没有 content、tool-call 或完成信号时，中止该 attempt，并在同一入站请求内应用上述三元组 recovery。
+- 暂存上限为 2 MiB；达到上限会提交当前流并停止自动恢复，避免无界内存增长。
+- 一旦 content/tool-call 等输出已提交，后续 EOF 不重试，避免重复内容或重复工具调用。
+- 客户端取消或恢复耗尽且没有上游输出时，原有 fingerprint + TTL 机制仍可为下一次完全相同请求预置一次 fallback。
+
+可通过 `LINGMA_UPSTREAM_MAX_ATTEMPTS`、`LINGMA_UPSTREAM_RETRY_BASE_DELAY`、`LINGMA_UPSTREAM_FIRST_ACTIONABLE_TIMEOUT` 和 `LINGMA_THINKING_FALLBACK` 调整或关闭。流式请求默认不启用首输出 watchdog；重试使用 30 秒上限的指数退避、full jitter，并遵守 `Retry-After`。上游失败耗尽后按 502/504/429 返回，不再把传输类失败记为本地 500。
+
+GatewayLog 现已持久化 `upstream_attempts`、`recovery_applied`、`upstream_error_class`、`first_actionable_ms`、`reasoning_only_bytes`、`requested_profile` 和 `effective_profile`。这些字段不包含 prompt、工具结果、凭据或真实请求 ID，可用于按 profile 统计恢复命中率和失败分布。
+
+2026-07-12 的合成长历史实网验证使用约 140 KiB 上下文和 10 轮 tool-call/result，连续 4 次均由原始 `agent_chat + reasoning` profile 单 attempt 完成；首个可行动输出为 1.62-3.57 秒。该结果证明共同上游层能够处理这一人工 workload，但不能替代真实项目上下文的持续观测。
 
 ## 8. SLA 试验边界
 

@@ -179,7 +179,7 @@ MITM 快照中观察到 `common`、`question_refine`、`memory_generation` 和 `
 
 将 3145 的结构化请求重放到第三方 OpenAI 兼容模型服务时，至少有一个不同模型正常完成。这说明请求内容本身并非必然不可处理；该结果是单次对照，不代表第三方模型、兼容中继或任何聚合平台的长期可用性。
 
-## 6. 当前 fallback 的实际行为
+## 6. 当前恢复行为
 
 `internal/bridge/thinking_fallback.go` 已实现三元组改写：
 
@@ -189,15 +189,17 @@ is_reasoning:  true        -> false
 source:        system      -> ""
 ```
 
-它的适用条件和限制：
+共同上游层现已加入顺序恢复：
 
-- 仅适用于 `gm51model` 的 reasoning 请求。
-- body 至少 128 KiB，且 tool calls 与 tool results 总数至少 20。
-- 仅在发生客户端取消、且尚未收到任何上游事件时，为同一 raw request fingerprint 标记一次。
-- 下一次相同请求在默认两分钟 TTL 内才应用 fallback；它不是当前请求的内部即时重试。
-- 只要已收到任意上游事件，就不会标记 fallback。
+- 尚未向调用方提交可见输出时，HTTP 408/425/429/5xx、EOF、HTTP/2/reset/timeout 和可恢复 SSE error 默认最多尝试 3 次。
+- 每个 retry attempt 刷新请求级 ID 并保持 `session_id`，避免重放完全相同的上游请求身份。
+- 对 `gm51model` 的 reasoning 请求，body 至少 128 KiB 且工具历史计数至少 20 时，reasoning-only delta 最多暂存 45 秒；没有 content/tool-call/完成信号即在同一入站请求内切换三元组 recovery。
+- 暂存最多 2 MiB；一旦已提交 content/tool-call，后续失败不自动重试。
+- 原有 fingerprint + TTL fallback 保留，用于客户端取消或同请求恢复耗尽后的下一次完全相同调用。
 
-因此现有实现会漏掉：EOF、HTTP/2 错误、504、收到空事件后的失败，以及长时间只有 reasoning 的请求。三元组本身不需要重做；需要的是扩大错误分类、记录 profile，并在受控条件下评估 hedge。
+这覆盖了此前的首输出前 EOF、HTTP/2 错误、5xx、空事件失败和满足风险 profile 的 reasoning-only stall。它不是并发 hedge，也不会在已经输出后重放；`common` 与 `question_refine` 的语义/计费验证仍未完成，因此没有全局改变 `task_id`。
+
+GatewayLog 同步记录 attempt 数、是否 recovery、上游错误分类、首个可行动输出延迟、暂存 reasoning 字节数及 requested/effective profile。2026-07-12 的约 140 KiB、10 轮合成工具历史实网测试连续 4 次单 attempt 完成，首个可行动输出为 1.62-3.57 秒；这只证明人工 workload，不代表生产长上下文分布已完全覆盖。
 
 ## 7. 会话策略
 

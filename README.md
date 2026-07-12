@@ -81,6 +81,19 @@ codesign --force --deep --sign - /Applications/lingma-tap.app
   # 运行打包后的应用 (macOS)
   GATEWAY_DEBUG=1 /Applications/lingma-tap.app/Contents/MacOS/Lingma\ Tap
   ```
+
+- **上游恢复**：网关默认会在尚未向调用方输出有效内容时，对 Lingma 的瞬时 HTTP/网络/SSE 错误最多尝试 3 次。大型 `gm51model` reasoning + 深工具历史请求可在显式配置首输出 watchdog 后，于超时时在同一入站请求内切换到非 reasoning 恢复 profile。可通过以下环境变量调整：
+
+  ```bash
+  LINGMA_UPSTREAM_MAX_ATTEMPTS=3
+  LINGMA_UPSTREAM_RETRY_BASE_DELAY=200ms
+  LINGMA_UPSTREAM_FIRST_ACTIONABLE_TIMEOUT=0
+  LINGMA_THINKING_FALLBACK=true
+  ```
+
+  流式请求默认不设置首个有效输出超时；如需主动中止无输出连接，可显式设置 `LINGMA_UPSTREAM_FIRST_ACTIONABLE_TIMEOUT=45s`。`LINGMA_THINKING_FALLBACK=false` 可关闭大型 reasoning 请求的 profile 降级。重试采用有上限的指数退避和随机抖动，并遵守上游 `Retry-After`。已向调用方输出 content/tool-call 后不会自动重试，避免重复输出或重复工具调用。
+
+  Gateway Log 会记录 `upstream_attempts`、`recovery_applied`、`upstream_error_class`、`first_actionable_ms`、`reasoning_only_bytes` 以及 requested/effective profile；这些字段不包含 prompt 或工具结果。
 - **UI 容错**：前端集成了全局错误边界（Error Boundary）。如果界面发生崩溃，会显示红色错误页面并自动将堆栈信息记录到上述日志文件中。
 
 ## 致谢
