@@ -401,9 +401,13 @@ func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
 	_, err := d.db.NamedExec(`
 		INSERT INTO gateway_logs (ts, session, model, method, path, request_body, response_body,
 			input_tokens, output_tokens, cached_tokens, reasoning_tokens, total_tokens, ttft,
+			upstream_attempts, recovery_applied, upstream_error_class, first_actionable_ms,
+			reasoning_only_bytes, requested_profile, effective_profile,
 			status, latency, error, is_sse, sse_events_json, finish_reason)
 		VALUES (:ts, :session, :model, :method, :path, :request_body, :response_body,
 			:input_tokens, :output_tokens, :cached_tokens, :reasoning_tokens, :total_tokens, :ttft,
+			:upstream_attempts, :recovery_applied, :upstream_error_class, :first_actionable_ms,
+			:reasoning_only_bytes, :requested_profile, :effective_profile,
 			:status, :latency, :error, :is_sse, :sse_events_json, :finish_reason)
 		ON CONFLICT(session) DO UPDATE SET
 			model = excluded.model,
@@ -417,6 +421,13 @@ func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
 			`+preserveOnPartialUpdate("reasoning_tokens", "reasoning_tokens")+`,
 			`+preserveOnPartialUpdate("total_tokens", "total_tokens")+`,
 			`+preserveOnPartialUpdate("ttft", "ttft")+`,
+			`+preserveOnPartialUpdate("upstream_attempts", "status")+`,
+			`+preserveOnPartialUpdate("recovery_applied", "status")+`,
+			`+preserveOnPartialUpdate("upstream_error_class", "status")+`,
+			`+preserveOnPartialUpdate("first_actionable_ms", "status")+`,
+			`+preserveOnPartialUpdate("reasoning_only_bytes", "status")+`,
+			`+preserveOnPartialUpdate("requested_profile", "status")+`,
+			`+preserveOnPartialUpdate("effective_profile", "status")+`,
 			`+preserveOnPartialUpdate("status", "status")+`,
 			`+preserveOnPartialUpdate("latency", "latency")+`,
 			`+preserveOnPartialUpdate("error", "status")+`,
@@ -438,6 +449,8 @@ func (d *DB) RecentGatewayLogs(limit int, offset ...int) ([]proto.GatewayLog, er
 	err := d.db.Select(&logs, `
 		SELECT id, ts, session, model, method, path, request_body, response_body,
 			input_tokens, output_tokens, cached_tokens, reasoning_tokens, total_tokens, ttft,
+			upstream_attempts, recovery_applied, upstream_error_class, first_actionable_ms,
+			reasoning_only_bytes, requested_profile, effective_profile,
 			status, latency, error, is_sse, sse_events_json, finish_reason
 		FROM gateway_logs ORDER BY id DESC LIMIT ? OFFSET ?
 	`, limit, off)

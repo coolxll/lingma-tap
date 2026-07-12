@@ -44,6 +44,13 @@ export interface TrafficRecord {
   reasoning_tokens?: number;
   total_tokens?: number;
   ttft?: number;
+  upstream_attempts?: number;
+  recovery_applied?: boolean;
+  upstream_error_class?: string;
+  first_actionable_ms?: number;
+  reasoning_only_bytes?: number;
+  requested_profile?: string;
+  effective_profile?: string;
   latency?: number;
   finish_reason?: string;
 }
@@ -63,6 +70,13 @@ export interface GatewayLog {
   reasoning_tokens?: number;
   total_tokens?: number;
   ttft?: number;
+  upstream_attempts?: number;
+  recovery_applied?: boolean;
+  upstream_error_class?: string;
+  first_actionable_ms?: number;
+  reasoning_only_bytes?: number;
+  requested_profile?: string;
+  effective_profile?: string;
   status: number;
   latency: number;
   error?: string;
@@ -93,6 +107,13 @@ export function mapGatewayLogToRecord(log: any): TrafficRecord {
     reasoning_tokens: log.reasoning_tokens || 0,
     total_tokens: log.total_tokens || 0,
     ttft: log.ttft || 0,
+    upstream_attempts: log.upstream_attempts || 0,
+    recovery_applied: log.recovery_applied || false,
+    upstream_error_class: log.upstream_error_class || "",
+    first_actionable_ms: log.first_actionable_ms || 0,
+    reasoning_only_bytes: log.reasoning_only_bytes || 0,
+    requested_profile: log.requested_profile || "",
+    effective_profile: log.effective_profile || "",
     latency: log.latency || 0,
     error: log.error || "",
     finish_reason: log.finish_reason || "",
