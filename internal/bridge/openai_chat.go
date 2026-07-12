@@ -255,6 +255,12 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 
 		switch event.Type {
 		case "data":
+			if event.HasError {
+				if err := errorFromSSEEvent(event); err != nil {
+					return err
+				}
+			}
+
 			// 记录第一个包含内容的 token 时间（用于 TTFB 自测量）
 			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "") {
 				firstTokenTime = time.Now()
@@ -513,6 +519,10 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 	})
 
 	if err != nil {
+		if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("openai_chat", modelKey, body, profile, fallback, err, firstChunkSent); ok {
+			h.streamOpenAIChat(ctx, w, reqID, created, modelKey, retryBody, gLog, startTime, profile, retryFallback)
+			return
+		}
 		h.rememberThinkingFallback(err, fallback, profile, modelKey, "openai_chat", sawUpstreamEvent)
 		if recordContextError(ctx, gLog, startTime, err, h.recorder) {
 			return
@@ -596,6 +606,10 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 	})
 
 	if err != nil {
+		if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("openai_chat", modelKey, body, profile, fallback, err, false); ok {
+			h.nonStreamOpenAIChat(ctx, w, reqID, created, modelKey, retryBody, gLog, startTime, profile, retryFallback)
+			return
+		}
 		h.rememberThinkingFallback(err, fallback, profile, modelKey, "openai_chat", sawUpstreamEvent)
 		if recordStreamError(ctx, gLog, startTime, err, h.recorder) {
 			return
@@ -606,6 +620,11 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 
 	// Check for upstream error in SSE events
 	if lastErr != nil {
+		lastErrAsError := errorFromSSEEvent(*lastErr)
+		if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("openai_chat", modelKey, body, profile, fallback, lastErrAsError, false); ok {
+			h.nonStreamOpenAIChat(ctx, w, reqID, created, modelKey, retryBody, gLog, startTime, profile, retryFallback)
+			return
+		}
 		errMsg := lastErr.ErrorMsg
 		if errMsg == "" {
 			errMsg = "unknown upstream error"

@@ -178,10 +178,10 @@ func anthropicToOpenAIMessages(system any, messages []map[string]any) []map[stri
 				result = append(result, convertAssistantMessage(v)...)
 			case "user":
 				textParts, toolResults := convertUserMessage(v)
+				result = append(result, toolResults...)
 				if len(textParts) > 0 {
 					result = append(result, map[string]any{"role": "user", "content": strings.Join(textParts, "\n")})
 				}
-				result = append(result, toolResults...)
 			default:
 				// Unknown role, just pass through
 				result = append(result, map[string]any{"role": role, "content": content})
@@ -608,7 +608,7 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 		h.recorder(gLog)
 	}
 
-	err := h.chatStream(ctx, body, gLog, func(event SSEEvent) error {
+	handleEvent := func(event SSEEvent) error {
 		sawUpstreamEvent = true
 		switch event.Type {
 		case "data":
@@ -651,16 +651,8 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 
 			// Handle errors
 			if event.HasError {
-				stopThinking()
-				writeAnthropicSSE(w, "error", map[string]any{
-					"type": "error",
-					"error": map[string]any{
-						"type":    orDefault(event.ErrorType, "api_error"),
-						"message": orDefault(event.ErrorMsg, "unknown error"),
-					},
-				})
-				if canFlush {
-					flusher.Flush()
+				if err := errorFromSSEEvent(event); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -781,7 +773,20 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			finalize()
 		}
 		return nil
-	})
+	}
+
+	var err error
+	for {
+		err = h.client.ChatStream(ctx, body, handleEvent)
+		if err != nil {
+			if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("anthropic_messages", modelKey, body, profile, fallback, err, firstTokenRecorded); ok {
+				body = retryBody
+				fallback = retryFallback
+				continue
+			}
+		}
+		break
+	}
 
 	if err != nil {
 		h.rememberThinkingFallback(err, fallback, profile, modelKey, "anthropic_messages", sawUpstreamEvent)
@@ -930,6 +935,10 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 	})
 
 	if err != nil {
+		if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("anthropic_messages", modelKey, body, profile, fallback, err, false); ok {
+			h.nonStreamAnthropic(ctx, w, msgID, modelKey, retryBody, gLog, startTime, profile, retryFallback)
+			return
+		}
 		h.rememberThinkingFallback(err, fallback, profile, modelKey, "anthropic_messages", sawUpstreamEvent)
 		if recordStreamError(ctx, gLog, startTime, err, h.recorder) {
 			return
@@ -940,6 +949,10 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 
 	// Check for upstream error in SSE events
 	if lastErr != nil {
+		if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("anthropic_messages", modelKey, body, profile, fallback, errorFromSSEEvent(*lastErr), false); ok {
+			h.nonStreamAnthropic(ctx, w, msgID, modelKey, retryBody, gLog, startTime, profile, retryFallback)
+			return
+		}
 		errMsg := lastErr.ErrorMsg
 		if errMsg == "" {
 			errMsg = "unknown upstream error"

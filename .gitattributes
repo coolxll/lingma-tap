@@ -1,0 +1,3 @@
+# Normalize all text files to LF on checkout and commit.
+# Binaries (png/ico/exe/...) are auto-detected and left untouched.
+* text=auto eol=lf

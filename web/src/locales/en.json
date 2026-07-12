@@ -101,6 +101,8 @@
     "gateway_stopped": "Gateway is stopped",
     "gateway_logging": "Save Full Payloads",
     "gateway_logging_hint": "Status, latency, and token usage are always saved; disable to omit prompts and full responses",
+    "lingma_http2": "Lingma HTTP/2",
+    "lingma_http2_hint": "Disable to avoid upstream HTTP/2 stream resets; enable to restore HTTP/2",
     "listen_addr": "Listen Address",
     "listen_addr_warning": "Binding to all interfaces exposes the gateway to your network without authentication. Anyone on the same network can use your Lingma credentials. Use Tailscale IP for secure remote access.",
     "proxy_logging": "Proxy Packet Capture",

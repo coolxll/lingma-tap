@@ -29,7 +29,6 @@ export namespace bridge {
 
 }
 
-
 export namespace proto {
 	
 	export class SSEEvent {
@@ -123,11 +122,11 @@ export namespace proto {
 	    cached_tokens: number;
 	    reasoning_tokens: number;
 	    total_tokens: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new GatewayLogStats(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.total = source["total"];
@@ -240,3 +239,4 @@ export namespace proto {
 	}
 
 }
+

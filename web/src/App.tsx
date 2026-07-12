@@ -40,6 +40,7 @@ interface WailsWindow extends Window {
         GetStatus: () => Promise<Record<string, unknown>>;
         SetLogging: (enabled: boolean) => Promise<void>;
         SetProxyLogging: (enabled: boolean) => Promise<void>;
+        SetLingmaHTTP2: (enabled: boolean) => Promise<void>;
         GetModels: () => Promise<ModelInfo[]>;
         StartOAuthLogin: () => Promise<void>;
       };
@@ -166,6 +167,7 @@ function App() {
   const [caCertPath, setCaCertPath] = useState("");
   const [gatewayLoggingEnabled, setGatewayLoggingEnabled] = useState(true);
   const [proxyLoggingEnabled, setProxyLoggingEnabled] = useState(true);
+  const [lingmaHTTP2Enabled, setLingmaHTTP2Enabled] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [authUser, setAuthUser] = useState('');
   const [authExpireTime, setAuthExpireTime] = useState(0);
@@ -239,6 +241,8 @@ function App() {
       setGatewayLoggingEnabled(s.gateway_logging as boolean);
     if (s?.proxy_logging !== undefined)
       setProxyLoggingEnabled(s.proxy_logging as boolean);
+    if (s?.lingma_http2 !== undefined)
+      setLingmaHTTP2Enabled(s.lingma_http2 as boolean);
     if (s?.authenticated !== undefined)
       setAuthenticated(s.authenticated as boolean);
     if (typeof s?.auth_user === 'string')
@@ -503,6 +507,20 @@ function App() {
     }
   }, [wails, proxyLoggingEnabled]);
 
+  const handleToggleLingmaHTTP2 = useCallback(async () => {
+    const newState = !lingmaHTTP2Enabled;
+    setLingmaHTTP2Enabled(newState);
+    if (wails?.SetLingmaHTTP2) {
+      try {
+        await wails.SetLingmaHTTP2(newState);
+      } catch (err) {
+        setLingmaHTTP2Enabled(!newState);
+        console.error("Failed to toggle Lingma HTTP/2:", err);
+        wails?.LogError(`Failed to toggle Lingma HTTP/2: ${err}`);
+      }
+    }
+  }, [wails, lingmaHTTP2Enabled]);
+
   const togglePause = useCallback(() => {
     if (activeTabRef.current === "proxy") {
       setProxyPaused((p) => {
@@ -643,6 +661,8 @@ function App() {
             onToggleLogging={handleToggleGatewayLogging}
             proxyLoggingEnabled={proxyLoggingEnabled}
             onToggleProxyLogging={handleToggleProxyLogging}
+            lingmaHTTP2Enabled={lingmaHTTP2Enabled}
+            onToggleLingmaHTTP2={handleToggleLingmaHTTP2}
             authenticated={authenticated}
             authUser={authUser}
             authExpireTime={authExpireTime}
