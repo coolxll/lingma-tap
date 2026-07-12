@@ -40,15 +40,22 @@ type Record struct {
 	Error string `json:"error,omitempty" db:"error"`
 
 	// AI Metadata (for source === 'gateway')
-	Model           string `json:"model,omitempty" db:"-"`
-	InputTokens     int    `json:"input_tokens,omitempty" db:"-"`
-	OutputTokens    int    `json:"output_tokens,omitempty" db:"-"`
-	CachedTokens    int    `json:"cached_tokens,omitempty" db:"-"`
-	ReasoningTokens int    `json:"reasoning_tokens,omitempty" db:"-"`
-	TotalTokens     int    `json:"total_tokens,omitempty" db:"-"`
-	TTFT            int64  `json:"ttft,omitempty" db:"-"`
-	Latency         int64  `json:"latency,omitempty" db:"-"`
-	FinishReason    string `json:"finish_reason,omitempty" db:"-"`
+	Model              string `json:"model,omitempty" db:"-"`
+	InputTokens        int    `json:"input_tokens,omitempty" db:"-"`
+	OutputTokens       int    `json:"output_tokens,omitempty" db:"-"`
+	CachedTokens       int    `json:"cached_tokens,omitempty" db:"-"`
+	ReasoningTokens    int    `json:"reasoning_tokens,omitempty" db:"-"`
+	TotalTokens        int    `json:"total_tokens,omitempty" db:"-"`
+	TTFT               int64  `json:"ttft,omitempty" db:"-"`
+	Latency            int64  `json:"latency,omitempty" db:"-"`
+	FinishReason       string `json:"finish_reason,omitempty" db:"-"`
+	UpstreamAttempts   int    `json:"upstream_attempts,omitempty" db:"-"`
+	RecoveryApplied    bool   `json:"recovery_applied,omitempty" db:"-"`
+	UpstreamErrorClass string `json:"upstream_error_class,omitempty" db:"-"`
+	FirstActionableMS  int64  `json:"first_actionable_ms,omitempty" db:"-"`
+	ReasoningOnlyBytes int    `json:"reasoning_only_bytes,omitempty" db:"-"`
+	RequestedProfile   string `json:"requested_profile,omitempty" db:"-"`
+	EffectiveProfile   string `json:"effective_profile,omitempty" db:"-"`
 
 	// DB Helpers (not exported to JSON if not needed, but here they are for sqlx)
 	ReqHeadersJSON  string `json:"-" db:"req_headers_json"`
@@ -66,26 +73,33 @@ type SSEEvent struct {
 
 // GatewayLog represents a structured log entry for AI Gateway traffic.
 type GatewayLog struct {
-	ID              int64      `json:"id" db:"id"`
-	Ts              string     `json:"ts" db:"ts"`
-	Session         string     `json:"session" db:"session"`
-	Model           string     `json:"model" db:"model"`
-	Method          string     `json:"method" db:"method"`
-	Path            string     `json:"path" db:"path"`
-	RequestBody     string     `json:"request_body" db:"request_body"`
-	ResponseBody    string     `json:"response_body" db:"response_body"`
-	InputTokens     int        `json:"input_tokens" db:"input_tokens"`
-	OutputTokens    int        `json:"output_tokens" db:"output_tokens"`
-	CachedTokens    int        `json:"cached_tokens,omitempty" db:"cached_tokens"`
-	ReasoningTokens int        `json:"reasoning_tokens,omitempty" db:"reasoning_tokens"`
-	TotalTokens     int        `json:"total_tokens,omitempty" db:"total_tokens"`
-	TTFT            int64      `json:"ttft,omitempty" db:"ttft"` // ms to first token
-	Status          int        `json:"status" db:"status"`
-	Latency         int64      `json:"latency" db:"latency"` // ms
-	Error           string     `json:"error,omitempty" db:"error"`
-	IsSSE           bool       `json:"is_sse" db:"is_sse"`
-	SSEEvents       []SSEEvent `json:"sse_events,omitempty" db:"-"`
-	FinishReason    string     `json:"finish_reason,omitempty" db:"finish_reason"`
+	ID                 int64      `json:"id" db:"id"`
+	Ts                 string     `json:"ts" db:"ts"`
+	Session            string     `json:"session" db:"session"`
+	Model              string     `json:"model" db:"model"`
+	Method             string     `json:"method" db:"method"`
+	Path               string     `json:"path" db:"path"`
+	RequestBody        string     `json:"request_body" db:"request_body"`
+	ResponseBody       string     `json:"response_body" db:"response_body"`
+	InputTokens        int        `json:"input_tokens" db:"input_tokens"`
+	OutputTokens       int        `json:"output_tokens" db:"output_tokens"`
+	CachedTokens       int        `json:"cached_tokens,omitempty" db:"cached_tokens"`
+	ReasoningTokens    int        `json:"reasoning_tokens,omitempty" db:"reasoning_tokens"`
+	TotalTokens        int        `json:"total_tokens,omitempty" db:"total_tokens"`
+	TTFT               int64      `json:"ttft,omitempty" db:"ttft"` // ms to first token
+	UpstreamAttempts   int        `json:"upstream_attempts,omitempty" db:"upstream_attempts"`
+	RecoveryApplied    bool       `json:"recovery_applied,omitempty" db:"recovery_applied"`
+	UpstreamErrorClass string     `json:"upstream_error_class,omitempty" db:"upstream_error_class"`
+	FirstActionableMS  int64      `json:"first_actionable_ms,omitempty" db:"first_actionable_ms"`
+	ReasoningOnlyBytes int        `json:"reasoning_only_bytes,omitempty" db:"reasoning_only_bytes"`
+	RequestedProfile   string     `json:"requested_profile,omitempty" db:"requested_profile"`
+	EffectiveProfile   string     `json:"effective_profile,omitempty" db:"effective_profile"`
+	Status             int        `json:"status" db:"status"`
+	Latency            int64      `json:"latency" db:"latency"` // ms
+	Error              string     `json:"error,omitempty" db:"error"`
+	IsSSE              bool       `json:"is_sse" db:"is_sse"`
+	SSEEvents          []SSEEvent `json:"sse_events,omitempty" db:"-"`
+	FinishReason       string     `json:"finish_reason,omitempty" db:"finish_reason"`
 
 	// DB Helpers
 	SSEEventsJSON string `json:"-" db:"sse_events_json"`

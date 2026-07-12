@@ -103,20 +103,27 @@ func TestStorageFullFlow(t *testing.T) {
 	}
 
 	if err := db.SaveGatewayLog(&proto.GatewayLog{
-		Ts:              Now(),
-		Session:         "session-g1",
-		Model:           "gpt-4",
-		Method:          "POST",
-		Path:            "/chat",
-		RequestBody:     "hi",
-		ResponseBody:    "hello again",
-		InputTokens:     123,
-		CachedTokens:    67,
-		OutputTokens:    45,
-		ReasoningTokens: 8,
-		TotalTokens:     168,
-		TTFT:            321,
-		Status:          200,
+		Ts:                 Now(),
+		Session:            "session-g1",
+		Model:              "gpt-4",
+		Method:             "POST",
+		Path:               "/chat",
+		RequestBody:        "hi",
+		ResponseBody:       "hello again",
+		InputTokens:        123,
+		CachedTokens:       67,
+		OutputTokens:       45,
+		ReasoningTokens:    8,
+		TotalTokens:        168,
+		TTFT:               321,
+		UpstreamAttempts:   2,
+		RecoveryApplied:    true,
+		UpstreamErrorClass: "http_503",
+		FirstActionableMS:  456,
+		ReasoningOnlyBytes: 789,
+		RequestedProfile:   "task=question_refine;agent=agent_chat;reasoning=true;source=system",
+		EffectiveProfile:   "task=question_refine;agent=agent_common;reasoning=false;source=",
+		Status:             200,
 	}); err != nil {
 		t.Fatalf("SaveGatewayLog update failed: %v", err)
 	}
@@ -126,6 +133,9 @@ func TestStorageFullFlow(t *testing.T) {
 	}
 	if logs[0].InputTokens != 123 || logs[0].OutputTokens != 45 || logs[0].CachedTokens != 67 || logs[0].ReasoningTokens != 8 || logs[0].TotalTokens != 168 || logs[0].TTFT != 321 {
 		t.Errorf("expected updated usage fields, got %+v", logs[0])
+	}
+	if logs[0].UpstreamAttempts != 2 || !logs[0].RecoveryApplied || logs[0].UpstreamErrorClass != "http_503" || logs[0].FirstActionableMS != 456 || logs[0].ReasoningOnlyBytes != 789 || logs[0].RequestedProfile == "" || logs[0].EffectiveProfile == "" {
+		t.Errorf("expected updated recovery fields, got %+v", logs[0])
 	}
 	if err := db.SaveGatewayLog(&proto.GatewayLog{
 		Ts:          Now(),
@@ -142,7 +152,7 @@ func TestStorageFullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecentGatewayLogs after late initial update failed: %v", err)
 	}
-	if logs[0].Status != 200 || logs[0].InputTokens != 123 || logs[0].OutputTokens != 45 || logs[0].CachedTokens != 67 || logs[0].ReasoningTokens != 8 || logs[0].TotalTokens != 168 || logs[0].TTFT != 321 || logs[0].ResponseBody != "hello again" {
+	if logs[0].Status != 200 || logs[0].InputTokens != 123 || logs[0].OutputTokens != 45 || logs[0].CachedTokens != 67 || logs[0].ReasoningTokens != 8 || logs[0].TotalTokens != 168 || logs[0].TTFT != 321 || logs[0].ResponseBody != "hello again" || logs[0].UpstreamAttempts != 2 || !logs[0].RecoveryApplied || logs[0].UpstreamErrorClass != "http_503" || logs[0].FirstActionableMS != 456 || logs[0].ReasoningOnlyBytes != 789 || logs[0].RequestedProfile == "" || logs[0].EffectiveProfile == "" {
 		t.Errorf("late initial log regressed final observability fields: %+v", logs[0])
 	}
 
@@ -204,7 +214,7 @@ func TestCompletedCancellationMigration(t *testing.T) {
 	}
 	defer migrator.Close()
 
-	if err = migrator.Steps(-1); err != nil {
+	if err = migrator.Migrate(4); err != nil {
 		t.Fatalf("roll back migration 5: %v", err)
 	}
 
@@ -226,7 +236,7 @@ func TestCompletedCancellationMigration(t *testing.T) {
 		}
 	}
 
-	if err = migrator.Steps(1); err != nil {
+	if err = migrator.Migrate(5); err != nil {
 		t.Fatalf("apply migration 5: %v", err)
 	}
 
