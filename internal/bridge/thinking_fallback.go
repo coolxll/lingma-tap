@@ -165,11 +165,7 @@ func (h *BridgeHandler) applyThinkingFallback(protocol, modelKey string, rawBody
 		return decision
 	}
 
-	if modelConfig, ok := body["model_config"].(map[string]any); ok {
-		modelConfig["is_reasoning"] = false
-		modelConfig["source"] = ""
-	}
-	body["agent_id"] = "agent_common"
+	applyLingmaThinkingRecovery(body)
 	decision.Applied = true
 
 	log.Printf("[bridge] Lingma thinking fallback applied protocol=%s model=%s fingerprint=%s", protocol, modelKey, shortFingerprint(decision.Key))
@@ -180,7 +176,8 @@ func (h *BridgeHandler) rememberThinkingFallback(err error, decision lingmaThink
 	if h == nil || !h.thinkingFallbackEnabled || h.thinkingFallback == nil || err == nil || sawUpstreamEvent {
 		return
 	}
-	if !decision.Eligible || decision.Applied || !profile.LargeThinking || !isContextCanceled(nil, err) {
+	if !decision.Eligible || decision.Applied || !profile.LargeThinking ||
+		(!isContextCanceled(nil, err) && !isLingmaRecoveryCandidate(err)) {
 		return
 	}
 	if !h.thinkingFallback.mark(decision.Key, h.thinkingFallbackTTL) {
@@ -194,6 +191,14 @@ func (h *BridgeHandler) rememberThinkingFallback(err error, decision lingmaThink
 		h.thinkingFallbackTTL,
 		shortFingerprint(decision.Key),
 	)
+}
+
+func applyLingmaThinkingRecovery(body map[string]any) {
+	if modelConfig, ok := body["model_config"].(map[string]any); ok {
+		modelConfig["is_reasoning"] = false
+		modelConfig["source"] = ""
+	}
+	body["agent_id"] = "agent_common"
 }
 
 func shortFingerprint(fingerprint string) string {

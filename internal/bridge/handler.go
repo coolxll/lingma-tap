@@ -27,6 +27,21 @@ type BridgeHandler struct {
 	Debug                   bool
 }
 
+func (h *BridgeHandler) chatStream(ctx context.Context, body map[string]any, gLog *proto.GatewayLog, cb func(SSEEvent) error) error {
+	return h.client.ChatStreamObserved(ctx, body, cb, func(stats LingmaUpstreamStats) {
+		if gLog == nil {
+			return
+		}
+		gLog.UpstreamAttempts = stats.Attempts
+		gLog.RecoveryApplied = stats.RecoveryApplied
+		gLog.UpstreamErrorClass = stats.ErrorClass
+		gLog.FirstActionableMS = stats.FirstActionableMS
+		gLog.ReasoningOnlyBytes = stats.ReasoningOnlyBytes
+		gLog.RequestedProfile = stats.RequestedProfile
+		gLog.EffectiveProfile = stats.EffectiveProfile
+	})
+}
+
 func NewBridgeHandler(session *auth.Session, recorder func(*proto.GatewayLog)) *BridgeHandler {
 	fallbackEnabled, fallbackTTL := loadLingmaThinkingFallbackConfig()
 	h := &BridgeHandler{
