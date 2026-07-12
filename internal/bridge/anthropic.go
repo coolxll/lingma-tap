@@ -777,7 +777,7 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 
 	var err error
 	for {
-		err = h.client.ChatStream(ctx, body, handleEvent)
+		err = h.chatStream(ctx, body, gLog, handleEvent)
 		if err != nil {
 			if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("anthropic_messages", modelKey, body, profile, fallback, err, firstTokenRecorded); ok {
 				body = retryBody
