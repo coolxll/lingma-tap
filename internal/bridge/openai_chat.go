@@ -246,7 +246,7 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 	var firstTokenTime time.Time
 	firstTokenRecorded := false
 
-	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+	err := h.chatStream(ctx, body, gLog, func(event SSEEvent) error {
 		sawUpstreamEvent = true
 		if h.Debug {
 			fmt.Printf("[debug] SSE Event: Type=%s, ContentLen=%d, ToolCalls=%d, FinishReason=%s\n",
@@ -542,7 +542,7 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 	var firstTokenTime time.Time
 	firstTokenRecorded := false
 
-	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+	err := h.chatStream(ctx, body, gLog, func(event SSEEvent) error {
 		sawUpstreamEvent = true
 		if h.Debug {
 			fmt.Printf("[debug] SSE Event (Non-Stream): Type=%s, ContentLen=%d, ToolCalls=%d, FinishReason=%s\n",

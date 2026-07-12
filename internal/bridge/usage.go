@@ -113,13 +113,23 @@ func recordContextError(ctx context.Context, gLog *proto.GatewayLog, startTime t
 }
 
 func statusForLingmaUpstreamError(err error) int {
-	if isLingmaUpstreamEOF(err) {
+	if isContextDeadlineExceeded(nil, err) || isLingmaFirstActionableTimeout(err) {
+		return http.StatusGatewayTimeout
+	}
+	var httpErr *lingmaHTTPError
+	if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusTooManyRequests {
+		return http.StatusTooManyRequests
+	}
+	if isLingmaUpstreamFailure(err) {
 		return http.StatusBadGateway
 	}
 	return http.StatusInternalServerError
 }
 
 func normalizeLingmaUpstreamError(err error) string {
+	if isLingmaFirstActionableTimeout(err) {
+		return err.Error()
+	}
 	if isLingmaUpstreamEOF(err) {
 		return "lingma upstream connection closed before [DONE]"
 	}
@@ -127,6 +137,21 @@ func normalizeLingmaUpstreamError(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func isLingmaUpstreamFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	var httpErr *lingmaHTTPError
+	if errors.As(err, &httpErr) {
+		return true
+	}
+	var sseErr *lingmaSSEError
+	if errors.As(err, &sseErr) {
+		return true
+	}
+	return isLingmaUpstreamEOF(err) || isLingmaTransportError(err)
 }
 
 func isLingmaUpstreamEOF(err error) bool {

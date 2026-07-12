@@ -99,4 +99,13 @@ func TestNormalizeLingmaUpstreamError(t *testing.T) {
 	if got := statusForLingmaUpstreamError(io.ErrUnexpectedEOF); got != 502 {
 		t.Fatalf("statusForLingmaUpstreamError = %d, want 502", got)
 	}
+	if got := statusForLingmaUpstreamError(&lingmaHTTPError{StatusCode: http.StatusServiceUnavailable}); got != http.StatusBadGateway {
+		t.Fatalf("HTTP upstream status = %d, want %d", got, http.StatusBadGateway)
+	}
+	if got := statusForLingmaUpstreamError(&lingmaSSEError{Type: "server_error", Message: "overloaded"}); got != http.StatusBadGateway {
+		t.Fatalf("SSE upstream status = %d, want %d", got, http.StatusBadGateway)
+	}
+	if got := statusForLingmaUpstreamError(&lingmaFirstActionableTimeoutError{Timeout: 45 * time.Second}); got != http.StatusGatewayTimeout {
+		t.Fatalf("first actionable timeout status = %d, want %d", got, http.StatusGatewayTimeout)
+	}
 }

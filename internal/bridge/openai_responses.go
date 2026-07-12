@@ -209,7 +209,7 @@ func (h *BridgeHandler) streamResponses(ctx context.Context, w http.ResponseWrit
 	var firstTokenTime time.Time
 	firstTokenRecorded := false
 
-	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+	err := h.chatStream(ctx, body, gLog, func(event SSEEvent) error {
 		sawUpstreamEvent = true
 		switch event.Type {
 		case "data":
@@ -531,7 +531,7 @@ func (h *BridgeHandler) nonStreamResponses(ctx context.Context, w http.ResponseW
 	firstTokenRecorded := false
 	sawUpstreamEvent := false
 
-	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+	err := h.chatStream(ctx, body, gLog, func(event SSEEvent) error {
 		sawUpstreamEvent = true
 		switch event.Type {
 		case "data":

@@ -608,7 +608,7 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 		h.recorder(gLog)
 	}
 
-	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+	err := h.chatStream(ctx, body, gLog, func(event SSEEvent) error {
 		sawUpstreamEvent = true
 		switch event.Type {
 		case "data":
@@ -882,7 +882,7 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 	firstTokenRecorded := false
 	sawUpstreamEvent := false
 
-	err := h.client.ChatStream(ctx, body, func(event SSEEvent) error {
+	err := h.chatStream(ctx, body, gLog, func(event SSEEvent) error {
 		sawUpstreamEvent = true
 		switch event.Type {
 		case "data":

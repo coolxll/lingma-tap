@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -43,9 +44,13 @@ func buildLingmaChatURL(agentID string) string {
 }
 
 type LingmaClient struct {
-	session *auth.Session
-	client  *http.Client
-	Debug   bool
+	session                 *auth.Session
+	client                  *http.Client
+	maxAttempts             int
+	retryBaseDelay          time.Duration
+	firstActionableTimeout  time.Duration
+	thinkingRecoveryEnabled bool
+	Debug                   bool
 }
 
 // streamState holds per-request state for SSE parsing.
@@ -60,12 +65,33 @@ type streamState struct {
 }
 
 func NewLingmaClient(session *auth.Session) *LingmaClient {
+	maxAttempts, retryBaseDelay, firstActionableTimeout := loadLingmaUpstreamRetryConfig()
+	thinkingRecoveryEnabled, _ := loadLingmaThinkingFallbackConfig()
 	return &LingmaClient{
-		session: session,
-		client: &http.Client{
-			Timeout: 5 * time.Minute,
-		},
+		session:                 session,
+		maxAttempts:             maxAttempts,
+		retryBaseDelay:          retryBaseDelay,
+		firstActionableTimeout:  firstActionableTimeout,
+		thinkingRecoveryEnabled: thinkingRecoveryEnabled,
+		client:                  newLingmaStreamingHTTPClient(),
 	}
+}
+
+func newLingmaStreamingHTTPClient() *http.Client {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		base = &http.Transport{}
+	}
+	transport := base.Clone()
+	transport.ForceAttemptHTTP2 = false
+	transport.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	} else {
+		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	}
+	transport.TLSClientConfig.NextProtos = []string{"http/1.1"}
+	return &http.Client{Transport: transport}
 }
 
 // SSEEvent represents a parsed SSE event from the Lingma API.
@@ -229,8 +255,9 @@ func (u *Usage) Consolidate() {
 	}
 }
 
-// ChatStream sends a chat request to Lingma and streams SSE events.
-func (c *LingmaClient) ChatStream(ctx context.Context, body map[string]any, cb func(SSEEvent) error) error {
+// chatStreamOnce sends one upstream request. ChatStream wraps this with
+// retry/recovery behavior before exposing events to the downstream client.
+func (c *LingmaClient) chatStreamOnce(ctx context.Context, body map[string]any, cb func(SSEEvent) error) error {
 	state := &streamState{} // per-request state
 
 	bodyJSON, err := json.Marshal(body)
@@ -265,7 +292,11 @@ func (c *LingmaClient) ChatStream(ctx context.Context, body map[string]any, cb f
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("lingma API returned HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+		return &lingmaHTTPError{
+			StatusCode: resp.StatusCode,
+			Body:       string(bodyBytes),
+			RetryAfter: parseLingmaRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+		}
 	}
 
 	return c.readSSE(resp.Body, cb, state)
