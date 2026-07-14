@@ -443,13 +443,18 @@ func (c *LingmaClient) parseSSEData(data string, state *streamState) ([]SSEEvent
 
 	// 2. Try to parse as finish event: {"firstTokenDuration":...,"totalDuration":...,"serverDuration":...,"usage":...}
 	var finish struct {
-		FirstTokenDuration int    `json:"firstTokenDuration"`
-		TotalDuration      int    `json:"totalDuration"`
-		ServerDuration     int    `json:"serverDuration"`
+		FirstTokenDuration *int   `json:"firstTokenDuration"`
+		TotalDuration      *int   `json:"totalDuration"`
+		ServerDuration     *int   `json:"serverDuration"`
 		Usage              *Usage `json:"usage"`
 	}
-	if err := json.Unmarshal([]byte(data), &finish); err == nil && finish.TotalDuration > 0 {
-		event := SSEEvent{Type: "finish", Raw: []byte(data), FirstTokenDuration: finish.FirstTokenDuration}
+	if err := json.Unmarshal([]byte(data), &finish); err == nil &&
+		(finish.TotalDuration != nil || finish.ServerDuration != nil || finish.FirstTokenDuration != nil) {
+		firstTokenDuration := 0
+		if finish.FirstTokenDuration != nil {
+			firstTokenDuration = *finish.FirstTokenDuration
+		}
+		event := SSEEvent{Type: "finish", Raw: []byte(data), FirstTokenDuration: firstTokenDuration}
 		if finish.Usage != nil {
 			finish.Usage.Consolidate()
 			event.Usage = finish.Usage
@@ -1012,6 +1017,7 @@ func (s *streamState) splitThoughtTags(content string) []SSEEvent {
 // toolChoice is the tool_choice field (may be nil).
 func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey string, params map[string]any, rawRequestJSON []byte, isReasoning bool, toolChoice any) map[string]any {
 	requestID := newUUID()
+	messages = mergeReasoningContentIntoMessages(messages)
 
 	var sessionID string
 	if len(rawRequestJSON) > 0 {
@@ -1055,10 +1061,11 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 		"agent_id":         agentID,
 		"task_id":          "question_refine",
 		"model_config": map[string]any{
-			"key":                   modelKey,
-			"display_name":          "",
-			"model":                 "",
-			"format":                "",
+			"key":          modelKey,
+			"display_name": "",
+			"model":        "",
+			"format":       "",
+			// TODO(vision): implement Lingma image upload and VL request assembly; see docs/lingma_vision_support_plan.md.
 			"is_vl":                 false,
 			"is_reasoning":          isReasoning,
 			"api_key":               "",
@@ -1088,7 +1095,7 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 		},
 	}
 
-	if params != nil {
+	if len(params) > 0 {
 		body["parameters"] = params
 	} else {
 		body["parameters"] = map[string]any{"temperature": 0.1}
@@ -1103,6 +1110,59 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 	}
 
 	return body
+}
+
+// mergeReasoningContentIntoMessages preserves prior-turn reasoning for Lingma,
+// whose chat protocol carries thought text inside message content rather than
+// an OpenAI reasoning_content field.
+func mergeReasoningContentIntoMessages(messages []map[string]any) []map[string]any {
+	if len(messages) == 0 {
+		return messages
+	}
+	result := make([]map[string]any, 0, len(messages))
+	for _, message := range messages {
+		if message == nil {
+			result = append(result, nil)
+			continue
+		}
+		copyMessage := make(map[string]any, len(message))
+		for key, value := range message {
+			copyMessage[key] = value
+		}
+		reasoning, ok := copyMessage["reasoning_content"].(string)
+		if !ok || strings.TrimSpace(reasoning) == "" {
+			result = append(result, copyMessage)
+			continue
+		}
+		delete(copyMessage, "reasoning_content")
+		thought := "<thought>" + reasoning + "</thought>"
+		switch content := copyMessage["content"].(type) {
+		case string:
+			if content == "" {
+				copyMessage["content"] = thought
+			} else {
+				copyMessage["content"] = thought + "\n" + content
+			}
+		case []map[string]any:
+			parts := make([]any, 0, len(content)+1)
+			parts = append(parts, map[string]any{"type": "text", "text": thought})
+			for _, part := range content {
+				parts = append(parts, part)
+			}
+			copyMessage["content"] = parts
+		case []any:
+			parts := make([]any, 0, len(content)+1)
+			parts = append(parts, map[string]any{"type": "text", "text": thought})
+			parts = append(parts, content...)
+			copyMessage["content"] = parts
+		case nil:
+			copyMessage["content"] = thought
+		default:
+			copyMessage["content"] = thought + "\n" + fmt.Sprint(content)
+		}
+		result = append(result, copyMessage)
+	}
+	return result
 }
 
 // generateSessionID produces a deterministic session ID from the request content.

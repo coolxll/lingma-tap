@@ -312,6 +312,81 @@ func TestAnthropicToOpenAIMessages(t *testing.T) {
 	}
 }
 
+func TestAnthropicToOpenAIMessages_PreservesMultimodalContent(t *testing.T) {
+	result := anthropicToOpenAIMessages(nil, []map[string]any{
+		{
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "text", "text": "Describe these files."},
+				map[string]any{
+					"type": "image",
+					"source": map[string]any{
+						"type":       "base64",
+						"media_type": "image/png",
+						"data":       "aW1hZ2U=",
+					},
+				},
+				map[string]any{
+					"type": "document",
+					"name": "notes.pdf",
+					"source": map[string]any{
+						"type":       "base64",
+						"media_type": "application/pdf",
+						"data":       "cGRm",
+					},
+				},
+			},
+		},
+	})
+	if len(result) != 1 {
+		t.Fatalf("expected one converted message, got %d", len(result))
+	}
+	parts, ok := result[0]["content"].([]map[string]any)
+	if !ok || len(parts) != 3 {
+		t.Fatalf("content = %#v, want three multimodal parts", result[0]["content"])
+	}
+	if parts[1]["type"] != "image_url" || parts[1]["image_url"].(map[string]any)["url"] != "data:image/png;base64,aW1hZ2U=" {
+		t.Fatalf("image part = %#v", parts[1])
+	}
+	if parts[2]["type"] != "file" || parts[2]["file"].(map[string]any)["file_data"] != "data:application/pdf;base64,cGRm" {
+		t.Fatalf("document part = %#v", parts[2])
+	}
+}
+
+func TestAnthropicToOpenAIMessages_ToolResultPreservesImage(t *testing.T) {
+	result := anthropicToOpenAIMessages(nil, []map[string]any{
+		{
+			"role": "user",
+			"content": []any{
+				map[string]any{
+					"type":        "tool_result",
+					"tool_use_id": "toolu_1",
+					"content": []any{
+						map[string]any{"type": "text", "text": "Screenshot:"},
+						map[string]any{
+							"type": "image",
+							"source": map[string]any{
+								"type": "url",
+								"url":  "https://example.com/screenshot.png",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if len(result) != 1 {
+		t.Fatalf("expected one tool message, got %d", len(result))
+	}
+	content, ok := result[0]["content"].([]map[string]any)
+	if !ok || len(content) != 2 {
+		t.Fatalf("tool result content = %#v, want text and image parts", result[0]["content"])
+	}
+	if content[1]["type"] != "image_url" || content[1]["image_url"].(map[string]any)["url"] != "https://example.com/screenshot.png" {
+		t.Fatalf("tool result image = %#v", content[1])
+	}
+}
+
 func TestMapFinishReason(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -320,7 +395,8 @@ func TestMapFinishReason(t *testing.T) {
 		{"stop", "end_turn"},
 		{"length", "max_tokens"},
 		{"tool_calls", "tool_use"},
-		{"content_filter", "stop_sequence"},
+		{"content_filter", "end_turn"},
+		{"function_call", "tool_use"},
 		{"unknown", "end_turn"},
 		{"", "end_turn"},
 	}
@@ -330,5 +406,27 @@ func TestMapFinishReason(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("mapFinishReason(%q) = %q, want %q", tt.input, result, tt.expected)
 		}
+	}
+}
+
+func TestAnthropicRequestOptionMappings(t *testing.T) {
+	stops := anthropicStopSequences([]any{"STOP", "<END>"})
+	if len(stops) != 2 || stops[0] != "STOP" || stops[1] != "<END>" {
+		t.Fatalf("stop_sequences = %#v, want both values preserved", stops)
+	}
+
+	if got := anthropicToolChoiceToOpenAI(map[string]any{"type": "auto"}); got != "auto" {
+		t.Fatalf("auto tool_choice = %#v, want auto", got)
+	}
+	if got := anthropicToolChoiceToOpenAI(map[string]any{"type": "any"}); got != "required" {
+		t.Fatalf("any tool_choice = %#v, want required", got)
+	}
+	got, ok := anthropicToolChoiceToOpenAI(map[string]any{"type": "tool", "name": "read_file"}).(map[string]any)
+	if !ok || got["type"] != "function" {
+		t.Fatalf("specific tool_choice = %#v, want OpenAI function choice", got)
+	}
+	fn, ok := got["function"].(map[string]any)
+	if !ok || fn["name"] != "read_file" {
+		t.Fatalf("specific tool_choice function = %#v", got["function"])
 	}
 }
