@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -69,6 +70,14 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 		temperature = &t
 	}
 
+	var topP *float64
+	if p, ok := rawReq["top_p"].(float64); ok {
+		topP = &p
+	}
+
+	stopSequences := anthropicStopSequences(rawReq["stop_sequences"])
+	toolChoice := anthropicToolChoiceToOpenAI(rawReq["tool_choice"])
+
 	if len(messages) == 0 {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "messages is required")
 		return
@@ -101,6 +110,14 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 	if temperature != nil {
 		params["temperature"] = *temperature
 	}
+	if topP != nil {
+		params["top_p"] = *topP
+	}
+	if len(stopSequences) == 1 {
+		params["stop"] = stopSequences[0]
+	} else if len(stopSequences) > 1 {
+		params["stop"] = stopSequences
+	}
 
 	// Determine is_reasoning from thinking config
 	isReasoning := anthropicIsReasoning(rawReq)
@@ -108,7 +125,7 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 	// Capture raw request JSON for deterministic session_id
 	rawReqJSON, _ := json.Marshal(rawReq)
 
-	body := BuildLingmaBody(messages, openAITools, modelKey, params, rawReqJSON, isReasoning, nil)
+	body := BuildLingmaBody(messages, openAITools, modelKey, params, rawReqJSON, isReasoning, toolChoice)
 	profile := inspectLingmaRequest(body, modelKey)
 	fallback := h.applyThinkingFallback("anthropic_messages", modelKey, rawReqJSON, body, profile)
 	if !fallback.Applied {
@@ -142,23 +159,24 @@ func anthropicToOpenAIMessages(system any, messages []map[string]any) []map[stri
 
 	// Add system message if present
 	if system != nil {
-		var content string
+		var content any
 		switch v := system.(type) {
 		case string:
 			content = v
 		case []any:
-			// Array of content blocks
-			var parts []string
+			var parts []map[string]any
 			for _, block := range v {
 				if m, ok := block.(map[string]any); ok {
-					if text, ok := m["text"].(string); ok {
-						parts = append(parts, text)
+					if part, ok := convertAnthropicContentPart(m); ok {
+						parts = append(parts, part)
 					}
 				}
 			}
-			content = strings.Join(parts, "\n")
+			if len(parts) > 0 {
+				content = openAIContentPartsOrText(parts)
+			}
 		}
-		if content != "" {
+		if content != nil && content != "" {
 			result = append(result, map[string]any{"role": "system", "content": content})
 		}
 	}
@@ -172,7 +190,8 @@ func anthropicToOpenAIMessages(system any, messages []map[string]any) []map[stri
 		case string:
 			result = append(result, map[string]any{"role": role, "content": v})
 		case []any:
-			// Array of content blocks - need to handle text, tool_use, tool_result
+			// Array of content blocks - preserve multimodal parts instead of
+			// silently dropping image/document blocks.
 			switch role {
 			case "assistant":
 				result = append(result, convertAssistantMessage(v)...)
@@ -180,7 +199,7 @@ func anthropicToOpenAIMessages(system any, messages []map[string]any) []map[stri
 				textParts, toolResults := convertUserMessage(v)
 				result = append(result, toolResults...)
 				if len(textParts) > 0 {
-					result = append(result, map[string]any{"role": "user", "content": strings.Join(textParts, "\n")})
+					result = append(result, map[string]any{"role": "user", "content": openAIContentPartsOrText(textParts)})
 				}
 			default:
 				// Unknown role, just pass through
@@ -197,7 +216,7 @@ func anthropicToOpenAIMessages(system any, messages []map[string]any) []map[stri
 // convertAssistantMessage converts an assistant message with content blocks to OpenAI format.
 // Returns one or more messages (may include tool_calls).
 func convertAssistantMessage(contentBlocks []any) []map[string]any {
-	var textParts []string
+	var contentParts []map[string]any
 	var toolCalls []map[string]any
 
 	for _, block := range contentBlocks {
@@ -209,12 +228,15 @@ func convertAssistantMessage(contentBlocks []any) []map[string]any {
 		switch blockType {
 		case "text":
 			if text, ok := m["text"].(string); ok {
-				textParts = append(textParts, text)
+				contentParts = append(contentParts, map[string]any{"type": "text", "text": text})
 			}
 		case "tool_use":
-			id, _ := m["id"].(string)
+			id := normalizeAnthropicToolID(stringValue(m["id"]))
 			name, _ := m["name"].(string)
-			input, _ := m["input"].(map[string]any)
+			input := m["input"]
+			if input == nil {
+				input = map[string]any{}
+			}
 			inputJSON, _ := json.Marshal(input)
 			toolCalls = append(toolCalls, map[string]any{
 				"id":   id,
@@ -224,13 +246,17 @@ func convertAssistantMessage(contentBlocks []any) []map[string]any {
 					"arguments": string(inputJSON),
 				},
 			})
+		default:
+			if part, ok := convertAnthropicContentPart(m); ok {
+				contentParts = append(contentParts, part)
+			}
 		}
 	}
 
 	// Build the assistant message
 	msg := map[string]any{"role": "assistant"}
-	if len(textParts) > 0 {
-		msg["content"] = strings.Join(textParts, "\n")
+	if len(contentParts) > 0 {
+		msg["content"] = openAIContentPartsOrText(contentParts)
 	} else {
 		msg["content"] = nil
 	}
@@ -242,8 +268,8 @@ func convertAssistantMessage(contentBlocks []any) []map[string]any {
 
 // convertUserMessage converts a user message with content blocks to OpenAI format.
 // Returns text parts and tool result messages separately.
-func convertUserMessage(contentBlocks []any) ([]string, []map[string]any) {
-	var textParts []string
+func convertUserMessage(contentBlocks []any) ([]map[string]any, []map[string]any) {
+	var contentParts []map[string]any
 	var toolResults []map[string]any
 
 	for _, block := range contentBlocks {
@@ -255,30 +281,152 @@ func convertUserMessage(contentBlocks []any) ([]string, []map[string]any) {
 		switch blockType {
 		case "text":
 			if text, ok := m["text"].(string); ok {
-				textParts = append(textParts, text)
+				contentParts = append(contentParts, map[string]any{"type": "text", "text": text})
 			}
 		case "tool_result":
-			toolUseID, _ := m["tool_use_id"].(string)
-			var resultContent string
+			toolUseID := normalizeAnthropicToolID(stringValue(m["tool_use_id"]))
+			var resultParts []map[string]any
 			if rc, ok := m["content"].(string); ok {
-				resultContent = rc
+				resultParts = append(resultParts, map[string]any{"type": "text", "text": rc})
 			} else if rcBlocks, ok := m["content"].([]any); ok {
 				for _, rb := range rcBlocks {
-					if rm, ok := rb.(map[string]any); ok {
-						if text, ok := rm["text"].(string); ok {
-							resultContent += text
+					switch item := rb.(type) {
+					case string:
+						resultParts = append(resultParts, map[string]any{"type": "text", "text": item})
+					case map[string]any:
+						if part, ok := convertAnthropicContentPart(item); ok {
+							resultParts = append(resultParts, part)
 						}
 					}
 				}
+			} else if rcBlock, ok := m["content"].(map[string]any); ok {
+				if part, ok := convertAnthropicContentPart(rcBlock); ok {
+					resultParts = append(resultParts, part)
+				}
+			}
+			var resultContent any
+			if len(resultParts) == 0 {
+				resultContent = ""
+			} else if len(resultParts) == 1 && resultParts[0]["type"] == "text" {
+				resultContent = resultParts[0]["text"]
+			} else {
+				resultContent = resultParts
 			}
 			toolResults = append(toolResults, map[string]any{
 				"role":         "tool",
 				"tool_call_id": toolUseID,
 				"content":      resultContent,
 			})
+		default:
+			if part, ok := convertAnthropicContentPart(m); ok {
+				contentParts = append(contentParts, part)
+			}
 		}
 	}
-	return textParts, toolResults
+	return contentParts, toolResults
+}
+
+func openAIContentPartsOrText(parts []map[string]any) any {
+	if len(parts) == 1 && parts[0]["type"] == "text" {
+		if text, ok := parts[0]["text"].(string); ok {
+			return text
+		}
+	}
+	return parts
+}
+
+func convertAnthropicContentPart(block map[string]any) (map[string]any, bool) {
+	blockType, _ := block["type"].(string)
+	switch blockType {
+	case "text":
+		text, _ := block["text"].(string)
+		return map[string]any{"type": "text", "text": text}, true
+	case "image":
+		url := anthropicSourceURL(block["source"])
+		if url == "" {
+			return nil, false
+		}
+		return map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]any{"url": url},
+		}, true
+	case "document":
+		file := map[string]any{}
+		if filename, ok := block["name"].(string); ok && filename != "" {
+			file["filename"] = filename
+		}
+		if source, ok := block["source"].(map[string]any); ok {
+			sourceType, _ := source["type"].(string)
+			switch sourceType {
+			case "base64":
+				mediaType, _ := source["media_type"].(string)
+				data, _ := source["data"].(string)
+				if data != "" {
+					if mediaType == "" {
+						mediaType = "application/octet-stream"
+					}
+					file["file_data"] = "data:" + mediaType + ";base64," + data
+				}
+			case "url":
+				if url, ok := source["url"].(string); ok && url != "" {
+					file["file_data"] = url
+				}
+			case "text":
+				if text, ok := source["data"].(string); ok && text != "" {
+					return map[string]any{"type": "text", "text": text}, true
+				}
+			}
+		}
+		if len(file) == 0 {
+			return nil, false
+		}
+		return map[string]any{"type": "file", "file": file}, true
+	default:
+		return nil, false
+	}
+}
+
+func anthropicSourceURL(value any) string {
+	source, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	switch sourceType, _ := source["type"].(string); sourceType {
+	case "url":
+		url, _ := source["url"].(string)
+		return url
+	case "base64":
+		data, _ := source["data"].(string)
+		if data == "" {
+			return ""
+		}
+		mediaType, _ := source["media_type"].(string)
+		if mediaType == "" {
+			mediaType = "application/octet-stream"
+		}
+		return "data:" + mediaType + ";base64," + data
+	default:
+		return ""
+	}
+}
+
+// normalizeAnthropicToolID makes IDs safe for Anthropic's tool_use.id format.
+// Keep non-empty IDs stable so a tool_result can refer to the same call.
+func normalizeAnthropicToolID(id string) string {
+	id = strings.TrimSpace(id)
+	var normalized strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			normalized.WriteRune(r)
+		default:
+			normalized.WriteByte('_')
+		}
+	}
+	if normalized.Len() == 0 {
+		return "toolu_" + newUUID()[:24]
+	}
+	return normalized.String()
 }
 
 func anthropicToOpenAITools(tools []map[string]any) []map[string]any {
@@ -298,6 +446,59 @@ func anthropicToOpenAITools(tools []map[string]any) []map[string]any {
 		})
 	}
 	return result
+}
+
+func anthropicStopSequences(value any) []string {
+	switch v := value.(type) {
+	case []any:
+		stops := make([]string, 0, len(v))
+		for _, item := range v {
+			if stop, ok := item.(string); ok && stop != "" {
+				stops = append(stops, stop)
+			}
+		}
+		return stops
+	case []string:
+		stops := make([]string, 0, len(v))
+		for _, stop := range v {
+			if stop != "" {
+				stops = append(stops, stop)
+			}
+		}
+		return stops
+	default:
+		return nil
+	}
+}
+
+// anthropicToolChoiceToOpenAI maps Anthropic's tool_choice shape to the
+// OpenAI-compatible shape consumed by BuildLingmaBody/Lingma.
+func anthropicToolChoiceToOpenAI(value any) any {
+	choice, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	switch typ, _ := choice["type"].(string); typ {
+	case "auto":
+		return "auto"
+	case "any":
+		return "required"
+	case "none":
+		return "none"
+	case "tool":
+		name, _ := choice["name"].(string)
+		if name == "" {
+			return nil
+		}
+		return map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": name,
+			},
+		}
+	default:
+		return value
+	}
 }
 
 func (h *BridgeHandler) mapAnthropicModelToLingma(ctx context.Context, model string) string {
@@ -513,6 +714,15 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			thinkingBlockStarted = false
 		}
 	}
+	stopText := func() {
+		if state.textBlockStarted {
+			writeAnthropicSSE(w, "content_block_stop", map[string]any{
+				"type":  "content_block_stop",
+				"index": state.textBlockIndex,
+			})
+			state.textBlockStarted = false
+		}
+	}
 
 	finalize := func() {
 		if finalized {
@@ -524,15 +734,25 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			stopReason = "tool_use"
 		}
 
-		// Stop all open content blocks (thinking first, then text, then tools)
+		// Stop all open content blocks (thinking first, then text, then tools).
+		// Tool blocks are sorted by their emitted block index because map iteration
+		// order is deliberately random in Go.
 		stopThinking()
-		if state.textBlockStarted {
-			writeAnthropicSSE(w, "content_block_stop", map[string]any{
-				"type":  "content_block_stop",
-				"index": state.textBlockIndex,
-			})
+		stopText()
+		toolIndices := make([]int, 0, len(state.toolBlocks))
+		for index := range state.toolBlocks {
+			toolIndices = append(toolIndices, index)
 		}
-		for _, ts := range state.toolBlocks {
+		sort.Slice(toolIndices, func(i, j int) bool {
+			left := state.toolBlocks[toolIndices[i]]
+			right := state.toolBlocks[toolIndices[j]]
+			if left.blockIndex == right.blockIndex {
+				return toolIndices[i] < toolIndices[j]
+			}
+			return left.blockIndex < right.blockIndex
+		})
+		for _, index := range toolIndices {
+			ts := state.toolBlocks[index]
 			if ts.started {
 				writeAnthropicSSE(w, "content_block_stop", map[string]any{
 					"type":  "content_block_stop",
@@ -584,7 +804,13 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			if fullContent.Len() > 0 {
 				content = append(content, map[string]any{"type": "text", "text": fullContent.String()})
 			}
-			for _, tc := range toolCalls {
+			toolIndices := make([]int, 0, len(toolCalls))
+			for index := range toolCalls {
+				toolIndices = append(toolIndices, index)
+			}
+			sort.Ints(toolIndices)
+			for _, index := range toolIndices {
+				tc := toolCalls[index]
 				var input map[string]any
 				if err := json.Unmarshal([]byte(tc.args.String()), &input); err != nil {
 					input = map[string]any{"_error": "failed to parse arguments", "raw": tc.args.String()}
@@ -620,6 +846,7 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 
 			// Handle reasoning content (thinking blocks)
 			if event.ReasoningContent != "" {
+				stopText()
 				if recordPayloads {
 					fullReasoning.WriteString(event.ReasoningContent)
 				}
@@ -691,15 +918,17 @@ func (h *BridgeHandler) streamAnthropic(ctx context.Context, w http.ResponseWrit
 			// Handle tool calls
 			if len(event.ToolCalls) > 0 {
 				stopThinking()
+				stopText()
 			}
-			for _, tc := range event.ToolCalls {
+			deltas := append([]ToolCallDelta(nil), event.ToolCalls...)
+			sort.SliceStable(deltas, func(i, j int) bool {
+				return deltas[i].Index < deltas[j].Index
+			})
+			for _, tc := range deltas {
 				toolState, ok := state.toolBlocks[tc.Index]
 				if !ok {
 					// New tool call
-					id := tc.ID
-					if id == "" {
-						id = "toolu_" + newUUID()[:24]
-					}
+					id := normalizeAnthropicToolID(tc.ID)
 					state.toolBlockCounter++
 					toolState = &toolBlockState{
 						id:         id,
@@ -847,8 +1076,10 @@ func mapFinishReason(reason string) string {
 		return "max_tokens"
 	case "tool_calls":
 		return "tool_use"
+	case "function_call":
+		return "tool_use"
 	case "content_filter":
-		return "stop_sequence"
+		return "end_turn"
 	default:
 		return "end_turn"
 	}
@@ -911,10 +1142,7 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 			}
 			for _, tc := range event.ToolCalls {
 				if toolCalls[tc.Index] == nil {
-					toolCalls[tc.Index] = &toolCallState{id: tc.ID}
-				}
-				if tc.ID != "" {
-					toolCalls[tc.Index].id = tc.ID
+					toolCalls[tc.Index] = &toolCallState{id: normalizeAnthropicToolID(tc.ID)}
 				}
 				if tc.Name != "" {
 					toolCalls[tc.Index].name = tc.Name
@@ -988,10 +1216,14 @@ func (h *BridgeHandler) nonStreamAnthropic(ctx context.Context, w http.ResponseW
 	}
 
 	// Add tool_use content blocks
-	for _, tc := range toolCalls {
-		if tc.id == "" {
-			tc.id = "toolu_" + newUUID()[:24]
-		}
+	toolIndices := make([]int, 0, len(toolCalls))
+	for index := range toolCalls {
+		toolIndices = append(toolIndices, index)
+	}
+	sort.Ints(toolIndices)
+	for _, index := range toolIndices {
+		tc := toolCalls[index]
+		tc.id = normalizeAnthropicToolID(tc.id)
 		var input map[string]any
 		if tc.args.Len() > 0 {
 			if err := json.Unmarshal([]byte(tc.args.String()), &input); err != nil {

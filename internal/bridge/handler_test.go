@@ -307,6 +307,76 @@ func TestBridgeHandler_HandleAnthropicMessages_ToolUseDoneFinalizes(t *testing.T
 	}
 }
 
+func TestBridgeHandler_AnthropicStreamClosesTextBeforeToolsAndOrdersTools(t *testing.T) {
+	handler := NewBridgeHandler(&auth.Session{CosyKey: "test-key"}, func(*proto.GatewayLog) {})
+	handler.client.client.Transport = &mockTransport{roundTripFunc: func(req *http.Request) (*http.Response, error) {
+		body := strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"before"}}]}`,
+			`data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_second","type":"function","function":{"name":"second","arguments":"{}"}},{"index":0,"id":"call_first","type":"function","function":{"name":"first","arguments":"{}"}}]}}]}`,
+			`data: [DONE]`,
+			``,
+		}, "\n\n")
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	}}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{
+		"model":"claude-3-opus-20240229",
+		"messages":[{"role":"user","content":"run both"}],
+		"tools":[
+			{"name":"first","input_schema":{"type":"object"}},
+			{"name":"second","input_schema":{"type":"object"}}
+		],
+		"max_tokens":1024,
+		"stream":true
+	}`))
+	w := httptest.NewRecorder()
+	handler.HandleAnthropicMessages(w, req)
+
+	type eventRecord struct {
+		name string
+		data map[string]any
+	}
+	var events []eventRecord
+	for _, chunk := range strings.Split(w.Body.String(), "\n\n") {
+		lines := strings.Split(strings.TrimSpace(chunk), "\n")
+		if len(lines) < 2 || !strings.HasPrefix(lines[0], "event: ") || !strings.HasPrefix(lines[1], "data: ") {
+			continue
+		}
+		var data map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(lines[1], "data: ")), &data); err != nil {
+			t.Fatalf("invalid Anthropic SSE data %q: %v", lines[1], err)
+		}
+		events = append(events, eventRecord{name: strings.TrimPrefix(lines[0], "event: "), data: data})
+	}
+
+	var textStop, firstToolStart, firstToolStop, secondToolStop int = -1, -1, -1, -1
+	for i, event := range events {
+		switch event.name {
+		case "content_block_stop":
+			index, _ := event.data["index"].(float64)
+			switch int(index) {
+			case 0:
+				textStop = i
+			case 1:
+				firstToolStop = i
+			case 2:
+				secondToolStop = i
+			}
+		case "content_block_start":
+			block, _ := event.data["content_block"].(map[string]any)
+			if block["type"] == "tool_use" && firstToolStart == -1 {
+				firstToolStart = i
+			}
+		}
+	}
+	if textStop == -1 || firstToolStart == -1 || firstToolStop == -1 || secondToolStop == -1 {
+		t.Fatalf("missing expected block lifecycle events: %+v", events)
+	}
+	if !(textStop < firstToolStart && firstToolStop < secondToolStop) {
+		t.Fatalf("invalid block ordering: text_stop=%d first_tool_start=%d first_tool_stop=%d second_tool_stop=%d", textStop, firstToolStart, firstToolStop, secondToolStop)
+	}
+}
+
 func TestBridgeHandler_ThinkingFallbackAcrossEndpoints(t *testing.T) {
 	t.Setenv("LINGMA_THINKING_FALLBACK", "true")
 	t.Setenv("LINGMA_THINKING_FALLBACK_TTL", "2m")
@@ -1084,6 +1154,84 @@ func TestBridgeHandler_OpenAINonStreamAggregatesNativeToolCalls(t *testing.T) {
 	}
 }
 
+func TestBridgeHandler_OpenAINonStreamGeneratesStableToolIDWhenUpstreamOmitsIt(t *testing.T) {
+	handler := NewBridgeHandler(&auth.Session{CosyKey: "test-key"}, func(*proto.GatewayLog) {})
+	mockResp := strings.Join([]string{
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"type":"function","function":{"name":"read_file","arguments":""}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_late","function":{"arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n\n")
+	handler.client.client.Transport = &mockTransport{roundTripFunc: func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(mockResp)), Header: make(http.Header)}, nil
+	}}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"gpt-4",
+		"messages":[{"role":"user","content":"Read README"}],
+		"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}}],
+		"stream":false
+	}`))
+	w := httptest.NewRecorder()
+	handler.HandleOpenAIChat(w, req)
+	var response struct {
+		Choices []struct {
+			Message struct {
+				ToolCalls []struct {
+					ID string `json:"id"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+	}
+	if len(response.Choices) != 1 || len(response.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("tool calls = %#v", response.Choices)
+	}
+	id := response.Choices[0].Message.ToolCalls[0].ID
+	if !strings.HasPrefix(id, "call_") || id == "call_late" {
+		t.Fatalf("tool ID = %q, want stable generated call_* ID", id)
+	}
+}
+
+func TestBridgeHandler_AnthropicNonStreamNormalizesToolID(t *testing.T) {
+	handler := NewBridgeHandler(&auth.Session{CosyKey: "test-key"}, func(*proto.GatewayLog) {})
+	mockResp := strings.Join([]string{
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"bad id/1","function":{"name":"read_file","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n\n")
+	handler.client.client.Transport = &mockTransport{roundTripFunc: func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(mockResp)), Header: make(http.Header)}, nil
+	}}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{
+		"model":"claude-3-opus-20240229",
+		"messages":[{"role":"user","content":"Read README"}],
+		"tools":[{"name":"read_file","input_schema":{"type":"object"}}],
+		"max_tokens":1024,
+		"stream":false
+	}`))
+	w := httptest.NewRecorder()
+	handler.HandleAnthropicMessages(w, req)
+	var response struct {
+		Content []struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+	}
+	if len(response.Content) != 1 || response.Content[0].Type != "tool_use" {
+		t.Fatalf("content = %#v", response.Content)
+	}
+	if response.Content[0].ID != "bad_id_1" {
+		t.Fatalf("tool ID = %q, want sanitized bad_id_1", response.Content[0].ID)
+	}
+}
+
 func TestBridgeHandler_HandleAnthropicMessages_WithTools(t *testing.T) {
 	session := &auth.Session{CosyKey: "test-key"}
 	var capturedBody map[string]any
@@ -1130,6 +1278,9 @@ func TestBridgeHandler_HandleAnthropicMessages_WithTools(t *testing.T) {
 		"tools": [
 			{"name": "get_weather", "description": "Get weather", "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}}}
 		],
+		"top_p": 0.7,
+		"stop_sequences": ["STOP", "<END>"],
+		"tool_choice": {"type": "tool", "name": "get_weather"},
 		"max_tokens": 1024,
 		"stream": true
 	}`
@@ -1166,6 +1317,21 @@ func TestBridgeHandler_HandleAnthropicMessages_WithTools(t *testing.T) {
 	m3 := messages[2].(map[string]any)
 	if m3["role"] != "tool" || m3["tool_call_id"] != "tu_1" {
 		t.Errorf("Message 3 translation incorrect: %v", m3)
+	}
+
+	params, ok := capturedBody["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters missing from translated body: %#v", capturedBody["parameters"])
+	}
+	if params["top_p"] != 0.7 {
+		t.Errorf("top_p = %#v, want 0.7", params["top_p"])
+	}
+	if got, ok := params["stop"].([]any); !ok || len(got) != 2 || got[0] != "STOP" || got[1] != "<END>" {
+		t.Errorf("stop = %#v, want both stop sequences", params["stop"])
+	}
+	choice, ok := capturedBody["tool_choice"].(map[string]any)
+	if !ok || choice["type"] != "function" {
+		t.Errorf("tool_choice = %#v, want OpenAI function choice", capturedBody["tool_choice"])
 	}
 }
 

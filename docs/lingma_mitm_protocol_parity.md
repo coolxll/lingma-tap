@@ -88,7 +88,52 @@ reasoning=false -> agent_id=agent_common, model_config.source=""
 
 这些差异尚未被证明是基础调用的阻断因素，但会影响协议保真度和后续兼容性。
 
-### 3.4 Header 与响应
+### 3.4 视觉输入（Vision）
+
+视觉请求必须显式启用上游的 Vision 标志。仅在消息内容中传递 OpenAI 兼容的
+`image_url` 并不足够；`model_config.is_vl` 必须为 `true`：
+
+```json
+{
+  "model_config": {
+    "key": "org_auto",
+    "is_vl": true,
+    "is_reasoning": false
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Describe the image."},
+        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
+      ]
+    }
+  ]
+}
+```
+
+**修正说明：** 现有严格测试表明，仅设置 `is_vl=true` 并传递 data URI 并不足以
+可靠地完成视觉请求。`is_vl=true` 是必要条件，但不是充分条件。实测 `gm51model`
+会忽略图片并编造结果，`mmodel` 会 EOF 或声明无法看图。完整的视觉链路还需要：
+图片上传到 Lingma CDN、在请求顶层写入 `image_urls`、在用户消息的 `parts` 中
+引用 CDN URL。因此，图片请求选择 `IsVL=false` 模型时应返回 400，不自动换模型。
+
+已通过真实上游请求验证：同一个 `org_auto` 请求分别发送红色和蓝色图片时，
+`is_vl=false` 会把两张图片都回答为蓝色；设置 `is_vl=true` 后能分别正确回答
+红色和蓝色。上游模型列表当前标记 `org_auto`、`dashscope_qmodel`、
+`qmodel_latest` 和 `kmodel` 的 `is_vl=true`，而 `gm51model` 与 `mmodel` 为
+`false`。
+
+当前 `BuildLingmaBody` 在
+[`internal/bridge/client.go`](../internal/bridge/client.go) 中固定写入
+`"is_vl": false`，因此视觉能力尚未端到端接通。后续实现需要在入站消息含有
+图片内容时设置 `is_vl=true`，同时保留 `image_url` 内容；Anthropic Messages
+的图片 source 也必须转换为对应的上游 `image_url`，不能丢弃图片 block。
+
+约 1 MB 的原始 Bing 壁纸直传时曾收到上游内层 `406 Session blocked`；缩放压缩
+后请求成功。该现象目前只作为观测记录，不能据此断言固定的图片大小上限。
+
+### 3.5 Header 与响应
 
 当前实现覆盖了核心鉴权、编码和请求路径。原生客户端还会发送 `Cosy-Bodyhash`、`Cosy-Bodylength`、`Cosy-Sigpath`、`X-Request-Id`、`X-Model-*` 及设备/组织相关 Header。
 

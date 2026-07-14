@@ -194,6 +194,18 @@ func TestParseSSEData(t *testing.T) {
 			},
 		},
 		{
+			name: "finish event is recognized when duration is zero",
+			data: `{"firstTokenDuration":0,"totalDuration":0,"serverDuration":0}`,
+			check: func(t *testing.T, events []SSEEvent, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if len(events) != 1 || events[0].Type != "finish" {
+					t.Fatalf("events = %#v, want one finish event", events)
+				}
+			},
+		},
+		{
 			name: "direct openAI format",
 			data: `{"choices":[{"delta":{"content":" direct"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`,
 			check: func(t *testing.T, events []SSEEvent, err error) {
@@ -1120,6 +1132,20 @@ func TestOpenaiIsReasoning(t *testing.T) {
 	}
 }
 
+func TestOpenaiIsReasoningForModel_DefaultCommonModelsDisabled(t *testing.T) {
+	for _, model := range []string{"kmodel", "mmodel"} {
+		if got := openaiIsReasoningForModel(model, ""); got {
+			t.Errorf("openaiIsReasoningForModel(%q, empty) = true, want false", model)
+		}
+	}
+	if !openaiIsReasoningForModel("kmodel", "medium") {
+		t.Error("explicit reasoning_effort should enable reasoning for kmodel")
+	}
+	if !openaiIsReasoningForModel("gm51model", "") {
+		t.Error("generic model default should retain existing reasoning behavior")
+	}
+}
+
 func TestBuildLingmaBody_Params(t *testing.T) {
 	messages := []map[string]any{{"role": "user", "content": "hello"}}
 	tools := []map[string]any{{"type": "function", "function": map[string]any{"name": "test"}}}
@@ -1154,6 +1180,50 @@ func TestBuildLingmaBody_Params(t *testing.T) {
 	}
 	if body2["tool_choice"] != nil {
 		t.Errorf("tool_choice should be nil when not provided, got %v", body2["tool_choice"])
+	}
+
+	body3 := BuildLingmaBody(messages, nil, "model1", map[string]any{}, rawJSON, false, nil)
+	params, ok := body3["parameters"].(map[string]any)
+	if !ok || params["temperature"] != 0.1 {
+		t.Fatalf("empty params = %#v, want default temperature 0.1", body3["parameters"])
+	}
+}
+
+func TestBuildLingmaBody_MergesReasoningContentIntoThought(t *testing.T) {
+	messages := []map[string]any{
+		{"role": "assistant", "content": "answer", "reasoning_content": "previous plan"},
+		{"role": "user", "content": "continue"},
+	}
+	body := BuildLingmaBody(messages, nil, "gm51model", nil, nil, true, nil)
+	converted, ok := body["messages"].([]map[string]any)
+	if !ok {
+		t.Fatalf("messages = %#v, want []map[string]any", body["messages"])
+	}
+	if got := converted[0]["content"]; got != "<thought>previous plan</thought>\nanswer" {
+		t.Fatalf("merged content = %#v", got)
+	}
+	if _, exists := converted[0]["reasoning_content"]; exists {
+		t.Fatalf("reasoning_content should be consumed by Lingma content: %#v", converted[0])
+	}
+}
+
+func TestBuildLingmaBody_MergesReasoningContentBeforeMultimodalParts(t *testing.T) {
+	messages := []map[string]any{{
+		"role": "assistant",
+		"content": []map[string]any{
+			{"type": "image_url", "image_url": map[string]any{"url": "https://example.com/a.png"}},
+		},
+		"reasoning_content": "inspect image",
+	}}
+	body := BuildLingmaBody(messages, nil, "gm51model", nil, nil, true, nil)
+	converted := body["messages"].([]map[string]any)
+	parts, ok := converted[0]["content"].([]any)
+	if !ok || len(parts) != 2 {
+		t.Fatalf("multimodal merged content = %#v", converted[0]["content"])
+	}
+	thought, ok := parts[0].(map[string]any)
+	if !ok || thought["text"] != "<thought>inspect image</thought>" {
+		t.Fatalf("thought part = %#v", parts[0])
 	}
 }
 

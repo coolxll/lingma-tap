@@ -217,7 +217,7 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 	if req.Reasoning != nil && req.Reasoning.Effort != "" {
 		reasoningEffort = req.Reasoning.Effort
 	}
-	isReasoning := openaiIsReasoning(reasoningEffort)
+	isReasoning := openaiIsReasoningForModel(modelKey, reasoningEffort)
 
 	// Parse tool_choice
 	var toolChoice any

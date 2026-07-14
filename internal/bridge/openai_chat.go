@@ -181,7 +181,7 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Determine is_reasoning from reasoning_effort
-	isReasoning := openaiIsReasoning(req.ReasoningEffort)
+	isReasoning := openaiIsReasoningForModel(modelKey, req.ReasoningEffort)
 
 	// Build Lingma body
 	body := BuildLingmaBody(req.Messages, req.Tools, modelKey, params, rawBody, isReasoning, req.ToolChoice)
@@ -320,13 +320,12 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 			if len(event.ToolCalls) > 0 {
 				var toolCalls []map[string]any
 				for _, tc := range event.ToolCalls {
-					// Generate stable ID for new tool calls
-					if tc.ID != "" {
-						toolCallIDs[tc.Index] = tc.ID
-					}
-					tcID := toolCallIDs[tc.Index]
-					if tcID == "" {
-						tcID = "call_" + newUUID()[:24]
+					// Lock the first ID for each index. Some upstreams send a
+					// generated/missing ID first and a different late ID later;
+					// changing it would break tool-result correlation.
+					tcID, exists := toolCallIDs[tc.Index]
+					if !exists {
+						tcID = normalizeOpenAIToolID(tc.ID)
 						toolCallIDs[tc.Index] = tcID
 					}
 					if tc.Name != "" {
@@ -584,10 +583,7 @@ func (h *BridgeHandler) nonStreamOpenAIChat(ctx context.Context, w http.Response
 				}
 				for _, tc := range event.ToolCalls {
 					if toolCalls[tc.Index] == nil {
-						toolCalls[tc.Index] = &toolCallState{id: tc.ID}
-					}
-					if tc.ID != "" {
-						toolCalls[tc.Index].id = tc.ID
+						toolCalls[tc.Index] = &toolCallState{id: normalizeOpenAIToolID(tc.ID)}
 					}
 					if tc.Name != "" {
 						toolCalls[tc.Index].name = tc.Name
@@ -746,6 +742,13 @@ type toolCallState struct {
 	outputIndex int
 }
 
+func normalizeOpenAIToolID(id string) string {
+	if id = strings.TrimSpace(id); id != "" {
+		return id
+	}
+	return "call_" + newUUID()[:24]
+}
+
 // resolveModelKey dynamically maps a requested model string to a Lingma model key
 // by checking the fetched models' keys and display names.
 func (h *BridgeHandler) resolveModelKey(ctx context.Context, model string) string {
@@ -835,6 +838,13 @@ func openaiIsReasoning(effort string) bool {
 	default:
 		return true
 	}
+}
+
+func openaiIsReasoningForModel(modelKey, effort string) bool {
+	if strings.TrimSpace(effort) == "" && (modelKey == "kmodel" || modelKey == "mmodel") {
+		return false
+	}
+	return openaiIsReasoning(effort)
 }
 
 func escapeJSON(s string) string {
