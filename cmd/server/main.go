@@ -114,6 +114,10 @@ func (s *Server) buildBridge(creds *auth.Credentials) *bridge.BridgeHandler {
 	if s.Debug {
 		bh.SetDebug(true)
 	}
+	// Inject ResponsesStateStore for multi-turn conversation support
+	if s.DB != nil {
+		bh.SetResponsesStateStore(storage.NewResponsesStateStore(s.DB))
+	}
 	s.loadModelMapping(bh)
 	log.Printf("[server] Bridge initialized for user %s", creds.Name)
 	return bh

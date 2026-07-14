@@ -876,14 +876,40 @@ func TestBridgeHandler_OpenAIResponsesStreamToolCallKeepsFirstArgsAndIndex(t *te
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	body := string(bodyBytes)
 	var doneEvent map[string]any
+	var firstItemID string
+	var firstCallID string
 	for _, chunk := range strings.Split(body, "\n\n") {
 		chunk = strings.TrimSpace(chunk)
 		if chunk == "" {
 			continue
 		}
+		// Extract JSON from SSE "event: ...\ndata: ..." format
+		var jsonLine string
+		for _, line := range strings.Split(chunk, "\n") {
+			if strings.HasPrefix(line, "data: ") {
+				jsonLine = strings.TrimPrefix(line, "data: ")
+				break
+			}
+		}
+		if jsonLine == "" {
+			continue
+		}
 		var event map[string]any
-		if err := json.Unmarshal([]byte(chunk), &event); err != nil {
-			t.Fatalf("invalid SSE JSON chunk %q: %v\nfull body:\n%s", chunk, err, body)
+		if err := json.Unmarshal([]byte(jsonLine), &event); err != nil {
+			t.Fatalf("invalid SSE JSON in data line %q: %v\nfull body:\n%s", jsonLine, err, body)
+		}
+		// Capture the first-generated call_id from output_item.added
+		if event["type"] == "response.output_item.added" {
+			item, _ := event["item"].(map[string]any)
+			if item["type"] == "function_call" && firstItemID == "" {
+				firstItemID, _ = item["id"].(string)
+				firstCallID, _ = item["call_id"].(string)
+			}
+		}
+		if event["type"] == "response.function_call_arguments.done" {
+			if got := event["name"]; got != "read_file" {
+				t.Fatalf("function_call arguments done name = %v, want read_file", got)
+			}
 		}
 		if event["type"] != "response.output_item.done" {
 			continue
@@ -897,12 +923,16 @@ func TestBridgeHandler_OpenAIResponsesStreamToolCallKeepsFirstArgsAndIndex(t *te
 	if doneEvent == nil {
 		t.Fatalf("function_call done event not found in body:\n%s", body)
 	}
-	if got := doneEvent["index"]; got != float64(1) {
-		t.Fatalf("function_call done index = %v, want 1; body:\n%s", got, body)
+	if firstItemID == "" || firstCallID == "" {
+		t.Fatalf("first function call identifiers not captured from output_item.added events: item_id=%q call_id=%q", firstItemID, firstCallID)
 	}
 	item := doneEvent["item"].(map[string]any)
-	if got := item["id"]; got != "call_late" {
-		t.Fatalf("function_call id = %v, want call_late", got)
+	// Neither identifier is allowed to change after the first output item event.
+	if got := item["id"]; got != firstItemID {
+		t.Fatalf("function_call item id = %v, want first-generated %v", got, firstItemID)
+	}
+	if got := item["call_id"]; got != firstCallID {
+		t.Fatalf("function_call call_id = %v, want first-generated %v (late call_late should be ignored)", got, firstCallID)
 	}
 	if got := item["arguments"]; got != `{"path":"README.md"}` {
 		t.Fatalf("function_call arguments = %v, want first and later chunks joined", got)

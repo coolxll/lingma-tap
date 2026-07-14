@@ -24,6 +24,7 @@ type BridgeHandler struct {
 	thinkingFallback        *oneShotTTLSet
 	thinkingFallbackTTL     time.Duration
 	thinkingFallbackEnabled bool
+	responsesStore          ResponsesStateStore
 	Debug                   bool
 }
 
@@ -103,6 +104,11 @@ func (h *BridgeHandler) SetDebug(debug bool) {
 	if h.client != nil {
 		h.client.Debug = debug
 	}
+}
+
+// SetResponsesStateStore sets the state store for multi-turn conversation support.
+func (h *BridgeHandler) SetResponsesStateStore(store ResponsesStateStore) {
+	h.responsesStore = store
 }
 
 func (h *BridgeHandler) SetLingmaHTTP2(enabled bool) {
