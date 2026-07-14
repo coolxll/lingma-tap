@@ -788,6 +788,28 @@ func writeOpenAIError(w http.ResponseWriter, status int, message string) {
 	fmt.Fprintf(w, `{"error":{"message":"%s","type":"invalid_request_error"}}`, escapeJSON(message))
 }
 
+// writeResponsesError writes an error response in OpenAI Responses API format.
+func writeResponsesError(w http.ResponseWriter, status int, errType, code, message, param string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	resp := map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    errType,
+			"message": message,
+		},
+	}
+	errObj := resp["error"].(map[string]any)
+	if code != "" {
+		errObj["code"] = code
+	}
+	if param != "" {
+		errObj["param"] = param
+	}
+	jsonBytes, _ := json.Marshal(resp)
+	w.Write(jsonBytes)
+}
+
 func writeSSE(w http.ResponseWriter, prefix string, data any) {
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {

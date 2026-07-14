@@ -178,6 +178,11 @@ func (a *App) buildBridge(creds *auth.Credentials) *bridge.BridgeHandler {
 	a.mu.Unlock()
 	handler.SetLingmaHTTP2(lingmaHTTP2)
 
+	// Inject ResponsesStateStore for multi-turn conversation support
+	if a.db != nil {
+		handler.SetResponsesStateStore(storage.NewResponsesStateStore(a.db))
+	}
+
 	mappingJSON := ""
 	defaultModel := ""
 	if a.db != nil {

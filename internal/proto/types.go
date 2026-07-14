@@ -94,6 +94,11 @@ type GatewayLog struct {
 	ReasoningOnlyBytes int        `json:"reasoning_only_bytes,omitempty" db:"reasoning_only_bytes"`
 	RequestedProfile   string     `json:"requested_profile,omitempty" db:"requested_profile"`
 	EffectiveProfile   string     `json:"effective_profile,omitempty" db:"effective_profile"`
+	ContextTrimmed     bool       `json:"context_trimmed,omitempty" db:"context_trimmed"`
+	ContextOriginalBytes int      `json:"context_original_bytes,omitempty" db:"context_original_bytes"`
+	ContextTrimmedBytes  int      `json:"context_trimmed_bytes,omitempty" db:"context_trimmed_bytes"`
+	ResponsesDegraded  bool       `json:"responses_degraded,omitempty" db:"responses_degraded"`
+	ResponsesWarnings  string     `json:"responses_warnings,omitempty" db:"responses_warnings"`
 	Status             int        `json:"status" db:"status"`
 	Latency            int64      `json:"latency" db:"latency"` // ms
 	Error              string     `json:"error,omitempty" db:"error"`

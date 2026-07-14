@@ -230,7 +230,7 @@ func recordsFromRawJSON(raws []string) []proto.Record {
 	return records
 }
 
-// ClearTraffic deletes all records, sessions, and gateway logs.
+// ClearTraffic deletes all records, sessions, gateway logs, and responses state.
 func (d *DB) ClearTraffic() error {
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
@@ -248,6 +248,9 @@ func (d *DB) ClearTraffic() error {
 		return err
 	}
 	if _, err := tx.Exec("DELETE FROM gateway_logs"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM responses_state"); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -313,11 +316,18 @@ func (d *DB) ClearTrafficBefore(beforeDate string) (int, error) {
 	}
 	gatewayDeleted, _ := result.RowsAffected()
 
+	// Delete old responses state
+	result, err = tx.Exec("DELETE FROM responses_state WHERE created_at < ?", beforeDate)
+	if err != nil {
+		return 0, err
+	}
+	responsesDeleted, _ := result.RowsAffected()
+
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 
-	return int(proxyDeleted + gatewayDeleted), nil
+	return int(proxyDeleted + gatewayDeleted + responsesDeleted), nil
 }
 
 // ListSessions returns sessions ordered by last_ts descending.
@@ -403,11 +413,15 @@ func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
 			input_tokens, output_tokens, cached_tokens, reasoning_tokens, total_tokens, ttft,
 			upstream_attempts, recovery_applied, upstream_error_class, first_actionable_ms,
 			reasoning_only_bytes, requested_profile, effective_profile,
+			context_trimmed, context_original_bytes, context_trimmed_bytes,
+			responses_degraded, responses_warnings,
 			status, latency, error, is_sse, sse_events_json, finish_reason)
 		VALUES (:ts, :session, :model, :method, :path, :request_body, :response_body,
 			:input_tokens, :output_tokens, :cached_tokens, :reasoning_tokens, :total_tokens, :ttft,
 			:upstream_attempts, :recovery_applied, :upstream_error_class, :first_actionable_ms,
 			:reasoning_only_bytes, :requested_profile, :effective_profile,
+			:context_trimmed, :context_original_bytes, :context_trimmed_bytes,
+			:responses_degraded, :responses_warnings,
 			:status, :latency, :error, :is_sse, :sse_events_json, :finish_reason)
 		ON CONFLICT(session) DO UPDATE SET
 			model = excluded.model,
@@ -428,6 +442,11 @@ func (d *DB) SaveGatewayLog(log *proto.GatewayLog) error {
 			`+preserveOnPartialUpdate("reasoning_only_bytes", "status")+`,
 			`+preserveOnPartialUpdate("requested_profile", "status")+`,
 			`+preserveOnPartialUpdate("effective_profile", "status")+`,
+			context_trimmed = excluded.context_trimmed,
+			context_original_bytes = excluded.context_original_bytes,
+			context_trimmed_bytes = excluded.context_trimmed_bytes,
+			responses_degraded = excluded.responses_degraded,
+			responses_warnings = excluded.responses_warnings,
 			`+preserveOnPartialUpdate("status", "status")+`,
 			`+preserveOnPartialUpdate("latency", "latency")+`,
 			`+preserveOnPartialUpdate("error", "status")+`,
@@ -451,6 +470,8 @@ func (d *DB) RecentGatewayLogs(limit int, offset ...int) ([]proto.GatewayLog, er
 			input_tokens, output_tokens, cached_tokens, reasoning_tokens, total_tokens, ttft,
 			upstream_attempts, recovery_applied, upstream_error_class, first_actionable_ms,
 			reasoning_only_bytes, requested_profile, effective_profile,
+			context_trimmed, context_original_bytes, context_trimmed_bytes,
+			responses_degraded, responses_warnings,
 			status, latency, error, is_sse, sse_events_json, finish_reason
 		FROM gateway_logs ORDER BY id DESC LIMIT ? OFFSET ?
 	`, limit, off)
