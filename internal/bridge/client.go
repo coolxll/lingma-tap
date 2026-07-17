@@ -49,6 +49,8 @@ type LingmaClient struct {
 	mu                      sync.RWMutex
 	session                 *auth.Session
 	client                  *http.Client
+	visionUploadURL         string
+	visionFetcher           func(context.Context, string) ([]byte, string, error)
 	maxAttempts             int
 	retryBaseDelay          time.Duration
 	firstActionableTimeout  time.Duration
@@ -70,8 +72,14 @@ type streamState struct {
 func NewLingmaClient(session *auth.Session) *LingmaClient {
 	maxAttempts, retryBaseDelay, firstActionableTimeout := loadLingmaUpstreamRetryConfig()
 	thinkingRecoveryEnabled, _ := loadLingmaThinkingFallbackConfig()
+	visionUploadURL := strings.TrimSpace(os.Getenv("LINGMA_IMAGE_UPLOAD_URL"))
+	if visionUploadURL == "" {
+		visionUploadURL = lingmaImageUploadURL
+	}
 	return &LingmaClient{
 		session:                 session,
+		visionUploadURL:         visionUploadURL,
+		visionFetcher:           fetchRemoteVisionImage,
 		maxAttempts:             maxAttempts,
 		retryBaseDelay:          retryBaseDelay,
 		firstActionableTimeout:  firstActionableTimeout,
@@ -1013,9 +1021,17 @@ func (s *streamState) splitThoughtTags(content string) []SSEEvent {
 
 // BuildLingmaBody constructs the full Lingma request body from translated fields.
 // rawRequestJSON is used to derive a deterministic session_id; pass nil to use a random UUID.
-// isReasoning controls model_config.is_reasoning.
-// toolChoice is the tool_choice field (may be nil).
-func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey string, params map[string]any, rawRequestJSON []byte, isReasoning bool, toolChoice any) map[string]any {
+// LingmaBodyOptions controls request metadata that is independent from the
+// translated messages and sampling parameters.
+type LingmaBodyOptions struct {
+	IsReasoning bool
+	IsVL        bool
+	ImageURLs   []string
+	ModelInfo   *ModelInfo
+	ToolChoice  any
+}
+
+func BuildLingmaBodyWithOptions(messages []map[string]any, tools []map[string]any, modelKey string, params map[string]any, rawRequestJSON []byte, options LingmaBodyOptions) map[string]any {
 	requestID := newUUID()
 	messages = mergeReasoningContentIntoMessages(messages)
 
@@ -1035,7 +1051,7 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 		agentID = "agent_common"
 		modelConfigSource = ""
 	default:
-		if isReasoning {
+		if options.IsReasoning {
 			agentID = "agent_chat"
 			modelConfigSource = "system"
 		} else {
@@ -1044,45 +1060,67 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 		}
 	}
 
+	var imageURLs any
+	if len(options.ImageURLs) > 0 {
+		imageURLs = append([]string(nil), options.ImageURLs...)
+	}
+	requestSetID := ""
+	taskID := "question_refine"
+	source := 0
+	modelConfig := map[string]any{
+		"key":                   modelKey,
+		"display_name":          "",
+		"model":                 "",
+		"format":                "",
+		"is_vl":                 options.IsVL,
+		"is_reasoning":          options.IsReasoning,
+		"api_key":               "",
+		"url":                   "",
+		"source":                modelConfigSource,
+		"max_input_tokens":      0,
+		"enable":                false,
+		"price_factor":          0,
+		"original_price_factor": 0,
+		"is_default":            false,
+		"is_new":                false,
+		"exclude_tags":          nil,
+		"tags":                  nil,
+		"icon":                  nil,
+		"strategies":            nil,
+	}
+	if options.IsVL {
+		// Native VL requests use the common task route and a fully populated
+		// model configuration. The upstream silently treats the request as
+		// text-only when only is_vl/image_urls are present.
+		requestSetID = requestID
+		taskID = "common"
+		source = 1
+		if options.ModelInfo != nil {
+			modelConfig["display_name"] = options.ModelInfo.DisplayName
+			modelConfig["format"] = options.ModelInfo.Format
+			modelConfig["source"] = options.ModelInfo.Source
+			modelConfig["max_input_tokens"] = options.ModelInfo.MaxInputTokens
+			modelConfig["enable"] = true
+		}
+	}
 	body := map[string]any{
 		"request_id":       requestID,
-		"request_set_id":   "",
+		"request_set_id":   requestSetID,
 		"chat_record_id":   requestID,
 		"stream":           true,
-		"image_urls":       nil,
+		"image_urls":       imageURLs,
 		"is_reply":         false,
 		"is_retry":         false,
 		"session_id":       sessionID,
 		"code_language":    "",
-		"source":           0,
+		"source":           source,
 		"version":          "3",
 		"chat_prompt":      "",
 		"aliyun_user_type": "enterprise_standard",
 		"agent_id":         agentID,
-		"task_id":          "question_refine",
-		"model_config": map[string]any{
-			"key":          modelKey,
-			"display_name": "",
-			"model":        "",
-			"format":       "",
-			// TODO(vision): implement Lingma image upload and VL request assembly; see docs/lingma_vision_support_plan.md.
-			"is_vl":                 false,
-			"is_reasoning":          isReasoning,
-			"api_key":               "",
-			"url":                   "",
-			"source":                modelConfigSource,
-			"max_input_tokens":      0,
-			"enable":                false,
-			"price_factor":          0,
-			"original_price_factor": 0,
-			"is_default":            false,
-			"is_new":                false,
-			"exclude_tags":          nil,
-			"tags":                  nil,
-			"icon":                  nil,
-			"strategies":            nil,
-		},
-		"messages": messages,
+		"task_id":          taskID,
+		"model_config":     modelConfig,
+		"messages":         messages,
 		"business": map[string]any{
 			"product":  "ide",
 			"version":  "0.11.0",
@@ -1093,6 +1131,10 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 			"name":     "api-bridge",
 			"relation": map[string]any{},
 		},
+	}
+	if options.IsVL {
+		body["chat_task"] = "common"
+		body["session_type"] = "assistant"
 	}
 
 	if len(params) > 0 {
@@ -1105,11 +1147,20 @@ func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey
 		body["tools"] = tools
 	}
 
-	if toolChoice != nil {
-		body["tool_choice"] = toolChoice
+	if options.ToolChoice != nil {
+		body["tool_choice"] = options.ToolChoice
 	}
 
 	return body
+}
+
+// BuildLingmaBody is kept as a compatibility wrapper for internal replay and
+// legacy tests. New request paths should use BuildLingmaBodyWithOptions.
+func BuildLingmaBody(messages []map[string]any, tools []map[string]any, modelKey string, params map[string]any, rawRequestJSON []byte, isReasoning bool, toolChoice any) map[string]any {
+	return BuildLingmaBodyWithOptions(messages, tools, modelKey, params, rawRequestJSON, LingmaBodyOptions{
+		IsReasoning: isReasoning,
+		ToolChoice:  toolChoice,
+	})
 }
 
 // mergeReasoningContentIntoMessages preserves prior-turn reasoning for Lingma,

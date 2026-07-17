@@ -227,6 +227,19 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
+
+	// Validate cheap request fields before reading or uploading image input.
+	preparedMessages, imageURLs, visionModel, visionErr := h.prepareVisionRequest(r.Context(), modelKey, messages)
+	if visionErr != nil {
+		errType := "invalid_request_error"
+		if visionErr.Status >= http.StatusInternalServerError {
+			errType = "server_error"
+		}
+		writeResponsesError(w, visionErr.Status, errType, visionErr.Code, visionErr.Error(), "input")
+		return
+	}
+	messages = preparedMessages
+
 	responseConfig := responsesResponseConfig{
 		MaxOutputTokens:   req.MaxOutputTokens,
 		ParallelToolCalls: true,
@@ -252,7 +265,13 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 	}
 	trimmedSize := trimmer.calculateSize(messages)
 
-	body := BuildLingmaBody(messages, tools, modelKey, params, rawBody, isReasoning, toolChoice)
+	body := BuildLingmaBodyWithOptions(messages, tools, modelKey, params, rawBody, LingmaBodyOptions{
+		IsReasoning: isReasoning,
+		IsVL:        len(imageURLs) > 0,
+		ImageURLs:   imageURLs,
+		ModelInfo:   visionModel,
+		ToolChoice:  toolChoice,
+	})
 	profile := inspectLingmaRequest(body, modelKey)
 	fallback := h.applyThinkingFallback("openai_responses", modelKey, rawBody, body, profile)
 	if !fallback.Applied {
@@ -417,6 +436,12 @@ func responsesBuildMessages(req *responsesRequest) ([]map[string]any, []string) 
 						},
 					},
 				})
+			} else {
+				marker := map[string]any{"type": "input_image"}
+				if fileID, _ := item["file_id"].(string); fileID != "" {
+					marker["file_id"] = fileID
+				}
+				messages = append(messages, map[string]any{"role": "user", "content": []map[string]any{marker}})
 			}
 
 		case "message":
@@ -462,6 +487,12 @@ func responsesBuildMessages(req *responsesRequest) ([]map[string]any, []string) 
 											"detail": detail,
 										},
 									})
+								} else {
+									marker := map[string]any{"type": "input_image"}
+									if fileID, _ := partMap["file_id"].(string); fileID != "" {
+										marker["file_id"] = fileID
+									}
+									chatContent = append(chatContent, marker)
 								}
 							}
 						}

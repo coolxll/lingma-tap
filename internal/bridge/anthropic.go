@@ -125,7 +125,23 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 	// Capture raw request JSON for deterministic session_id
 	rawReqJSON, _ := json.Marshal(rawReq)
 
-	body := BuildLingmaBody(messages, openAITools, modelKey, params, rawReqJSON, isReasoning, toolChoice)
+	preparedMessages, imageURLs, visionModel, visionErr := h.prepareVisionRequest(r.Context(), modelKey, messages)
+	if visionErr != nil {
+		errType := "invalid_request_error"
+		if visionErr.Status >= http.StatusInternalServerError {
+			errType = "api_error"
+		}
+		writeAnthropicError(w, visionErr.Status, errType, visionErr.Error())
+		return
+	}
+
+	body := BuildLingmaBodyWithOptions(preparedMessages, openAITools, modelKey, params, rawReqJSON, LingmaBodyOptions{
+		IsReasoning: isReasoning,
+		IsVL:        len(imageURLs) > 0,
+		ImageURLs:   imageURLs,
+		ModelInfo:   visionModel,
+		ToolChoice:  toolChoice,
+	})
 	profile := inspectLingmaRequest(body, modelKey)
 	fallback := h.applyThinkingFallback("anthropic_messages", modelKey, rawReqJSON, body, profile)
 	if !fallback.Applied {
@@ -343,9 +359,6 @@ func convertAnthropicContentPart(block map[string]any) (map[string]any, bool) {
 		return map[string]any{"type": "text", "text": text}, true
 	case "image":
 		url := anthropicSourceURL(block["source"])
-		if url == "" {
-			return nil, false
-		}
 		return map[string]any{
 			"type":      "image_url",
 			"image_url": map[string]any{"url": url},

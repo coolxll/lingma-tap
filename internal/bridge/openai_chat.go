@@ -183,8 +183,21 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 	// Determine is_reasoning from reasoning_effort
 	isReasoning := openaiIsReasoningForModel(modelKey, req.ReasoningEffort)
 
+	// Lingma only consumes images after they have been uploaded to its VL CDN.
+	preparedMessages, imageURLs, visionModel, visionErr := h.prepareVisionRequest(r.Context(), modelKey, req.Messages)
+	if visionErr != nil {
+		writeOpenAIError(w, visionErr.Status, visionErr.Error())
+		return
+	}
+
 	// Build Lingma body
-	body := BuildLingmaBody(req.Messages, req.Tools, modelKey, params, rawBody, isReasoning, req.ToolChoice)
+	body := BuildLingmaBodyWithOptions(preparedMessages, req.Tools, modelKey, params, rawBody, LingmaBodyOptions{
+		IsReasoning: isReasoning,
+		IsVL:        len(imageURLs) > 0,
+		ImageURLs:   imageURLs,
+		ModelInfo:   visionModel,
+		ToolChoice:  req.ToolChoice,
+	})
 	profile := inspectLingmaRequest(body, modelKey)
 	fallback := h.applyThinkingFallback("openai_chat", modelKey, rawBody, body, profile)
 	if !fallback.Applied {
