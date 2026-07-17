@@ -79,7 +79,7 @@ func (h *BridgeHandler) captureRequestBody(body map[string]any) string {
 	if !h.shouldRecordPayloads() {
 		return ""
 	}
-	b, _ := json.Marshal(body)
+	b, _ := json.Marshal(redactVisionLogValue(body))
 	return string(b)
 }
 

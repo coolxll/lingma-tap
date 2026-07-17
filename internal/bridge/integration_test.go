@@ -5,10 +5,12 @@ package bridge
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -17,8 +19,310 @@ import (
 
 	"github.com/coolxll/lingma-tap/internal/auth"
 	"github.com/coolxll/lingma-tap/internal/encoding"
+	"github.com/coolxll/lingma-tap/internal/proto"
 	"github.com/joho/godotenv"
 )
+
+func TestIntegration_VisionAuto(t *testing.T) {
+	if os.Getenv("LINGMA_VISION_E2E") != "1" {
+		t.Skip("set LINGMA_VISION_E2E=1 to run the real vision test")
+	}
+	imagePath := strings.TrimSpace(os.Getenv("LINGMA_VISION_IMAGE"))
+	if imagePath == "" {
+		t.Skip("set LINGMA_VISION_IMAGE to an image with an Eiffel Tower")
+	}
+	imageData, err := os.ReadFile(imagePath)
+	if err != nil {
+		t.Fatalf("read vision fixture: %v", err)
+	}
+	mimeType := http.DetectContentType(imageData)
+	dataURI := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(imageData)
+
+	creds, err := auth.LoadCredentials()
+	if err != nil {
+		t.Skip("Skipping: no local credentials found")
+	}
+	handler := NewBridgeHandler(auth.NewSession(creds), func(*proto.GatewayLog) {})
+	messages := []map[string]any{{
+		"role": "user",
+		"content": []map[string]any{
+			{"type": "text", "text": "只回答图片中的建筑名称。"},
+			{"type": "image_url", "image_url": map[string]any{"url": dataURI}},
+		},
+	}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	modelKey := strings.TrimSpace(os.Getenv("LINGMA_VISION_MODEL"))
+	if modelKey == "" {
+		modelKey = "qmodel_latest"
+	}
+	prepared, imageURLs, visionModel, visionErr := handler.prepareVisionRequest(ctx, modelKey, messages)
+	if visionErr != nil {
+		t.Fatalf("prepare vision request: %v", visionErr)
+	}
+	if len(imageURLs) != 1 || !strings.Contains(imageURLs[0], "lingma-vl.") {
+		t.Fatalf("unexpected uploaded image URLs: %#v", imageURLs)
+	}
+	body := BuildLingmaBodyWithOptions(prepared, nil, modelKey, nil, nil, LingmaBodyOptions{
+		IsVL:      true,
+		ImageURLs: imageURLs,
+		ModelInfo: visionModel,
+	})
+
+	var answer strings.Builder
+	err = handler.client.ChatStream(ctx, body, func(event SSEEvent) error {
+		answer.WriteString(event.Content)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("vision chat: %v", err)
+	}
+	if got := answer.String(); !strings.Contains(got, "埃菲尔") && !strings.Contains(strings.ToLower(got), "eiffel") {
+		t.Fatalf("model %s did not identify the Eiffel Tower: %q", modelKey, got)
+	}
+}
+
+// TestIntegration_VisionAllModels compares the live model capability metadata
+// with every model's actual upstream behavior. The normal bridge rejects image
+// requests for models whose IsVL flag is false; this test deliberately bypasses
+// that gate for the upstream probe so undocumented support is visible too.
+func TestIntegration_VisionAllModels(t *testing.T) {
+	if os.Getenv("LINGMA_VISION_ALL_E2E") != "1" {
+		t.Skip("set LINGMA_VISION_ALL_E2E=1 to probe every live model with an image")
+	}
+	imagePath := strings.TrimSpace(os.Getenv("LINGMA_VISION_IMAGE"))
+	if imagePath == "" {
+		t.Skip("set LINGMA_VISION_IMAGE to an image with an Eiffel Tower")
+	}
+	imageData, err := os.ReadFile(imagePath)
+	if err != nil {
+		t.Fatalf("read vision fixture: %v", err)
+	}
+	mimeType := http.DetectContentType(imageData)
+	dataURI := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(imageData)
+	messages := []map[string]any{{
+		"role": "user",
+		"content": []map[string]any{
+			{"type": "text", "text": "观察图片并严格只输出一行：建筑=<名称>;天空=<颜色>;云=<有/无>;树木=<有/无>;人物=<有/无>。不要根据文件名猜测。"},
+			{"type": "image_url", "image_url": map[string]any{"url": dataURI}},
+		},
+	}}
+
+	creds, err := auth.LoadCredentials()
+	if err != nil {
+		t.Skip("Skipping: no local credentials found")
+	}
+	handler := NewBridgeHandler(auth.NewSession(creds), func(*proto.GatewayLog) {})
+
+	listCtx, listCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	models, err := handler.fetchModelsWithCache(listCtx)
+	listCancel()
+	if err != nil {
+		t.Fatalf("fetch live model list: %v", err)
+	}
+	if len(models) == 0 {
+		t.Fatal("live model list is empty")
+	}
+
+	// Upload the fixture once and reuse the resulting Lingma VL URL for every
+	// model, so the comparison changes only the model metadata and model key.
+	uploadCtx, uploadCancel := context.WithTimeout(context.Background(), time.Minute)
+	prepared, imageURLs, prepareErr := handler.client.prepareVisionMessages(uploadCtx, messages)
+	uploadCancel()
+	if prepareErr != nil {
+		t.Fatalf("prepare shared vision fixture: %v", prepareErr)
+	}
+	if len(imageURLs) != 1 || !strings.Contains(imageURLs[0], "lingma-vl.") {
+		t.Fatalf("unexpected uploaded image URLs: %#v", imageURLs)
+	}
+
+	type probeResult struct {
+		model      ModelInfo
+		gateResult string
+		answer     string
+		streamErr  string
+		identified bool
+		detailsOK  bool
+	}
+	results := make([]probeResult, 0, len(models))
+	for i := range models {
+		model := models[i]
+		result := probeResult{model: model, gateResult: "allowed"}
+
+		if !model.IsVL {
+			_, _, _, requestErr := handler.prepareVisionRequest(context.Background(), model.Key, messages)
+			switch {
+			case requestErr == nil:
+				result.gateResult = "unexpectedly allowed"
+			case requestErr.Status == http.StatusBadRequest && requestErr.Code == "vision_model_unsupported":
+				result.gateResult = "rejected (vision_model_unsupported)"
+			default:
+				result.gateResult = fmt.Sprintf("rejected (%s: %s)", requestErr.Code, requestErr.Error())
+			}
+		}
+
+		body := BuildLingmaBodyWithOptions(prepared, nil, model.Key, nil, nil, LingmaBodyOptions{
+			IsReasoning: model.IsReasoning,
+			IsVL:        true,
+			ImageURLs:   imageURLs,
+			ModelInfo:   &model,
+		})
+		probeCtx, probeCancel := context.WithTimeout(context.Background(), 90*time.Second)
+		var answer strings.Builder
+		var sseErrors []string
+		err := handler.client.ChatStream(probeCtx, body, func(event SSEEvent) error {
+			answer.WriteString(event.Content)
+			if event.HasError {
+				sseErrors = append(sseErrors, fmt.Sprintf("%s/%s: %s", event.ErrorType, event.ErrorCode, event.ErrorMsg))
+			}
+			return nil
+		})
+		probeCancel()
+		result.answer = strings.TrimSpace(answer.String())
+		if err != nil {
+			result.streamErr = err.Error()
+		}
+		if len(sseErrors) > 0 {
+			if result.streamErr != "" {
+				result.streamErr += "; "
+			}
+			result.streamErr += strings.Join(sseErrors, "; ")
+		}
+		answerLower := strings.ToLower(result.answer)
+		result.identified = strings.Contains(result.answer, "埃菲尔") || strings.Contains(answerLower, "eiffel")
+		result.detailsOK = visionProbeDetailsMatched(result.answer)
+		results = append(results, result)
+
+		t.Logf("VL probe model=%s name=%q configured_vl=%t bridge_gate=%q identified=%t details_ok=%t answer=%q error=%q",
+			model.Key, model.DisplayName, model.IsVL, result.gateResult, result.identified, result.detailsOK,
+			truncateVisionProbeText(result.answer, 240), truncateVisionProbeText(result.streamErr, 240))
+	}
+
+	for _, result := range results {
+		if !result.model.IsVL {
+			continue
+		}
+		if result.streamErr != "" || !result.identified || !result.detailsOK {
+			t.Errorf("configured VL model %s failed probe: identified=%t details_ok=%t answer=%q error=%q",
+				result.model.Key, result.identified, result.detailsOK, result.answer, result.streamErr)
+		}
+	}
+}
+
+// TestIntegration_AnthropicVisionClientPath exercises the same streaming
+// Messages API shape used by Claude-compatible clients. The mapping mirrors the
+// current desktop settings so the test also exposes model-capability mismatches.
+func TestIntegration_AnthropicVisionClientPath(t *testing.T) {
+	if os.Getenv("LINGMA_ANTHROPIC_VISION_E2E") != "1" {
+		t.Skip("set LINGMA_ANTHROPIC_VISION_E2E=1 to test the Anthropic client image path")
+	}
+	imagePath := strings.TrimSpace(os.Getenv("LINGMA_VISION_IMAGE"))
+	if imagePath == "" {
+		t.Skip("set LINGMA_VISION_IMAGE to an image with an Eiffel Tower")
+	}
+	imageData, err := os.ReadFile(imagePath)
+	if err != nil {
+		t.Fatalf("read vision fixture: %v", err)
+	}
+	mimeType := http.DetectContentType(imageData)
+	imageBase64 := base64.StdEncoding.EncodeToString(imageData)
+
+	creds, err := auth.LoadCredentials()
+	if err != nil {
+		t.Skip("Skipping: no local credentials found")
+	}
+	handler := NewBridgeHandler(auth.NewSession(creds), func(*proto.GatewayLog) {})
+	handler.UpdateAnthropicMapping(map[string]string{
+		"sonnet": "gm51model",
+		"opus":   "qmodel_latest",
+		"haiku":  "dashscope_qmodel",
+	}, "dashscope_qmodel")
+
+	tests := []struct {
+		name       string
+		model      string
+		wantStatus int
+		wantVision bool
+	}{
+		{name: "current_sonnet_mapping", model: "claude-sonnet-4-5", wantStatus: http.StatusBadRequest},
+		{name: "current_opus_mapping", model: "claude-opus-4-1", wantStatus: http.StatusOK, wantVision: true},
+		{name: "current_haiku_mapping", model: "claude-haiku-4-5", wantStatus: http.StatusOK, wantVision: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestBody, err := json.Marshal(map[string]any{
+				"model":      test.model,
+				"max_tokens": 256,
+				"stream":     true,
+				"system": []map[string]any{{
+					"type": "text",
+					"text": "x-anthropic-billing-header: cc_version=vision-e2e; cc_entrypoint=cli\nYou are Claude Code.",
+				}},
+				"messages": []map[string]any{{
+					"role": "user",
+					"content": []map[string]any{
+						{
+							"type": "image",
+							"source": map[string]any{
+								"type":       "base64",
+								"media_type": mimeType,
+								"data":       imageBase64,
+							},
+						},
+						{
+							"type": "text",
+							"text": "观察图片并严格只输出一行：建筑=<名称>;天空=<颜色>;云=<有/无>;树木=<有/无>;人物=<有/无>。",
+						},
+					},
+				}},
+			})
+			if err != nil {
+				t.Fatalf("marshal Anthropic request: %v", err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody)).WithContext(ctx)
+			resp := httptest.NewRecorder()
+			handler.HandleAnthropicMessages(resp, req)
+			responseBody := resp.Body.String()
+			if resp.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", resp.Code, test.wantStatus, truncateVisionProbeText(responseBody, 500))
+			}
+			if !test.wantVision {
+				if !strings.Contains(responseBody, "does not support image input") {
+					t.Fatalf("expected model capability rejection, got: %s", truncateVisionProbeText(responseBody, 500))
+				}
+				return
+			}
+			if !strings.Contains(responseBody, "埃菲尔") && !strings.Contains(strings.ToLower(responseBody), "eiffel") {
+				t.Fatalf("Anthropic stream did not identify the Eiffel Tower: %s", truncateVisionProbeText(responseBody, 1000))
+			}
+			if !visionProbeDetailsMatched(responseBody) {
+				t.Fatalf("Anthropic stream missed image details: %s", truncateVisionProbeText(responseBody, 1000))
+			}
+		})
+	}
+}
+
+func visionProbeDetailsMatched(answer string) bool {
+	normalized := strings.NewReplacer(" ", "", "\t", "", "\n", "", "：", "=").Replace(answer)
+	for _, expected := range []string{"天空=蓝", "云=有", "树木=有", "人物=无"} {
+		if !strings.Contains(normalized, expected) {
+			return false
+		}
+	}
+	return true
+}
+
+func truncateVisionProbeText(value string, maxRunes int) string {
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes]) + "..."
+}
 
 func init() {
 	// Try to load .env for OAuth tests if present
@@ -331,7 +635,7 @@ func TestIntegration_ListModels(t *testing.T) {
 
 	t.Log(">>> Available Models:")
 	for _, m := range models {
-		t.Logf("Key: %-30s | Name: %s", m.Key, m.DisplayName)
+		t.Logf("Key: %-30s | Name: %-20s | VL: %-5t | Reasoning: %-5t | Source: %s", m.Key, m.DisplayName, m.IsVL, m.IsReasoning, m.Source)
 	}
 }
 
