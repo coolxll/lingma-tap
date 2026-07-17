@@ -31,27 +31,29 @@ func ParseRequest(req *http.Request, body []byte) *Record {
 	}
 	rec.ReqMime = req.Header.Get("Content-Type")
 	rec.ReqSize = int64(len(body))
+	rec.ContentEncoding = req.Header.Get("Content-Encoding")
 
 	// Check for Encode=1
 	query := req.URL.Query()
 	rec.IsEncoded = query.Get("Encode") == "1"
 	rec.EndpointType = ClassifyEndpoint(req.URL.Path)
 
-	// Store raw body
+	// Store bounded previews. The interceptor retains the original bytes in the
+	// BLOB fields and the detail endpoint serves them on demand.
 	if len(body) > 0 {
-		rec.ReqBodyRaw = string(body)
+		rec.ReqBodyRaw = PreviewText(body)
 	}
 
 	// Decode if encoded
 	if rec.IsEncoded && len(body) > 0 {
 		decoded, err := encoding.Decode(string(body))
 		if err == nil {
-			rec.ReqBody = string(decoded)
+			rec.ReqBody = PreviewText(decoded)
 		} else {
 			rec.ReqBody = fmt.Sprintf("[decode error: %v]", err)
 		}
 	} else if len(body) > 0 {
-		rec.ReqBody = string(body)
+		rec.ReqBody = PreviewText(body)
 	}
 
 	return rec
@@ -79,10 +81,11 @@ func ParseResponse(resp *http.Response, body []byte, session string, index int) 
 	}
 	rec.RespMime = resp.Header.Get("Content-Type")
 	rec.RespSize = int64(len(body))
+	rec.ContentEncoding = resp.Header.Get("Content-Encoding")
 
 	// Store response body
 	if len(body) > 0 {
-		rec.RespBody = string(body)
+		rec.RespBody = PreviewText(body)
 	}
 
 	// Parse SSE if applicable. Lingma can wrap stream chunks as plain JSON/NDJSON
@@ -108,6 +111,9 @@ func ParseResponse(resp *http.Response, body []byte, session string, index int) 
 	// Classify endpoint
 	rec.EndpointType = ClassifyEndpoint(resp.Request.URL.Path)
 	rec.IsEncoded = resp.Request.URL.Query().Get("Encode") == "1"
+	if strings.HasPrefix(strings.ToLower(rec.RespMime), "image/") {
+		rec.EndpointType = EndpointImageResource
+	}
 
 	return rec
 }

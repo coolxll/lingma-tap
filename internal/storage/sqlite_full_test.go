@@ -265,6 +265,62 @@ func TestCompletedCancellationMigration(t *testing.T) {
 	}
 }
 
+func TestProxyCaptureMigrationBackfillsLegacyBodies(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "proxy_capture_backfill.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	sourceDriver, err := iofs.New(migrationsFS, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbDriver, err := migratesqlite.WithInstance(db.db.DB, &migratesqlite.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrator, err := migrate.NewWithInstance("iofs", sourceDriver, "sqlite", dbDriver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrator.Close()
+
+	if err := migrator.Migrate(8); err != nil {
+		t.Fatalf("rollback proxy capture migration: %v", err)
+	}
+	if _, err := db.db.Exec(`
+		INSERT INTO proxy_records (
+			ts, session, idx, direction, req_body, req_body_raw, req_size,
+			resp_body, resp_size, raw_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, Now(), "legacy-body", 0, "C2S", "decoded preview", "legacy raw request", 18,
+		"legacy response", 15, "{}"); err != nil {
+		t.Fatalf("insert legacy record: %v", err)
+	}
+	if err := migrator.Migrate(9); err != nil {
+		t.Fatalf("apply proxy capture migration: %v", err)
+	}
+
+	var row struct {
+		ReqBody      []byte `db:"req_body_blob"`
+		RespBody     []byte `db:"resp_body_blob"`
+		BodyComplete bool   `db:"body_complete"`
+		CapturedSize int64  `db:"captured_size"`
+	}
+	if err := db.db.Get(&row, `
+		SELECT req_body_blob, resp_body_blob, body_complete, captured_size
+		FROM proxy_records WHERE session = ?`, "legacy-body"); err != nil {
+		t.Fatal(err)
+	}
+	if string(row.ReqBody) != "legacy raw request" || string(row.RespBody) != "legacy response" {
+		t.Fatalf("legacy bodies were not backfilled: req=%q resp=%q", row.ReqBody, row.RespBody)
+	}
+	if !row.BodyComplete || row.CapturedSize != int64(len("legacy raw request")) {
+		t.Fatalf("legacy lifecycle fields were not backfilled: %+v", row)
+	}
+}
+
 func TestStorageMigration(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test_migration.db")

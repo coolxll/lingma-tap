@@ -270,6 +270,11 @@ func (a *App) startup(ctx context.Context) {
 	// Initialize WebSocket Hub
 	a.hub = api.NewHub()
 	go a.hub.Run()
+	a.sink.SetOnSaved(func(rec *proto.Record) {
+		if a.hub != nil {
+			a.hub.Broadcast(rec)
+		}
+	})
 
 	// Start API server (WebSocket + REST + Bridge)
 	creds, err := a.loadDesktopCredentials(dataDir)
@@ -537,6 +542,36 @@ func (a *App) GetRecordsByType(limit int, offset int, recordType string) []proto
 	}
 	records, _ := a.db.RecentRecordsByType(limit, offset, recordType)
 	return records
+}
+
+// GetRecordBody serves captured bytes through the local management API without
+// embedding them in Wails record/list payloads.
+func (a *App) GetRecordBody(id int64) ([]byte, string, bool, error) {
+	if a.db == nil {
+		return nil, "", false, fmt.Errorf("database unavailable")
+	}
+	return a.db.GetRecordBody(id)
+}
+
+func (a *App) GetRecordBodyByKey(session string, index int) ([]byte, string, bool, error) {
+	if a.db == nil {
+		return nil, "", false, fmt.Errorf("database unavailable")
+	}
+	return a.db.GetRecordBodyByKey(session, index)
+}
+
+func (a *App) GetRecordBodyDecoded(id int64) ([]byte, string, bool, error) {
+	if a.db == nil {
+		return nil, "", false, fmt.Errorf("database unavailable")
+	}
+	return a.db.GetRecordBodyDecoded(id)
+}
+
+func (a *App) GetRecordBodyDecodedByKey(session string, index int) ([]byte, string, bool, error) {
+	if a.db == nil {
+		return nil, "", false, fmt.Errorf("database unavailable")
+	}
+	return a.db.GetRecordBodyDecodedByKey(session, index)
 }
 
 // GetGatewayLogs returns recent AI Gateway logs, skipping the first `offset` records.

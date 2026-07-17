@@ -1,0 +1,14 @@
+DROP TABLE IF EXISTS record_correlation_keys;
+DROP TABLE IF EXISTS record_artifacts;
+DROP INDEX IF EXISTS idx_proxy_records_endpoint_ts;
+ALTER TABLE proxy_records DROP COLUMN artifact_ids_json;
+ALTER TABLE proxy_records DROP COLUMN correlation_keys_json;
+ALTER TABLE proxy_records DROP COLUMN content_encoding;
+ALTER TABLE proxy_records DROP COLUMN body_encoding;
+ALTER TABLE proxy_records DROP COLUMN declared_size;
+ALTER TABLE proxy_records DROP COLUMN captured_size;
+ALTER TABLE proxy_records DROP COLUMN body_truncated;
+ALTER TABLE proxy_records DROP COLUMN body_complete;
+ALTER TABLE proxy_records DROP COLUMN body_phase;
+ALTER TABLE proxy_records DROP COLUMN resp_body_blob;
+ALTER TABLE proxy_records DROP COLUMN req_body_blob;
