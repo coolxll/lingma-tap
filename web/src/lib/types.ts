@@ -16,12 +16,21 @@ export interface TrafficRecord {
   host: string;
   path: string;
   is_encoded: boolean;
-  endpoint_type: 'chat' | 'finish' | 'embedding' | 'tracking' | 'other';
+  endpoint_type: 'chat' | 'finish' | 'embedding' | 'tracking' | 'image_upload' | 'image_resource' | 'other';
   request_headers: { [key: string]: string };
   request_body: string;
   request_body_raw: string;
   request_mime: string;
   request_size: number;
+	body_phase?: 'headers' | 'complete' | 'error';
+	body_complete?: boolean;
+	body_truncated?: boolean;
+	captured_size?: number;
+	declared_size?: number;
+	body_encoding?: 'empty' | 'text' | 'binary';
+	content_encoding?: string;
+	correlation_keys?: string[];
+	artifact_ids?: number[];
 
   status: number;
   status_text: string;
@@ -184,6 +193,10 @@ export function getEndpointColor(endpoint: string): string {
       return 'text-purple-400';
     case 'tracking':
       return 'text-yellow-400';
+	case 'image_upload':
+	  return 'text-pink-400';
+	case 'image_resource':
+	  return 'text-cyan-400';
     default:
       return 'text-zinc-400';
   }
@@ -199,6 +212,10 @@ export function getEndpointLabel(endpoint: string): string {
       return 'Embed';
     case 'tracking':
       return 'Track';
+	case 'image_upload':
+	  return 'Image Upload';
+	case 'image_resource':
+	  return 'Image';
     default:
       return 'Other';
   }

@@ -45,6 +45,8 @@
     "no_records": "无记录",
     "no_matches": "无匹配",
     "session": "会话",
+    "conversation": "对话",
+    "turns": "轮",
     "requests": "个请求",
     "records_count": "条记录",
     "load_more": "加载更多"
