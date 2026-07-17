@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/coolxll/lingma-tap/internal/bridge"
@@ -58,7 +59,142 @@ var upgrader = websocket.Upgrader{
 func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/records", h.HandleWebSocket)
 	mux.HandleFunc("/api/records", h.handleRecords)
+	mux.HandleFunc("/api/records/", h.handleRecordBody)
+	mux.HandleFunc("/api/artifacts/", h.handleArtifact)
 	mux.HandleFunc("/api/status", h.handleStatus)
+}
+
+type bodyStore interface {
+	GetRecordBody(id int64) ([]byte, string, bool, error)
+	GetRecordBodyByKey(session string, index int) ([]byte, string, bool, error)
+}
+
+// decodedBodyStore is optional so lightweight gateway/test stores can keep
+// implementing the raw-body contract while the SQLite store serves decoded
+// previews for encoded Lingma requests.
+type decodedBodyStore interface {
+	GetRecordBodyDecoded(id int64) ([]byte, string, bool, error)
+	GetRecordBodyDecodedByKey(session string, index int) ([]byte, string, bool, error)
+}
+
+type artifactStore interface {
+	GetArtifactBody(id int64) ([]byte, string, error)
+}
+
+func (h *Handler) handleRecordBody(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !authorizeLocalAssetOrigin(w, r) {
+		return
+	}
+	store, ok := h.store.(bodyStore)
+	if !ok {
+		http.Error(w, "body storage unavailable", http.StatusNotImplemented)
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/api/records/")
+	path = strings.TrimSuffix(path, "/body")
+	id, err := strconv.ParseInt(strings.Trim(path, "/"), 10, 64)
+	var body []byte
+	var mime string
+	var truncated bool
+	decoded := r.URL.Query().Get("view") == "decoded"
+	decodedStore, hasDecodedStore := h.store.(decodedBodyStore)
+	if err == nil && id > 0 {
+		if decoded && hasDecodedStore {
+			body, mime, truncated, err = decodedStore.GetRecordBodyDecoded(id)
+		} else {
+			body, mime, truncated, err = store.GetRecordBody(id)
+		}
+	} else {
+		index, indexErr := strconv.Atoi(r.URL.Query().Get("index"))
+		session := strings.TrimSpace(r.URL.Query().Get("session"))
+		if indexErr != nil || session == "" {
+			http.Error(w, "invalid record id or key", http.StatusBadRequest)
+			return
+		}
+		if decoded && hasDecodedStore {
+			body, mime, truncated, err = decodedStore.GetRecordBodyDecodedByKey(session, index)
+		} else {
+			body, mime, truncated, err = store.GetRecordBodyByKey(session, index)
+		}
+	}
+	if err != nil {
+		http.Error(w, "record body not found", http.StatusNotFound)
+		return
+	}
+	// This endpoint is intentionally local/same-origin; unlike the metadata
+	// endpoint it must not expose captured images to arbitrary web origins.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", mimeOrOctetStream(mime))
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	if truncated {
+		w.Header().Set("X-Lingma-Tap-Truncated", "true")
+	}
+	_, _ = w.Write(body)
+}
+
+func mimeOrOctetStream(mime string) string {
+	if strings.TrimSpace(mime) == "" {
+		return "application/octet-stream"
+	}
+	return mime
+}
+
+func (h *Handler) handleArtifact(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !authorizeLocalAssetOrigin(w, r) {
+		return
+	}
+	store, ok := h.store.(artifactStore)
+	if !ok {
+		http.Error(w, "artifact storage unavailable", http.StatusNotImplemented)
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/api/artifacts/")
+	id, err := strconv.ParseInt(strings.Trim(path, "/"), 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid artifact id", http.StatusBadRequest)
+		return
+	}
+	body, mime, err := store.GetArtifactBody(id)
+	if err != nil {
+		http.Error(w, "artifact not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", mimeOrOctetStream(mime))
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	_, _ = w.Write(body)
+}
+
+func authorizeLocalAssetOrigin(w http.ResponseWriter, r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		// Same-origin requests and local CLI diagnostics do not send Origin.
+		return true
+	}
+	allowed := map[string]struct{}{
+		"http://localhost:5173":   {},
+		"http://127.0.0.1:5173":   {},
+		"http://localhost:9091":   {},
+		"http://127.0.0.1:9091":   {},
+		"http://wails.localhost":  {},
+		"https://wails.localhost": {},
+		"wails://wails":           {},
+	}
+	if _, ok := allowed[origin]; !ok {
+		http.Error(w, "asset origin not allowed", http.StatusForbidden)
+		return false
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Add("Vary", "Origin")
+	return true
 }
 
 func (h *Handler) RegisterGatewayRoutes(mux *http.ServeMux) {

@@ -19,6 +19,41 @@ type mockRecordStore struct {
 	stats         interface{}
 }
 
+type mockAssetStore struct {
+	mockRecordStore
+	body          []byte
+	decodedBody   []byte
+	artifactBody  []byte
+	bodyCalls     int
+	decodedCalls  int
+	artifactCalls int
+}
+
+func (m *mockAssetStore) GetRecordBody(id int64) ([]byte, string, bool, error) {
+	m.bodyCalls++
+	return m.body, "text/plain", false, nil
+}
+
+func (m *mockAssetStore) GetRecordBodyByKey(session string, index int) ([]byte, string, bool, error) {
+	m.bodyCalls++
+	return m.body, "text/plain", false, nil
+}
+
+func (m *mockAssetStore) GetRecordBodyDecoded(id int64) ([]byte, string, bool, error) {
+	m.decodedCalls++
+	return m.decodedBody, "text/plain", false, nil
+}
+
+func (m *mockAssetStore) GetRecordBodyDecodedByKey(session string, index int) ([]byte, string, bool, error) {
+	m.decodedCalls++
+	return m.decodedBody, "text/plain", false, nil
+}
+
+func (m *mockAssetStore) GetArtifactBody(id int64) ([]byte, string, error) {
+	m.artifactCalls++
+	return m.artifactBody, "image/jpeg", nil
+}
+
 func (m *mockRecordStore) RecentRecords(limit int) ([]proto.Record, error) {
 	if m.recentRecords != nil {
 		return m.recentRecords(limit)
@@ -151,6 +186,38 @@ func TestHandleRecords_GET(t *testing.T) {
 	}
 	if len(result) != 2 {
 		t.Fatalf("expected 2 records, got %d", len(result))
+	}
+}
+
+func TestCapturedAssetOriginAndDecodedView(t *testing.T) {
+	store := &mockAssetStore{body: []byte("raw"), decodedBody: []byte(`{"decoded":true}`), artifactBody: []byte("jpg")}
+	h := NewHandler(NewHub(), store, nil)
+
+	blocked := httptest.NewRequest(http.MethodGet, "/api/records/1/body", nil)
+	blocked.Header.Set("Origin", "https://evil.example")
+	blockedWriter := httptest.NewRecorder()
+	h.handleRecordBody(blockedWriter, blocked)
+	if blockedWriter.Code != http.StatusForbidden || store.bodyCalls != 0 {
+		t.Fatalf("cross-origin asset request was not blocked: status=%d calls=%d", blockedWriter.Code, store.bodyCalls)
+	}
+
+	allowed := httptest.NewRequest(http.MethodGet, "/api/records/1/body?view=decoded", nil)
+	allowed.Header.Set("Origin", "http://localhost:5173")
+	allowedWriter := httptest.NewRecorder()
+	h.handleRecordBody(allowedWriter, allowed)
+	if allowedWriter.Code != http.StatusOK || allowedWriter.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
+		t.Fatalf("allowed asset request failed: status=%d origin=%q", allowedWriter.Code, allowedWriter.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if allowedWriter.Body.String() != `{"decoded":true}` || store.decodedCalls != 1 {
+		t.Fatalf("decoded body was not served: body=%q calls=%d", allowedWriter.Body.String(), store.decodedCalls)
+	}
+
+	artifact := httptest.NewRequest(http.MethodGet, "/api/artifacts/1", nil)
+	artifact.Header.Set("Origin", "https://evil.example")
+	artifactWriter := httptest.NewRecorder()
+	h.handleArtifact(artifactWriter, artifact)
+	if artifactWriter.Code != http.StatusForbidden || store.artifactCalls != 0 {
+		t.Fatalf("cross-origin artifact request was not blocked: status=%d calls=%d", artifactWriter.Code, store.artifactCalls)
 	}
 }
 

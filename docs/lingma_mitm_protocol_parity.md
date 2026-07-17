@@ -1,7 +1,7 @@
 # Lingma MITM 协议一致性与路由试点记录
 
-- **日期：** 2026-07-12
-- **状态：** 已确认请求元数据与原生客户端存在差异；不在未验证计费与语义前全局切换路由
+- **日期：** 2026-07-12（Vision 更新于 2026-07-17）
+- **状态：** 已确认请求元数据与原生客户端存在差异；Vision 已按原生 VL profile 局部接通，不全局切换文本路由
 - **适用项目：** `lingma-tap`（先行试点）、`cliproxyapi`（试点验证后同步）
 
 ## 1. 目的与证据边界
@@ -72,17 +72,19 @@ reasoning=false -> agent_id=agent_common, model_config.source=""
 - `session_id` 在同一客户端会话中保持稳定。
 - `chat_record_id`、`request_set_id` 和 `business.id` 可跨同一聊天任务的多个 turn 保持关联。
 
-当前 bridge：
+当前 bridge 的默认文本请求：
 
 - 使用完整下游请求 JSON 的哈希作为 `session_id`；消息历史变化会得到新值。
 - 每次 `chat_record_id` 等于新生成的 `request_id`。
 - `request_set_id` 为空，`business.id` 每次重新生成。
 
-因此当前实现不具备原生多轮会话语义。它不阻断单轮调用，但可能影响上游缓存、任务状态和多轮工具调用。
+因此默认文本请求不具备原生多轮会话语义。它不阻断单轮调用，但可能影响上游缓存、任务状态和多轮工具调用。Vision profile 已把 `request_set_id` 与当前 `chat_record_id` 关联，但仍未复刻完整的跨 turn 原生任务生命周期。
+
+抓包展示层已增加独立的关联逻辑：先用随机 transport `session` 配对 HTTP 请求/响应，再从已解码聊天请求中提取稳定的 `session_id`，把同一对话的多个 turn 聚合到同一可折叠分组。该逻辑只改变展示，不改写数据库记录或上游请求；没有聊天 `session_id` 的上传、CDN GET 和普通流量仍保持独立。
 
 ### 3.3 模型、参数和业务元数据
 
-抓包中的 `gm51model` 主请求含有完整模型描述，例如模型显示名、格式、`max_input_tokens`、`price_factor` 和 `original_price_factor`。当前实现除 `key`、`is_reasoning` 外，模型字段大多为空值或零值。
+抓包中的 `gm51model` 主请求含有完整模型描述，例如模型显示名、格式、`max_input_tokens`、`price_factor` 和 `original_price_factor`。默认文本请求除 `key`、`is_reasoning` 外，模型字段大多为空值或零值；Vision profile 会从模型列表补齐已证实为必要的字段。
 
 原生主聊天同时设置 `max_tokens` 和 `max_new_tokens`；当前 bridge 只映射 `max_tokens`。原生 business 形态为 `product=ide`、`type=agent`、带真实 `begin_at` 和阶段变化；当前实现使用 `type=chat`、`begin_at=0` 和固定 `stage=start`。
 
@@ -90,8 +92,8 @@ reasoning=false -> agent_id=agent_common, model_config.source=""
 
 ### 3.4 视觉输入（Vision）
 
-视觉请求必须显式启用上游的 Vision 标志。仅在消息内容中传递 OpenAI 兼容的
-`image_url` 并不足够；`model_config.is_vl` 必须为 `true`：
+视觉请求必须显式启用上游的 Vision 标志。仅传递 OpenAI 兼容的 `image_url`、
+甚至只增加 `model_config.is_vl=true`，都不足以让当前上游消费图片。
 
 ```json
 {
@@ -103,32 +105,27 @@ reasoning=false -> agent_id=agent_common, model_config.source=""
   "messages": [
     {
       "role": "user",
-      "content": [
+      "content": "Describe the image.",
+      "contents": [
         {"type": "text", "text": "Describe the image."},
-        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
+        {"type": "image_url", "image_url": {"url": "https://lingma-vl...jpg"}}
       ]
     }
   ]
 }
 ```
 
-**修正说明：** 现有严格测试表明，仅设置 `is_vl=true` 并传递 data URI 并不足以
-可靠地完成视觉请求。`is_vl=true` 是必要条件，但不是充分条件。实测 `gm51model`
-会忽略图片并编造结果，`mmodel` 会 EOF 或声明无法看图。完整的视觉链路还需要：
-图片上传到 Lingma CDN、在请求顶层写入 `image_urls`、在用户消息的 `parts` 中
-引用 CDN URL。因此，图片请求选择 `IsVL=false` 模型时应返回 400，不自动换模型。
+**2026-07-17 修正：** 完整链路还需要把图片上传到 Lingma CDN、写入顶层
+`image_urls`、使用当前原生消息字段 `contents`（不是旧资料中的 `parts`），并从模型
+列表补齐 `display_name`、`format`、`source`、`max_input_tokens`、`enable=true`。
+视觉请求同时使用 `source=1`、`task_id/chat_task=common`、
+`session_type=assistant` 及关联的 `request_set_id`。缺少完整模型配置时，即使已有
+CDN URL 和 `is_vl=true`，上游仍会静默要求用户“提供图片”。
 
-已通过真实上游请求验证：同一个 `org_auto` 请求分别发送红色和蓝色图片时，
-`is_vl=false` 会把两张图片都回答为蓝色；设置 `is_vl=true` 后能分别正确回答
-红色和蓝色。上游模型列表当前标记 `org_auto`、`dashscope_qmodel`、
-`qmodel_latest` 和 `kmodel` 的 `is_vl=true`，而 `gm51model` 与 `mmodel` 为
-`false`。
-
-当前 `BuildLingmaBody` 在
-[`internal/bridge/client.go`](../internal/bridge/client.go) 中固定写入
-`"is_vl": false`，因此视觉能力尚未端到端接通。后续实现需要在入站消息含有
-图片内容时设置 `is_vl=true`，同时保留 `image_url` 内容；Anthropic Messages
-的图片 source 也必须转换为对应的上游 `image_url`，不能丢弃图片 block。
+当前实现已接通 Chat Completions、Responses 和 Anthropic Messages。使用包含
+埃菲尔铁塔的 `tower.jpg` 真实验证，`qmodel_latest` 能准确回答“埃菲尔铁塔”。
+上游模型列表当前标记 `org_auto`、`dashscope_qmodel`、`qmodel_latest` 和 `kmodel`
+为 VL，`gm51model` 与 `mmodel` 为非 VL；非 VL 模型会在上传前返回 400。
 
 约 1 MB 的原始 Bing 壁纸直传时曾收到上游内层 `406 Session blocked`；缩放压缩
 后请求成功。该现象目前只作为观测记录，不能据此断言固定的图片大小上限。

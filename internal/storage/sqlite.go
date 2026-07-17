@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
+	lingmaencoding "github.com/coolxll/lingma-tap/internal/encoding"
 	"github.com/coolxll/lingma-tap/internal/proto"
 	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
@@ -117,10 +119,15 @@ func (d *DB) SaveRecord(rec *proto.Record) error {
 	reqHeadersJSON, _ := json.Marshal(rec.ReqHeaders)
 	respHeadersJSON, _ := json.Marshal(rec.RespHeaders)
 	sseEventsJSON, _ := json.Marshal(rec.SSEEvents)
+	rec.CorrelationKeys = extractCorrelationKeys(rec)
+	correlationKeysJSON, _ := json.Marshal(rec.CorrelationKeys)
+	artifactIDsJSON, _ := json.Marshal(rec.ArtifactIDs)
 
 	rec.ReqHeadersJSON = string(reqHeadersJSON)
 	rec.RespHeadersJSON = string(respHeadersJSON)
 	rec.SSEEventsJSON = string(sseEventsJSON)
+	rec.CorrelationKeysJSON = string(correlationKeysJSON)
+	rec.ArtifactIDsJSON = string(artifactIDsJSON)
 	rec.RawJSON = string(rec.ToJSON())
 
 	d.writeMu.Lock()
@@ -137,16 +144,101 @@ func (d *DB) SaveRecord(rec *proto.Record) error {
 		INSERT INTO proxy_records (
 			ts, session, idx, direction, method, url, host, path, is_encoded,
 			endpoint_type, req_headers_json, req_body, req_body_raw, req_mime, req_size,
-			status, status_text, resp_headers_json, resp_body, resp_mime, resp_size,
-			is_sse, sse_events_json, error, source, raw_json
+			req_body_blob, status, status_text, resp_headers_json, resp_body, resp_body_blob,
+			resp_mime, resp_size, is_sse, sse_events_json, error, source, raw_json,
+			body_phase, body_complete, body_truncated, captured_size, declared_size,
+			body_encoding, content_encoding, correlation_keys_json, artifact_ids_json
 		) VALUES (
 			:ts, :session, :idx, :direction, :method, :url, :host, :path, :is_encoded,
 			:endpoint_type, :req_headers_json, :req_body, :req_body_raw, :req_mime, :req_size,
-			:status, :status_text, :resp_headers_json, :resp_body, :resp_mime, :resp_size,
-			:is_sse, :sse_events_json, :error, :source, :raw_json
+			:req_body_blob, :status, :status_text, :resp_headers_json, :resp_body, :resp_body_blob,
+			:resp_mime, :resp_size, :is_sse, :sse_events_json, :error, :source, :raw_json,
+			:body_phase, :body_complete, :body_truncated, :captured_size, :declared_size,
+			:body_encoding, :content_encoding, :correlation_keys_json, :artifact_ids_json
 		)
+		ON CONFLICT(session, idx) DO UPDATE SET
+			ts = excluded.ts,
+			direction = excluded.direction,
+			method = excluded.method,
+			url = excluded.url,
+			host = excluded.host,
+			path = excluded.path,
+			is_encoded = excluded.is_encoded,
+			endpoint_type = excluded.endpoint_type,
+			req_headers_json = excluded.req_headers_json,
+			req_body = excluded.req_body,
+			req_body_raw = excluded.req_body_raw,
+			req_mime = excluded.req_mime,
+			req_size = excluded.req_size,
+			req_body_blob = excluded.req_body_blob,
+			status = excluded.status,
+			status_text = excluded.status_text,
+			resp_headers_json = excluded.resp_headers_json,
+			resp_body = excluded.resp_body,
+			resp_body_blob = excluded.resp_body_blob,
+			resp_mime = excluded.resp_mime,
+			resp_size = excluded.resp_size,
+			is_sse = excluded.is_sse,
+			sse_events_json = excluded.sse_events_json,
+			error = excluded.error,
+			source = excluded.source,
+			raw_json = excluded.raw_json,
+			body_phase = excluded.body_phase,
+			body_complete = excluded.body_complete,
+			body_truncated = excluded.body_truncated,
+			captured_size = excluded.captured_size,
+			declared_size = excluded.declared_size,
+			body_encoding = excluded.body_encoding,
+			content_encoding = excluded.content_encoding,
+			correlation_keys_json = excluded.correlation_keys_json,
+			artifact_ids_json = excluded.artifact_ids_json
 	`, rec)
 	if err != nil {
+		return err
+	}
+	if err := tx.Get(&rec.ID, "SELECT id FROM proxy_records WHERE session = ? AND idx = ?", rec.Session, rec.Index); err != nil {
+		return err
+	}
+
+	// Replace deterministic links for this lifecycle snapshot. Artifact rows
+	// are only replaced when a complete multipart body was captured.
+	if _, err := tx.Exec("DELETE FROM record_correlation_keys WHERE record_id = ?", rec.ID); err != nil {
+		return err
+	}
+	for _, key := range rec.CorrelationKeys {
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO record_correlation_keys(record_id, key_type, key_value) VALUES (?, ?, ?)`, rec.ID, parts[0], parts[1]); err != nil {
+			return err
+		}
+	}
+	artifacts := parseImageArtifacts(rec)
+	if len(artifacts) > 0 {
+		if _, err := tx.Exec("DELETE FROM record_artifacts WHERE record_id = ?", rec.ID); err != nil {
+			return err
+		}
+		rec.ArtifactIDs = nil
+		for _, artifact := range artifacts {
+			result, err := tx.Exec(`
+				INSERT INTO record_artifacts(record_id, field_name, filename, mime, size, sha256, body, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				rec.ID, artifact.Field, artifact.Filename, artifact.MIME, len(artifact.Body), artifactSHA256(artifact.Body), artifact.Body, rec.Ts)
+			if err != nil {
+				return err
+			}
+			artifactID, err := result.LastInsertId()
+			if err != nil {
+				return err
+			}
+			rec.ArtifactIDs = append(rec.ArtifactIDs, artifactID)
+		}
+	}
+	artifactIDsJSON, _ = json.Marshal(rec.ArtifactIDs)
+	rec.ArtifactIDsJSON = string(artifactIDsJSON)
+	rec.RawJSON = string(rec.ToJSON())
+	if _, err := tx.Exec(`UPDATE proxy_records SET raw_json = ?, artifact_ids_json = ? WHERE id = ?`, rec.RawJSON, rec.ArtifactIDsJSON, rec.ID); err != nil {
 		return err
 	}
 
@@ -155,7 +247,7 @@ func (d *DB) SaveRecord(rec *proto.Record) error {
 		INSERT INTO sessions (id, host, path, endpoint_type, record_count, first_ts, last_ts, req_size, resp_size, preview)
 		VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
-			record_count = record_count + 1,
+			record_count = (SELECT COUNT(*) FROM proxy_records WHERE session = excluded.id),
 			last_ts = excluded.last_ts,
 			req_size = req_size + excluded.req_size,
 			resp_size = resp_size + excluded.resp_size
@@ -215,6 +307,104 @@ func (d *DB) RecentRecordsByType(limit int, offset int, recordType string) ([]pr
 	}
 
 	return recordsFromRawJSON(raws), nil
+}
+
+// GetRecordBody returns the captured raw body for one record. It deliberately
+// bypasses raw_json so binary payloads are returned byte-for-byte.
+func (d *DB) GetRecordBody(id int64) (body []byte, mime string, truncated bool, err error) {
+	var row struct {
+		Direction string `db:"direction"`
+		ReqMime   string `db:"req_mime"`
+		RespMime  string `db:"resp_mime"`
+		ReqBody   []byte `db:"req_body_blob"`
+		RespBody  []byte `db:"resp_body_blob"`
+		Truncated bool   `db:"body_truncated"`
+	}
+	if err = d.db.Get(&row, `
+		SELECT direction, req_mime, resp_mime, req_body_blob, resp_body_blob, body_truncated
+		FROM proxy_records WHERE id = ?`, id); err != nil {
+		return nil, "", false, err
+	}
+	return recordBodyFromRow(row.Direction, row.ReqMime, row.RespMime, row.ReqBody, row.RespBody, row.Truncated)
+}
+
+func (d *DB) GetRecordBodyByKey(session string, index int) (body []byte, mime string, truncated bool, err error) {
+	var row struct {
+		Direction string `db:"direction"`
+		ReqMime   string `db:"req_mime"`
+		RespMime  string `db:"resp_mime"`
+		ReqBody   []byte `db:"req_body_blob"`
+		RespBody  []byte `db:"resp_body_blob"`
+		Truncated bool   `db:"body_truncated"`
+	}
+	if err = d.db.Get(&row, `
+		SELECT direction, req_mime, resp_mime, req_body_blob, resp_body_blob, body_truncated
+		FROM proxy_records WHERE session = ? AND idx = ?`, session, index); err != nil {
+		return nil, "", false, err
+	}
+	return recordBodyFromRow(row.Direction, row.ReqMime, row.RespMime, row.ReqBody, row.RespBody, row.Truncated)
+}
+
+func (d *DB) GetRecordBodyDecoded(id int64) ([]byte, string, bool, error) {
+	body, mime, truncated, err := d.GetRecordBody(id)
+	if err != nil || truncated {
+		return body, mime, truncated, err
+	}
+	var meta struct {
+		Direction string `db:"direction"`
+		Encoded   bool   `db:"is_encoded"`
+	}
+	if err := d.db.Get(&meta, "SELECT direction, is_encoded FROM proxy_records WHERE id = ?", id); err != nil || meta.Direction != "C2S" || !meta.Encoded {
+		return body, mime, truncated, err
+	}
+	decoded, err := lingmaencoding.Decode(string(body))
+	if err != nil {
+		return body, mime, truncated, nil
+	}
+	return decoded, mime, false, nil
+}
+
+func (d *DB) GetRecordBodyDecodedByKey(session string, index int) ([]byte, string, bool, error) {
+	body, mime, truncated, err := d.GetRecordBodyByKey(session, index)
+	if err != nil || truncated {
+		return body, mime, truncated, err
+	}
+	var meta struct {
+		Direction string `db:"direction"`
+		Encoded   bool   `db:"is_encoded"`
+	}
+	if err := d.db.Get(&meta, "SELECT direction, is_encoded FROM proxy_records WHERE session = ? AND idx = ?", session, index); err != nil || meta.Direction != "C2S" || !meta.Encoded {
+		return body, mime, truncated, err
+	}
+	decoded, err := lingmaencoding.Decode(string(body))
+	if err != nil {
+		return body, mime, truncated, nil
+	}
+	return decoded, mime, false, nil
+}
+
+func recordBodyFromRow(direction, reqMime, respMime string, reqBody, respBody []byte, truncated bool) ([]byte, string, bool, error) {
+	if direction == "C2S" {
+		return reqBody, reqMime, truncated, nil
+	}
+	return respBody, respMime, truncated, nil
+}
+
+func (d *DB) GetArtifacts(recordID int64) ([]proto.Artifact, error) {
+	var artifacts []proto.Artifact
+	err := d.db.Select(&artifacts, `
+		SELECT id, record_id, field_name, filename, mime, size, sha256
+		FROM record_artifacts WHERE record_id = ? ORDER BY id`, recordID)
+	return artifacts, err
+}
+
+func (d *DB) GetArtifactBody(id int64) ([]byte, string, error) {
+	var row struct {
+		Body []byte `db:"body"`
+		MIME string `db:"mime"`
+	}
+	err := d.db.Get(&row, `SELECT body, mime FROM record_artifacts WHERE id = ?`, id)
+	return row.Body, row.MIME, err
 }
 
 func recordsFromRawJSON(raws []string) []proto.Record {
