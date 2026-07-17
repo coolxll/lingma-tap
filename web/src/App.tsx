@@ -5,7 +5,7 @@ import React, {
   useRef,
   useMemo,
 } from "react";
-import { TrafficRecord, StorageStats, mapGatewayLogToRecord } from "@/lib/types";
+import { TrafficRecord, StorageStats, mapGatewayLogToRecord, recordKey } from "@/lib/types";
 import { WSClient } from "@/lib/ws-client";
 import { useRecords } from "@/hooks/useRecords";
 import { TitleBar, TabId } from "@/components/TitleBar";
@@ -149,12 +149,12 @@ function App() {
     records,
     selectedRecord,
     setSelectedRecord,
-    appendRecord,
     updateRecords,
     clearRecords,
     clearProxyRecords,
     clearGatewayRecords,
     appendRecords,
+    upsertRecords,
   } = useRecords(isPaused);
   const [connected, setConnected] = useState(false);
   const [proxyRunning, setProxyRunning] = useState(false);
@@ -189,6 +189,28 @@ function App() {
     embedding: 0,
     other: 0,
   });
+  const pendingWSRecordsRef = useRef(new Map<string, TrafficRecord>());
+  const wsFlushFrameRef = useRef<number | null>(null);
+
+  const enqueueWSRecord = useCallback((record: TrafficRecord) => {
+    if (!record) return;
+    const key = recordKey(record);
+    if (!key) return;
+    pendingWSRecordsRef.current.set(key, record);
+    if (wsFlushFrameRef.current !== null) return;
+    wsFlushFrameRef.current = window.requestAnimationFrame(() => {
+      wsFlushFrameRef.current = null;
+      const batch = [...pendingWSRecordsRef.current.values()];
+      pendingWSRecordsRef.current.clear();
+      upsertRecords(batch);
+      if (liveTailRef.current) {
+        const last = batch[batch.length - 1];
+        if (last && shouldAutoSelectRecord(last, activeTabRef.current, proxyTypeFilterRef.current)) {
+          setSelectedRecord(last);
+        }
+      }
+    });
+  }, [setSelectedRecord, upsertRecords]);
 
   // Computed records for active tab
   const displayedRecords = useMemo(() => {
@@ -382,10 +404,7 @@ function App() {
         try {
           if (!record) return;
           const rec = record as unknown as TrafficRecord;
-          appendRecord(rec);
-          if (liveTailRef.current && shouldAutoSelectRecord(rec, activeTabRef.current, proxyTypeFilterRef.current)) {
-            setSelectedRecord(rec);
-          }
+          enqueueWSRecord(rec);
         } catch (err) {
           const msg = `Failed to append record from WS: ${err}`;
           console.error(msg);
@@ -414,8 +433,15 @@ function App() {
       },
     );
     client.connect();
-    return () => client.disconnect();
-  }, [appendRecord, setSelectedRecord, updateRecords, wails, fetchProxyRecords]);
+    return () => {
+      if (wsFlushFrameRef.current !== null) {
+        window.cancelAnimationFrame(wsFlushFrameRef.current);
+        wsFlushFrameRef.current = null;
+      }
+      pendingWSRecordsRef.current.clear();
+      client.disconnect();
+    };
+  }, [enqueueWSRecord, updateRecords, wails, fetchProxyRecords]);
 
   // Poll status
   useEffect(() => {

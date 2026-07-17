@@ -20,12 +20,17 @@ interface RequestPair {
 }
 
 interface SessionGroup {
-  session: string;
+  key: string;
+  conversationId?: string;
   pairs: RequestPair[];
 }
 
-/** Group records by session, pair each request with its response. */
-function groupBySession(records: TrafficRecord[]): SessionGroup[] {
+/**
+ * Pair each HTTP flow first, then group chat flows by Lingma's application
+ * session_id. The transport session is random per HTTP flow and cannot connect
+ * multiple turns from the same conversation by itself.
+ */
+function groupByConversation(records: TrafficRecord[]): SessionGroup[] {
   const sessionMap = new Map<string, TrafficRecord[]>();
   for (const rec of records) {
     const list = sessionMap.get(rec.session) || [];
@@ -33,8 +38,20 @@ function groupBySession(records: TrafficRecord[]): SessionGroup[] {
     sessionMap.set(rec.session, list);
   }
 
-  const result: SessionGroup[] = [];
-  for (const [session, recs] of sessionMap) {
+  const groupMap = new Map<string, SessionGroup>();
+  const keyMap = new Map<string, SessionGroup>();
+
+  const mergeGroups = (target: SessionGroup, source: SessionGroup) => {
+    if (target === source) return;
+    target.pairs.push(...source.pairs);
+    if (!target.conversationId) target.conversationId = source.conversationId;
+    for (const [key, value] of keyMap) {
+      if (value === source) keyMap.set(key, target);
+    }
+    groupMap.delete(source.key);
+  };
+
+  for (const [transportSession, recs] of sessionMap) {
     const pairs: RequestPair[] = [];
     // Sort by index ascending to ensure C2S comes before S2C
     const sortedRecs = [...recs].sort((a, b) => a.index - b.index);
@@ -47,9 +64,58 @@ function groupBySession(records: TrafficRecord[]): SessionGroup[] {
         pairs.push({ req: rec });
       }
     }
-    result.push({ session, pairs });
+    for (const pair of pairs) {
+      const conversationId = extractConversationId(pair.req);
+      const correlationKeys = [
+        ...(pair.req.correlation_keys || []),
+        ...(pair.resp?.correlation_keys || []),
+      ].filter((key) => !key.startsWith('transport:'));
+      const pairKeys = correlationKeys.length > 0
+        ? correlationKeys
+        : [conversationId ? `conversation:${conversationId}` : `flow:${transportSession}`];
+      let group = pairKeys.map((key) => keyMap.get(key)).find(Boolean);
+      if (!group) {
+        const key = pairKeys[0];
+        group = { key, conversationId, pairs: [] };
+        groupMap.set(key, group);
+      } else {
+        for (const key of pairKeys) {
+          const other = keyMap.get(key);
+          if (other && other !== group) mergeGroups(group, other);
+        }
+      }
+      group.pairs.push(pair);
+      if (!group.conversationId) group.conversationId = conversationId;
+      for (const key of pairKeys) {
+        keyMap.set(key, group);
+      }
+    }
+  }
+
+  const result = [...groupMap.values()];
+  for (const group of result) {
+    group.pairs.sort((a, b) => new Date(a.req.ts).getTime() - new Date(b.req.ts).getTime());
   }
   return result;
+}
+
+function extractConversationId(record: TrafficRecord): string | undefined {
+  for (const key of record.correlation_keys || []) {
+    if (key.startsWith('session_id:') || key.startsWith('conversation_id:') || key.startsWith('chat_session_id:')) {
+      return key.slice(key.indexOf(':') + 1);
+    }
+  }
+  if (record.endpoint_type !== 'chat' || !record.request_body) return undefined;
+  try {
+    const body = JSON.parse(record.request_body) as Record<string, unknown>;
+    for (const field of ['session_id', 'sessionId', 'conversation_id', 'conversationId', 'chat_session_id']) {
+      const value = body[field];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+  } catch {
+    // Keep the HTTP flow as a standalone group when the decoded body is not JSON.
+  }
+  return undefined;
 }
 
 /** Key for a pair (uses request's key). */
@@ -93,7 +159,7 @@ export const RecordList = memo(function RecordList({
     });
   }, [records, localSearch]);
 
-  const groups = useMemo(() => groupBySession(filteredRecords), [filteredRecords]);
+  const groups = useMemo(() => groupByConversation(filteredRecords), [filteredRecords]);
 
   const maxLatencyMs = useMemo(() => {
     let max = 1;
@@ -106,11 +172,11 @@ export const RecordList = memo(function RecordList({
     return max;
   }, [groups]);
 
-  const toggleCollapse = useCallback((session: string) => {
+  const toggleCollapse = useCallback((key: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
-      if (next.has(session)) next.delete(session);
-      else next.add(session);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }, []);
@@ -129,9 +195,12 @@ export const RecordList = memo(function RecordList({
 
   // Which pair is selected?
   const selectedSession = selectedRecord?.session;
+  const selectedGroupKey = selectedRecord
+    ? groups.find((g) => g.pairs.some((p) => p.req.session === selectedRecord.session || p.resp?.session === selectedRecord.session))?.key
+    : undefined;
   const selectedPairIdx = selectedRecord
     ? groups
-        .find((g) => g.session === selectedRecord.session)
+        .find((g) => g.key === selectedGroupKey)
         ?.pairs.findIndex(
           (p) => recordKey(p.req) === recordKey(selectedRecord) || (p.resp && recordKey(p.resp) === recordKey(selectedRecord)),
         ) ?? -1
@@ -178,16 +247,17 @@ export const RecordList = memo(function RecordList({
           </div>
         ) : (
           groups.map((group) => {
-            const isSessionCollapsed = collapsed.has(group.session);
+            const isSessionCollapsed = collapsed.has(group.key);
             const hasMultiple = group.pairs.length > 1;
-            const isSessionSelected = selectedSession === group.session;
+            const hasConversation = Boolean(group.conversationId);
+            const isSessionSelected = selectedGroupKey === group.key;
 
             return (
-              <div key={group.session}>
-                {/* Session header (shown only when multiple pairs) */}
-                {hasMultiple && (
+              <div key={group.key} style={{ contentVisibility: 'auto', containIntrinsicSize: '0 56px' }}>
+                {/* Conversation header; standalone non-chat flows stay compact. */}
+                {(hasConversation || hasMultiple) && (
                   <button
-                    onClick={() => toggleCollapse(group.session)}
+                    onClick={() => toggleCollapse(group.key)}
                     className={`w-full text-left px-2 py-1 text-[11px] border-b border-zinc-800 transition-colors ${
                       isSessionSelected
                         ? 'bg-blue-950/40 text-blue-300'
@@ -200,8 +270,12 @@ export const RecordList = memo(function RecordList({
                       ) : (
                         <ChevronDown className="w-3 h-3 shrink-0" />
                       )}
-                      <span className="text-zinc-600">{t('recordlist.session')}</span>
-                      <span className="text-zinc-500 font-mono">{(group.session || '').slice(0, 8)}</span>
+                      <span className="text-zinc-600">
+                        {hasConversation ? t('recordlist.conversation') : t('recordlist.session')}
+                      </span>
+                      <span className="text-zinc-500 font-mono" title={group.conversationId || group.pairs[0]?.req.session}>
+                        {(group.conversationId || group.pairs[0]?.req.session || '').slice(0, 12)}
+                      </span>
                       {(() => {
                         const first = group.pairs[0]?.req?.ts;
                         const lastPair = group.pairs[group.pairs.length - 1];
@@ -211,7 +285,9 @@ export const RecordList = memo(function RecordList({
                           <span className="text-zinc-600 font-mono text-[10px]" title="Session span">· {span}</span>
                         ) : null;
                       })()}
-                      <span className="text-zinc-600 ml-auto">{group.pairs.length} {t('recordlist.requests')}</span>
+                      <span className="text-zinc-600 ml-auto">
+                        {group.pairs.length} {hasConversation ? t('recordlist.turns') : t('recordlist.requests')}
+                      </span>
                     </div>
                   </button>
                 )}
@@ -221,7 +297,7 @@ export const RecordList = memo(function RecordList({
                   group.pairs.map((pair, i) => {
                     const key = pairKey(pair);
                     const isSelected =
-                      selectedSession === group.session && selectedPairIdx === i;
+                      selectedGroupKey === group.key && selectedSession === pair.req.session && selectedPairIdx === i;
 
                     return (
                       <button

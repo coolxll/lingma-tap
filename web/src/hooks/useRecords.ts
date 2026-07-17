@@ -54,6 +54,30 @@ export function useRecords(externalPaused?: boolean) {
     });
   }, []);
 
+  // Apply a burst of lifecycle updates in one React commit. Proxy bodies are
+  // deliberately absent from these records, so this remains cheap even when
+  // the tap is receiving many SSE/request updates.
+  const upsertRecords = useCallback((updates: TrafficRecord[]) => {
+    if (isPausedRef.current || updates.length === 0) return;
+    setRecords((prev) => {
+      const next = [...prev];
+      const indexes = new Map(next.map((record, index) => [recordKey(record), index]));
+      const added: TrafficRecord[] = [];
+      for (const record of updates) {
+        const key = recordKey(record);
+        if (!key) continue;
+        const existing = indexes.get(key);
+        if (existing !== undefined) {
+          next[existing] = record;
+        } else {
+          added.push(record);
+        }
+      }
+      const combined = [...added.reverse(), ...next];
+      return combined.length > MAX_RECORDS ? combined.slice(0, MAX_RECORDS) : combined;
+    });
+  }, []);
+
   const clearRecords = useCallback(() => {
     setRecords([]);
     setSelectedRecord(null);
@@ -87,5 +111,6 @@ export function useRecords(externalPaused?: boolean) {
     clearProxyRecords,
     clearGatewayRecords,
     appendRecords,
+    upsertRecords,
   };
 }

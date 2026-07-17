@@ -1,4 +1,4 @@
-import { memo, useState, useMemo } from 'react';
+import { memo, useState, useMemo, useEffect } from 'react';
 import { TrafficRecord, formatTimestamp, formatDurationMs, getEndpointLabel, getEndpointColor } from '@/lib/types';
 import { JsonViewer } from './JsonViewer';
 import { SseEventList } from './SseEventList';
@@ -18,29 +18,74 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
   const { t } = useTranslation();
   const [viewMode, setViewMode] = useState<'friendly' | 'standard'>('standard');
   const [showReplay, setShowReplay] = useState(false);
+  const [loadedRequestBody, setLoadedRequestBody] = useState<string | null>(null);
+  const [loadedResponseBody, setLoadedResponseBody] = useState<string | null>(null);
+  const [bodyLoading, setBodyLoading] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    setLoadedRequestBody(null);
+    setLoadedResponseBody(null);
+    if (!request && !rawResponse) return () => controller.abort();
+
+    const load = async (record: TrafficRecord | null, setter: (body: string) => void) => {
+      if (!record || !needsFullBody(record)) return;
+      try {
+        if (active) setBodyLoading(true);
+		const result = await fetch(recordBodyURL(record, record === request && Boolean(record.is_encoded)), {
+          signal: controller.signal,
+        });
+        if (!result.ok) return;
+        const bytes = await result.arrayBuffer();
+        if (record.body_encoding === 'binary') return;
+        const text = new TextDecoder().decode(bytes);
+        if (active) setter(text);
+      } catch (error) {
+        if ((error as Error)?.name !== 'AbortError') console.warn('failed to load captured body', error);
+      } finally {
+        if (active) setBodyLoading(false);
+      }
+    };
+    void Promise.all([
+      load(request, setLoadedRequestBody),
+      load(rawResponse, setLoadedResponseBody),
+    ]);
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [request, rawResponse]);
+
+  const requestForView = request && loadedRequestBody !== null
+    ? { ...request, request_body: loadedRequestBody }
+    : request;
+  const responseForView = rawResponse && loadedResponseBody !== null
+    ? { ...rawResponse, response_body: loadedResponseBody }
+    : rawResponse;
 
   // Fallback: Parse SSE events on-the-fly in the frontend for historical records
   const response = useMemo(() => {
-    if (!rawResponse) return null;
-    if (rawResponse.is_sse && rawResponse.sse_events && rawResponse.sse_events.length > 0) {
-      return rawResponse;
+    if (!responseForView) return null;
+    if (responseForView.is_sse && responseForView.sse_events && responseForView.sse_events.length > 0) {
+      return responseForView;
     }
 
-    const body = rawResponse.response_body || '';
+    const body = responseForView.response_body || '';
     const sse_events = parseSSEEventsFromText(body);
     const hasSSEFraming = body.startsWith('data:') || body.includes('\ndata:');
     const hasLingmaEnvelope = sse_events.some((evt) => evt.body !== undefined && evt.body !== '');
     const looksLikeStreamBody = hasSSEFraming || sse_events.length > 1 || (hasLingmaEnvelope && hasReadableSSEPayload(sse_events));
     if (looksLikeStreamBody && sse_events.length > 0) {
       return {
-        ...rawResponse,
+        ...responseForView,
         is_sse: true,
         sse_events,
       };
     }
 
-    return rawResponse;
-  }, [rawResponse]);
+	return responseForView;
+  }, [responseForView]);
 
   const handleExportJSONL = () => {
     if (!request) return;
@@ -56,12 +101,12 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
 
   const chatContent = useMemo(() => {
     try {
-      if (!request || request.endpoint_type !== 'chat') return null;
+      if (!requestForView || requestForView.endpoint_type !== 'chat') return null;
 
       let prompt = '';
       let completion = '';
 
-      prompt = extractReadablePromptText(request.request_body);
+      prompt = extractReadablePromptText(requestForView.request_body);
 
       // Extract completion
       if (response) {
@@ -81,7 +126,7 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
       (window as any).go?.main?.App?.LogError(`chatContent error: ${err}`);
       return { prompt: 'Error extracting prompt', completion: 'Error extracting completion' };
     }
-  }, [request, response]);
+  }, [requestForView, response]);
 
   if (!request) {
     return (
@@ -229,15 +274,19 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
 
           {/* Request Body */}
           <Section title={t('detailpanel.request_body') + (request.is_encoded ? ` (${t('detailpanel.request_body_decoded')})` : '')}>
-            {request.request_body ? (
-              <JsonViewer data={request.request_body} maxHeight="500px" />
+            {bodyLoading && needsFullBody(request) ? (
+              <p className="text-zinc-600 text-xs">Loading captured body…</p>
+            ) : request.body_encoding === 'binary' ? (
+              <BinaryBody record={request} />
+            ) : requestForView?.request_body ? (
+              <JsonViewer data={requestForView.request_body} maxHeight="500px" />
             ) : (
               <p className="text-zinc-600 text-xs">{t('detailpanel.empty_body')}</p>
             )}
           </Section>
 
           {/* Raw Request Body (if different) */}
-          {request.is_encoded && request.request_body_raw && request.request_body_raw !== request.request_body && (
+          {request.is_encoded && request.request_body_raw && request.request_body_raw !== requestForView?.request_body && (
             <Section title={t('detailpanel.request_body_raw')}>
               <JsonViewer data={request.request_body_raw} maxHeight="500px" />
             </Section>
@@ -262,7 +311,9 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
 
               {/* Response Body */}
               <Section title={t('detailpanel.response_body')}>
-                {response.response_body ? (
+                {response.body_encoding === 'binary' ? (
+                  <BinaryBody record={response} />
+                ) : response.response_body ? (
                   <JsonViewer data={response.response_body} maxHeight="500px" />
                 ) : (
                   <p className="text-zinc-600 text-xs">{t('detailpanel.empty_body')}</p>
@@ -276,6 +327,22 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
           )}
         </div>
       )}
+      {request.artifact_ids && request.artifact_ids.length > 0 && (
+        <Section title="Captured images">
+          <div className="grid gap-3">
+            {request.artifact_ids.map((id) => (
+              <a key={id} href={`http://127.0.0.1:9091/api/artifacts/${id}`} target="_blank" rel="noreferrer">
+                <img
+                  src={`http://127.0.0.1:9091/api/artifacts/${id}`}
+                  alt={`Captured image ${id}`}
+                  loading="lazy"
+                  className="max-h-80 max-w-full rounded border border-zinc-800 object-contain"
+                />
+              </a>
+            ))}
+          </div>
+        </Section>
+      )}
     </div>
     {showReplay && request && (
       <ReplayModal request={request} onClose={() => setShowReplay(false)} />
@@ -283,6 +350,41 @@ export const DetailPanel = memo(function DetailPanel({ request, response: rawRes
     </>
   );
 });
+
+function needsFullBody(record: TrafficRecord | null): boolean {
+  if (!record) return false;
+  return Boolean(
+    record.body_encoding === 'binary' ||
+    record.body_truncated ||
+    (record.captured_size || 0) > 4096 ||
+    (record.request_size || 0) > 4096 ||
+    (record.response_size || 0) > 4096,
+  );
+}
+
+function recordBodyURL(record: TrafficRecord, decoded = false): string {
+  const view = decoded ? '?view=decoded' : '';
+  if (record.id > 0) return `http://127.0.0.1:9091/api/records/${record.id}/body${view}`;
+  const separator = decoded ? '&' : '';
+  return `http://127.0.0.1:9091/api/records/body?session=${encodeURIComponent(record.session)}&index=${record.index}${separator}${decoded ? 'view=decoded' : ''}`;
+}
+
+function BinaryBody({ record }: { record: TrafficRecord }) {
+  return (
+    <div className="space-y-2 text-xs text-zinc-500">
+      <div>Binary body · {record.captured_size || record.request_size || record.response_size} bytes</div>
+      {record.body_truncated && <div className="text-amber-400">Capture truncated at 16 MiB.</div>}
+      <a
+        className="inline-flex text-blue-400 hover:text-blue-300"
+        href={recordBodyURL(record)}
+        target="_blank"
+        rel="noreferrer"
+      >
+        Download captured body
+      </a>
+    </div>
+  );
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (

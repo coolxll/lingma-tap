@@ -44,6 +44,8 @@
     "no_records": "No records",
     "no_matches": "No matches",
     "session": "session",
+    "conversation": "conversation",
+    "turns": "turns",
     "requests": "requests",
     "records_count": "records",
     "load_more": "Load More"
