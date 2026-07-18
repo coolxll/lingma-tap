@@ -62,6 +62,18 @@ export namespace proto {
 	    reasoning_tokens?: number;
 	    total_tokens?: number;
 	    ttft?: number;
+	    upstream_attempts?: number;
+	    recovery_applied?: boolean;
+	    upstream_error_class?: string;
+	    first_actionable_ms?: number;
+	    reasoning_only_bytes?: number;
+	    requested_profile?: string;
+	    effective_profile?: string;
+	    context_trimmed?: boolean;
+	    context_original_bytes?: number;
+	    context_trimmed_bytes?: number;
+	    responses_degraded?: boolean;
+	    responses_warnings?: string;
 	    status: number;
 	    latency: number;
 	    error?: string;
@@ -89,6 +101,18 @@ export namespace proto {
 	        this.reasoning_tokens = source["reasoning_tokens"];
 	        this.total_tokens = source["total_tokens"];
 	        this.ttft = source["ttft"];
+	        this.upstream_attempts = source["upstream_attempts"];
+	        this.recovery_applied = source["recovery_applied"];
+	        this.upstream_error_class = source["upstream_error_class"];
+	        this.first_actionable_ms = source["first_actionable_ms"];
+	        this.reasoning_only_bytes = source["reasoning_only_bytes"];
+	        this.requested_profile = source["requested_profile"];
+	        this.effective_profile = source["effective_profile"];
+	        this.context_trimmed = source["context_trimmed"];
+	        this.context_original_bytes = source["context_original_bytes"];
+	        this.context_trimmed_bytes = source["context_trimmed_bytes"];
+	        this.responses_degraded = source["responses_degraded"];
+	        this.responses_warnings = source["responses_warnings"];
 	        this.status = source["status"];
 	        this.latency = source["latency"];
 	        this.error = source["error"];
@@ -164,6 +188,15 @@ export namespace proto {
 	    response_size: number;
 	    is_sse: boolean;
 	    sse_events?: SSEEvent[];
+	    body_phase?: string;
+	    body_complete: boolean;
+	    body_truncated: boolean;
+	    captured_size: number;
+	    declared_size?: number;
+	    body_encoding?: string;
+	    content_encoding?: string;
+	    correlation_keys?: string[];
+	    artifact_ids?: number[];
 	    error?: string;
 	    model?: string;
 	    input_tokens?: number;
@@ -174,6 +207,13 @@ export namespace proto {
 	    ttft?: number;
 	    latency?: number;
 	    finish_reason?: string;
+	    upstream_attempts?: number;
+	    recovery_applied?: boolean;
+	    upstream_error_class?: string;
+	    first_actionable_ms?: number;
+	    reasoning_only_bytes?: number;
+	    requested_profile?: string;
+	    effective_profile?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Record(source);
@@ -207,6 +247,15 @@ export namespace proto {
 	        this.response_size = source["response_size"];
 	        this.is_sse = source["is_sse"];
 	        this.sse_events = this.convertValues(source["sse_events"], SSEEvent);
+	        this.body_phase = source["body_phase"];
+	        this.body_complete = source["body_complete"];
+	        this.body_truncated = source["body_truncated"];
+	        this.captured_size = source["captured_size"];
+	        this.declared_size = source["declared_size"];
+	        this.body_encoding = source["body_encoding"];
+	        this.content_encoding = source["content_encoding"];
+	        this.correlation_keys = source["correlation_keys"];
+	        this.artifact_ids = source["artifact_ids"];
 	        this.error = source["error"];
 	        this.model = source["model"];
 	        this.input_tokens = source["input_tokens"];
@@ -217,6 +266,13 @@ export namespace proto {
 	        this.ttft = source["ttft"];
 	        this.latency = source["latency"];
 	        this.finish_reason = source["finish_reason"];
+	        this.upstream_attempts = source["upstream_attempts"];
+	        this.recovery_applied = source["recovery_applied"];
+	        this.upstream_error_class = source["upstream_error_class"];
+	        this.first_actionable_ms = source["first_actionable_ms"];
+	        this.reasoning_only_bytes = source["reasoning_only_bytes"];
+	        this.requested_profile = source["requested_profile"];
+	        this.effective_profile = source["effective_profile"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

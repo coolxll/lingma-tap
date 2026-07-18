@@ -46,6 +46,22 @@ export function GetNetworkInterfaces() {
   return window['go']['main']['App']['GetNetworkInterfaces']();
 }
 
+export function GetRecordBody(arg1) {
+  return window['go']['main']['App']['GetRecordBody'](arg1);
+}
+
+export function GetRecordBodyByKey(arg1, arg2) {
+  return window['go']['main']['App']['GetRecordBodyByKey'](arg1, arg2);
+}
+
+export function GetRecordBodyDecoded(arg1) {
+  return window['go']['main']['App']['GetRecordBodyDecoded'](arg1);
+}
+
+export function GetRecordBodyDecodedByKey(arg1, arg2) {
+  return window['go']['main']['App']['GetRecordBodyDecodedByKey'](arg1, arg2);
+}
+
 export function GetRecords(arg1, arg2) {
   return window['go']['main']['App']['GetRecords'](arg1, arg2);
 }

@@ -25,6 +25,14 @@ export function GetModels():Promise<Array<bridge.ModelInfo>>;
 
 export function GetNetworkInterfaces():Promise<Array<Record<string, string>>>;
 
+export function GetRecordBody(arg1:number):Promise<Array<number>>;
+
+export function GetRecordBodyByKey(arg1:string,arg2:number):Promise<Array<number>>;
+
+export function GetRecordBodyDecoded(arg1:number):Promise<Array<number>>;
+
+export function GetRecordBodyDecodedByKey(arg1:string,arg2:number):Promise<Array<number>>;
+
 export function GetRecords(arg1:number,arg2:number):Promise<Array<proto.Record>>;
 
 export function GetRecordsByType(arg1:number,arg2:number,arg3:string):Promise<Array<proto.Record>>;
