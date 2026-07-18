@@ -33,7 +33,6 @@ Thumbs.db
 /build/bin/
 /build/obj/
 /build/windows/
-/build/darwin/Info*.plist
 /build/darwin/icon.png
 
 # Node

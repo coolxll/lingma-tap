@@ -23,7 +23,7 @@ Lingma Tap 是一个专为 Lingma API 设计的数据包可视化与抓取工具
 
 - [Go](https://golang.org/dl/) (1.25+)
 - [Node.js](https://nodejs.org/) (20+)
-- [Wails CLI](https://wails.io/docs/gettingstarted/installation) (`go install github.com/wailsapp/wails/v2/cmd/wails@latest`)
+- [Wails CLI](https://wails.io/docs/gettingstarted/installation) (`go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0`)
 
 ### 开发运行
 

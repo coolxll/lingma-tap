@@ -65,7 +65,10 @@ static void configureTrayButton(void) {
         return;
     }
 
-    statusItem.length = NSVariableStatusItemLength;
+    // Give the image-only button a concrete slot. With an empty title,
+    // NSVariableStatusItemLength can resolve to a zero-width item before the
+    // status bar has measured the button.
+    statusItem.length = 24.0;
     NSImage *image = nil;
     if (trayIconData != nil) {
         image = [[[NSImage alloc] initWithData:trayIconData] autorelease];
@@ -74,7 +77,8 @@ static void configureTrayButton(void) {
         [image setSize:NSMakeSize(18, 18)];
         [image setTemplate:YES];
         [statusItem.button setImage:image];
-        [statusItem.button setImagePosition:NSImageLeft];
+        [statusItem.button setImagePosition:NSImageOnly];
+        [statusItem.button setImageScaling:NSImageScaleProportionallyDown];
         [statusItem.button setTitle:@""];
     } else {
         [statusItem.button setImage:nil];
@@ -95,7 +99,10 @@ static void configureTrayButton(void) {
     if ([statusItem respondsToSelector:@selector(isVisible)]) {
         visible = [statusItem isVisible];
     }
-    NSLog(@"[LingmaTap-Tray] configured status item title='%@' image=%d menu=%d length=%.1f visible=%d hidden=%d alpha=%.2f frame=%@ window=%@ screen=%@",
+    NSRect buttonFrame = [statusItem.button frame];
+    NSScreen *buttonScreen = [[statusItem.button window] screen];
+    NSSize imageSize = image != nil ? [image size] : NSZeroSize;
+    NSLog(@"[LingmaTap-Tray] configured status item title='%@' image=%d menu=%d length=%.1f visible=%d hidden=%d alpha=%.2f frame=%.1fx%.1f screen=%d imageSize=%.1fx%.1f policy=%ld",
           [statusItem.button title],
           image != nil,
           statusItem.menu != nil,
@@ -103,9 +110,12 @@ static void configureTrayButton(void) {
           visible,
           [statusItem.button isHidden],
           [statusItem.button alphaValue],
-          NSStringFromRect([statusItem.button frame]),
-          [statusItem.button window],
-          [[statusItem.button window] screen]);
+          buttonFrame.size.width,
+          buttonFrame.size.height,
+          buttonScreen != nil,
+          imageSize.width,
+          imageSize.height,
+          (long)[NSApp activationPolicy]);
 }
 
 static void createTrayIfNeeded(void) {
@@ -113,10 +123,18 @@ static void createTrayIfNeeded(void) {
         configureTrayButton();
         return;
     }
-    trayCreated = YES;
 
     clearLegacyStatusItemDefaults();
-    statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+    // Create the status item while the process is an accessory application so
+    // AppKit attaches it to the system menu bar. The window callbacks below
+    // switch back to Regular when the main window becomes key.
+    if ([NSApp activationPolicy] != NSApplicationActivationPolicyAccessory) {
+        BOOL policyChanged = [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+        NSLog(@"[LingmaTap-Tray] set accessory activation policy before status item: changed=%d policy=%ld",
+              policyChanged,
+              (long)[NSApp activationPolicy]);
+    }
+    statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:24.0];
 #if !__has_feature(objc_arc)
     [statusItem retain];
     NSLog(@"[LingmaTap-Tray] statusItem retained manually (non-ARC)");
@@ -124,9 +142,17 @@ static void createTrayIfNeeded(void) {
 
     if (statusItem == nil || statusItem.button == nil) {
         NSLog(@"[LingmaTap-Tray] failed to create visible status item");
+#if !__has_feature(objc_arc)
+        [statusItem release];
+#endif
+        statusItem = nil;
         return;
     }
 
+    // Mark the tray as created only after Cocoa returned a usable status item.
+    // This lets later launch/activation callbacks retry if the first attempt
+    // happens before NSStatusBar is ready.
+    trayCreated = YES;
     createTrayMenuIfNeeded();
     statusItem.menu = trayMenu;
     configureTrayButton();
