@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect, memo, useCallback } from 'react';
+import { useState, useMemo, useRef, useEffect, memo, useCallback, useDeferredValue } from 'react';
 import { TrafficRecord, recordKey, formatTimestamp, formatDurationMs, formatTimeSpan, getEndpointLabel, getStatusColor } from '@/lib/types';
 import { Search, Lock, ChevronRight, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -143,21 +143,23 @@ export const RecordList = memo(function RecordList({
 }: RecordListProps) {
   const { t } = useTranslation();
   const [localSearch, setLocalSearch] = useState('');
+  const deferredSearch = useDeferredValue(localSearch);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<HTMLButtonElement>(null);
 
   const filteredRecords = useMemo(() => {
-    if (!localSearch.trim()) return records;
-    const q = localSearch.toLowerCase();
+    if (!deferredSearch.trim()) return records;
+    const q = deferredSearch.toLowerCase();
     return records.filter((r) => {
-      const text = [r.path, r.host, r.request_body, r.response_body]
+      // Only search metadata fields to avoid expensive body string concatenation
+      const text = [r.path, r.host, r.method, r.status?.toString(), r.model]
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
       return text.includes(q);
     });
-  }, [records, localSearch]);
+  }, [records, deferredSearch]);
 
   const groups = useMemo(() => groupByConversation(filteredRecords), [filteredRecords]);
 

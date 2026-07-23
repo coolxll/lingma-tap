@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { StorageStats, formatTimeSpan } from '@/lib/types';
 import { useTranslation } from 'react-i18next';
 
@@ -8,7 +9,7 @@ interface BottomDockProps {
   proxyPort: number;
 }
 
-export function BottomDock({ connected, recordCount, stats, proxyPort }: BottomDockProps) {
+export const BottomDock = memo(function BottomDock({ connected, recordCount, stats, proxyPort }: BottomDockProps) {
   const { t } = useTranslation();
   const span = formatTimeSpan(stats?.oldest_ts, stats?.newest_ts);
 
@@ -48,4 +49,4 @@ export function BottomDock({ connected, recordCount, stats, proxyPort }: BottomD
       <span>{t('common.proxy')}: 127.0.0.1:{proxyPort}</span>
     </div>
   );
-}
+});

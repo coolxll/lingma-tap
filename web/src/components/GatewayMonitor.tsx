@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, memo } from 'react';
 import { Search, X, Activity, CheckCircle, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { TrafficRecord, formatTimestamp, getStatusColor } from '@/lib/types';
@@ -91,7 +91,7 @@ function shortenEndpoint(path: string): string {
   return path.length > 28 ? `…${path.slice(-27)}` : path;
 }
 
-export function GatewayMonitor({
+export const GatewayMonitor = memo(function GatewayMonitor({
   records,
   onClear,
   loggingEnabled,
@@ -198,16 +198,19 @@ export function GatewayMonitor({
       return;
     }
     let cancelled = false;
-    getStats(timeRange, filter)
-      .then(stats => {
-        if (!cancelled) setAggregateStats(stats || null);
-      })
-      .catch(err => {
-        console.error('Failed to load gateway stats:', err);
-        if (!cancelled) setAggregateStats(null);
-      });
+    const timer = setTimeout(() => {
+      getStats(timeRange, filter)
+        .then(stats => {
+          if (!cancelled) setAggregateStats(stats || null);
+        })
+        .catch(err => {
+          console.error('Failed to load gateway stats:', err);
+          if (!cancelled) setAggregateStats(null);
+        });
+    }, 1000);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [getStats, timeRange, filter, records.length]);
 
@@ -333,7 +336,7 @@ export function GatewayMonitor({
       <div className="flex items-center gap-4 px-6 py-3 bg-zinc-950 border-b border-zinc-900">
         <button
           onClick={onToggleLogging}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border shrink-0 ${loggingEnabled
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors border shrink-0 ${loggingEnabled
             ? 'bg-green-500/10 text-green-400 border-green-500/20'
             : 'bg-zinc-900 text-zinc-500 border-zinc-800'
             }`}
@@ -349,7 +352,7 @@ export function GatewayMonitor({
             placeholder={t('monitor.search_placeholder')}
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-10 pr-4 py-2 text-sm text-zinc-300 focus:outline-none focus:border-zinc-700 transition-all shadow-inner"
+            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-10 pr-4 py-2 text-sm text-zinc-300 focus:outline-none focus:border-zinc-700 transition-colors shadow-inner"
           />
         </div>
 
@@ -372,7 +375,7 @@ export function GatewayMonitor({
         <div className="w-px h-6 bg-zinc-800" />
         <button
           onClick={onClear}
-          className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded-full transition-all shrink-0"
+          className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded-full transition-colors shrink-0"
           title={t('common.clear')}
         >
           <Trash2 className="w-5 h-5" />
@@ -428,7 +431,7 @@ export function GatewayMonitor({
 
       <div className="flex-1 overflow-auto">
         <table className="min-w-[1120px] w-full border-collapse text-left">
-          <thead className="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur-md">
+          <thead className="sticky top-0 z-10 bg-zinc-950">
             <tr className="border-b border-zinc-900">
               {visibleColumnList.map(column => (
                 <th
@@ -479,7 +482,7 @@ export function GatewayMonitor({
             <button
               onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
               disabled={currentPage === 1}
-              className="p-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+              className="p-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
@@ -489,14 +492,14 @@ export function GatewayMonitor({
             <button
               onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
               disabled={currentPage === totalPages}
-              className="p-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+              className="p-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
             {canLoadMore && onLoadMore && (
               <button
                 onClick={onLoadMore}
-                className="ml-4 px-3 py-1.5 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-lg text-xs font-bold hover:bg-blue-500/20 transition-all"
+                className="ml-4 px-3 py-1.5 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-lg text-xs font-bold hover:bg-blue-500/20 transition-colors"
               >
                 {t('recordlist.load_more')}
               </button>
@@ -506,7 +509,7 @@ export function GatewayMonitor({
       )}
 
       {selectedRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6 animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6 animate-in fade-in duration-200">
           <div className="bg-zinc-950 border border-zinc-800 rounded-3xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
             <div className="px-6 py-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-900/30">
               <div className="flex flex-col gap-1">
@@ -573,12 +576,12 @@ export function GatewayMonitor({
                 </div>
                 <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden flex">
                   <div
-                    className="h-full bg-blue-500/80 transition-all duration-500"
+                    className="h-full bg-blue-500/80 transition-[width] duration-500"
                     style={{ width: `${ttftWidth}%` }}
                     title="TTFT"
                   />
                   <div
-                    className="h-full bg-blue-400/40 transition-all duration-500"
+                    className="h-full bg-blue-400/40 transition-[width] duration-500"
                     style={{ width: `${Math.max(0, 100 - ttftWidth)}%` }}
                     title="Generation"
                   />
@@ -595,7 +598,7 @@ export function GatewayMonitor({
                     <div className="flex bg-zinc-900/50 rounded-lg p-0.5 border border-zinc-800">
                       <button
                         onClick={() => setRequestViewMode('friendly')}
-                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${requestViewMode === 'friendly'
+                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-colors ${requestViewMode === 'friendly'
                           ? 'bg-zinc-800 text-blue-400 shadow-sm'
                           : 'text-zinc-500 hover:text-zinc-400'
                           }`}
@@ -604,7 +607,7 @@ export function GatewayMonitor({
                       </button>
                       <button
                         onClick={() => setRequestViewMode('raw')}
-                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${requestViewMode === 'raw'
+                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-colors ${requestViewMode === 'raw'
                           ? 'bg-zinc-800 text-blue-400 shadow-sm'
                           : 'text-zinc-500 hover:text-zinc-400'
                           }`}
@@ -631,7 +634,7 @@ export function GatewayMonitor({
                     <div className="flex bg-zinc-900/50 rounded-lg p-0.5 border border-zinc-800">
                       <button
                         onClick={() => setResponseViewMode('friendly')}
-                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${responseViewMode === 'friendly'
+                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-colors ${responseViewMode === 'friendly'
                           ? 'bg-zinc-800 text-green-400 shadow-sm'
                           : 'text-zinc-500 hover:text-zinc-400'
                           }`}
@@ -640,7 +643,7 @@ export function GatewayMonitor({
                       </button>
                       <button
                         onClick={() => setResponseViewMode('raw')}
-                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${responseViewMode === 'raw'
+                        className={`px-3 py-1 text-[10px] font-bold rounded-md transition-colors ${responseViewMode === 'raw'
                           ? 'bg-zinc-800 text-blue-400 shadow-sm'
                           : 'text-zinc-500 hover:text-zinc-400'
                           }`}
@@ -690,7 +693,7 @@ export function GatewayMonitor({
       )}
     </div>
   );
-}
+});
 
 function StatCard({ label, value, color }: {
   label: string;

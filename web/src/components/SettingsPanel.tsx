@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { RefreshCw, Copy, Check, Shield, ShieldOff, Server, ServerOff, Trash2, FolderOpen, FileKey, ExternalLink, LogIn, CircleCheck, LoaderCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -68,7 +68,7 @@ interface SettingsPanelProps {
   onRevealCACert?: () => Promise<void>;
 }
 
-export function SettingsPanel({
+export const SettingsPanel = memo(function SettingsPanel({
   proxyRunning,
   proxyPort,
   onToggleProxy,
@@ -998,4 +998,4 @@ export function SettingsPanel({
       </div>
     </div>
   );
-}
+});
