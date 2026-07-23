@@ -176,6 +176,7 @@ function App() {
   const [displayCount, setDisplayCount] = useState(PROXY_PAGE_SIZE);
   const [canLoadMore, setCanLoadMore] = useState(true);
   const [proxyTypeFilter, setProxyTypeFilter] = useState<ProxyTypeFilter>("chat");
+  const [isVisible, setIsVisible] = useState(true);
 
   const liveTail = activeTab === "proxy" ? proxyLiveTail : gatewayLiveTail;
   const liveTailRef = useRef(liveTail);
@@ -192,24 +193,48 @@ function App() {
   const pendingWSRecordsRef = useRef(new Map<string, TrafficRecord>());
   const wsFlushFrameRef = useRef<number | null>(null);
 
+  const isVisibleRef = useRef(isVisible);
+  useEffect(() => {
+    isVisibleRef.current = isVisible;
+  }, [isVisible]);
+
   const enqueueWSRecord = useCallback((record: TrafficRecord) => {
     if (!record) return;
     const key = recordKey(record);
     if (!key) return;
     pendingWSRecordsRef.current.set(key, record);
     if (wsFlushFrameRef.current !== null) return;
-    wsFlushFrameRef.current = window.requestAnimationFrame(() => {
-      wsFlushFrameRef.current = null;
-      const batch = [...pendingWSRecordsRef.current.values()];
-      pendingWSRecordsRef.current.clear();
-      upsertRecords(batch);
-      if (liveTailRef.current) {
-        const last = batch[batch.length - 1];
-        if (last && shouldAutoSelectRecord(last, activeTabRef.current, proxyTypeFilterRef.current)) {
-          setSelectedRecord(last);
+
+    // Throttle WebSocket processing when page is hidden
+    const flushDelay = isVisibleRef.current ? 0 : 2000;
+
+    if (flushDelay === 0) {
+      wsFlushFrameRef.current = window.requestAnimationFrame(() => {
+        wsFlushFrameRef.current = null;
+        const batch = [...pendingWSRecordsRef.current.values()];
+        pendingWSRecordsRef.current.clear();
+        upsertRecords(batch);
+        if (liveTailRef.current) {
+          const last = batch[batch.length - 1];
+          if (last && shouldAutoSelectRecord(last, activeTabRef.current, proxyTypeFilterRef.current)) {
+            setSelectedRecord(last);
+          }
         }
-      }
-    });
+      });
+    } else {
+      wsFlushFrameRef.current = window.setTimeout(() => {
+        wsFlushFrameRef.current = null;
+        const batch = [...pendingWSRecordsRef.current.values()];
+        pendingWSRecordsRef.current.clear();
+        upsertRecords(batch);
+        if (liveTailRef.current) {
+          const last = batch[batch.length - 1];
+          if (last && shouldAutoSelectRecord(last, activeTabRef.current, proxyTypeFilterRef.current)) {
+            setSelectedRecord(last);
+          }
+        }
+      }, flushDelay) as unknown as number;
+    }
   }, [setSelectedRecord, upsertRecords]);
 
   // Computed records for active tab
@@ -248,6 +273,13 @@ function App() {
   useEffect(() => {
     proxyTypeFilterRef.current = proxyTypeFilter;
   }, [proxyTypeFilter]);
+
+  // Track page visibility to throttle work when hidden
+  useEffect(() => {
+    const handler = () => setIsVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
+  }, []);
 
   // Wails bindings
   const wails = (window as unknown as WailsWindow).go?.main?.App;
@@ -435,7 +467,9 @@ function App() {
     client.connect();
     return () => {
       if (wsFlushFrameRef.current !== null) {
+        // Could be either requestAnimationFrame or setTimeout depending on visibility
         window.cancelAnimationFrame(wsFlushFrameRef.current);
+        window.clearTimeout(wsFlushFrameRef.current);
         wsFlushFrameRef.current = null;
       }
       pendingWSRecordsRef.current.clear();
@@ -443,15 +477,23 @@ function App() {
     };
   }, [enqueueWSRecord, updateRecords, wails, fetchProxyRecords]);
 
-  // Poll status
+  // Poll status (pause when hidden)
   useEffect(() => {
+    if (!isVisible) return;
     const interval = setInterval(() => {
       wails?.GetStatus().then((s) => {
         applyStatus(s);
       });
     }, 5000);
     return () => clearInterval(interval);
-  }, [wails, applyStatus]);
+  }, [wails, applyStatus, isVisible]);
+
+  // Refresh status immediately when becoming visible
+  useEffect(() => {
+    if (isVisible && wails) {
+      wails.GetStatus().then(applyStatus);
+    }
+  }, [isVisible, wails, applyStatus]);
 
   useEffect(() => {
     if (!oauthInProgress || !wails) return;
@@ -630,6 +672,46 @@ function App() {
     setTheme((prev) => (prev === "dark" ? "light" : "dark"));
   }, []);
 
+  const handleClearBefore = useCallback(async (days: number) => {
+    let deleted = 0;
+    if (wails?.ClearRecordsBefore) {
+      deleted = await wails.ClearRecordsBefore(days);
+      try {
+        const s = await wails.GetStatus();
+        const st = s?.stats as StorageStats | null;
+        if (st) setStats(st);
+      } catch (err) {
+        console.error("Failed to refresh status:", err);
+      }
+    } else {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      const cutoffTime = cutoff.getTime();
+      deleted = records.filter((r) => new Date(r.ts).getTime() < cutoffTime).length;
+    }
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffTime = cutoff.getTime();
+    const filtered = records.filter(
+      (r) => new Date(r.ts).getTime() >= cutoffTime
+    );
+    updateRecords(filtered);
+
+    if (selectedRecord && new Date(selectedRecord.ts).getTime() < cutoffTime) {
+      setSelectedRecord(filtered[0] || null);
+    }
+
+    return deleted;
+  }, [wails, records, selectedRecord, updateRecords, setSelectedRecord]);
+
+  const handleRevealCACert = useCallback(async () => {
+    if (!wails?.RevealCACert) {
+      throw new Error('RevealCACert is not available');
+    }
+    await wails.RevealCACert();
+  }, [wails]);
+
   return (
     <div className="h-dvh flex flex-col bg-zinc-950 text-zinc-100">
       <TitleBar
@@ -697,45 +779,9 @@ function App() {
             onStartOAuthLogin={handleStartOAuthLogin}
             stats={stats || null}
             onClearAll={handleClear}
-            onClearBefore={async (days) => {
-              let deleted = 0;
-              if (wails?.ClearRecordsBefore) {
-                deleted = await wails.ClearRecordsBefore(days);
-                try {
-                  const s = await wails.GetStatus();
-                  const st = s?.stats as StorageStats | null;
-                  if (st) setStats(st);
-                } catch (err) {
-                  console.error("Failed to refresh status:", err);
-                }
-              } else {
-                const cutoff = new Date();
-                cutoff.setDate(cutoff.getDate() - days);
-                const cutoffTime = cutoff.getTime();
-                deleted = records.filter((r) => new Date(r.ts).getTime() < cutoffTime).length;
-              }
-
-              const cutoff = new Date();
-              cutoff.setDate(cutoff.getDate() - days);
-              const cutoffTime = cutoff.getTime();
-              const filtered = records.filter(
-                (r) => new Date(r.ts).getTime() >= cutoffTime
-              );
-              updateRecords(filtered);
-
-              if (selectedRecord && new Date(selectedRecord.ts).getTime() < cutoffTime) {
-                setSelectedRecord(filtered[0] || null);
-              }
-
-              return deleted;
-            }}
+            onClearBefore={handleClearBefore}
             caCertPath={caCertPath}
-            onRevealCACert={async () => {
-              if (!wails?.RevealCACert) {
-                throw new Error('RevealCACert is not available');
-              }
-              await wails.RevealCACert();
-            }}
+            onRevealCACert={handleRevealCACert}
           />
         )}
       </div>

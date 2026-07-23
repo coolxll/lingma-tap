@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, memo } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { SSEEvent } from '@/lib/types';
 import { JsonViewer } from './JsonViewer';
@@ -11,7 +11,7 @@ interface SseEventListProps {
 
 type ViewMode = 'events' | 'complete';
 
-export function SseEventList({ events }: SseEventListProps) {
+export const SseEventList = memo(function SseEventList({ events }: SseEventListProps) {
   const { t } = useTranslation();
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('events');
@@ -123,4 +123,4 @@ export function SseEventList({ events }: SseEventListProps) {
       )}
     </div>
   );
-}
+});

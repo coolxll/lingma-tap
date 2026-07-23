@@ -9,8 +9,8 @@ interface JsonViewerProps {
   maxHeight?: string;
 }
 
-const SHIKI_CHAR_LIMIT = 120_000;
-const CACHE_LIMIT = 24;
+const SHIKI_CHAR_LIMIT = 50_000;
+const CACHE_LIMIT = 8;
 const shikiCache = new Map<string, string>();
 
 let highlighterPromise: Promise<HighlighterCore> | null = null;
