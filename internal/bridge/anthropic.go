@@ -544,20 +544,6 @@ func (h *BridgeHandler) mapAnthropicModelToLingma(ctx context.Context, model str
 		}
 	}
 
-	// If the model name does not contain any Claude-family keyword, it is
-	// likely already a direct Lingma model key (e.g. set by CC-Switch or
-	// another model-switching proxy). Pass it through as-is.
-	isClaudeFamily := false
-	for _, kw := range []string{"claude", "sonnet", "haiku", "opus"} {
-		if strings.Contains(modelLower, kw) {
-			isClaudeFamily = true
-			break
-		}
-	}
-	if !isClaudeFamily && modelLower != "" {
-		return model
-	}
-
 	if h.defaultModel != "" {
 		return h.defaultModel
 	}
