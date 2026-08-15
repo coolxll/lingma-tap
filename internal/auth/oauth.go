@@ -434,21 +434,16 @@ func buildChinaOAuthURL(state, nonce, challenge, machineID string, port int) (st
 	if port <= 0 || port > 65535 {
 		return "", fmt.Errorf("invalid OAuth callback port")
 	}
-	inner := &url.URL{Scheme: "https", Host: "devops.aliyun.com", Path: "/lingma/login"}
-	query := inner.Query()
+	u := &url.URL{Scheme: "https", Host: "devops.aliyun.com", Path: "/lingma/login"}
+	query := u.Query()
 	query.Set("nonce", nonce)
 	query.Set("port", strconv.Itoa(port))
 	query.Set("state", state)
 	query.Set("challenge", challenge)
 	query.Set("challenge_method", "S256")
 	query.Set("machine_id", machineID)
-	inner.RawQuery = query.Encode()
-
-	outer := &url.URL{Scheme: "https", Host: "signin.aliyun.com", Path: "/login.htm"}
-	outerQuery := outer.Query()
-	outerQuery.Set("oauth_callback", inner.String())
-	outer.RawQuery = outerQuery.Encode()
-	return outer.String(), nil
+	u.RawQuery = query.Encode()
+	return u.String(), nil
 }
 
 func writeOAuthResult(w http.ResponseWriter, status int, title, message string) {

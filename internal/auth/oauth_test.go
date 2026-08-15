@@ -123,19 +123,15 @@ func TestOAuthLoginCallbackCompletesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse login URL: %v", err)
 	}
-	inner, err := url.Parse(outer.Query().Get("oauth_callback"))
-	if err != nil {
-		t.Fatalf("parse inner OAuth URL: %v", err)
-	}
-	if inner.Host != "devops.aliyun.com" || inner.Path != "/lingma/login" || inner.Query().Get("state") == "" || inner.Query().Get("challenge_method") != "S256" {
-		t.Fatalf("unexpected inner login URL: %s", inner.String())
+	if outer.Host != "devops.aliyun.com" || outer.Path != "/lingma/login" || outer.Query().Get("state") == "" || outer.Query().Get("challenge_method") != "S256" {
+		t.Fatalf("unexpected login URL: %s", outer.String())
 	}
 
 	login.mu.Lock()
 	callbackAddr := login.listener.Addr().String()
 	login.mu.Unlock()
 	query := url.Values{
-		"state": {inner.Query().Get("state")},
+		"state": {outer.Query().Get("state")},
 		"auth":  {callbackAuthFixture},
 		"token": {callbackTokenFixture},
 	}

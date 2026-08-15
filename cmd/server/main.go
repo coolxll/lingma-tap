@@ -303,7 +303,7 @@ func (s *Server) HandleAuthProbe(w http.ResponseWriter, r *http.Request) {
 
 	// Construct login URL
 	loginURL := fmt.Sprintf(
-		"https://signin.aliyun.com/login.htm?oauth_callback=https%%3A%%2F%%2Fdevops.aliyun.com%%2Flingma%%2Flogin%%3Fstate%%3D%s%%26port%%3D%d",
+		"https://devops.aliyun.com/lingma/login?state=%s&port=%d",
 		state, callbackPort,
 	)
 
