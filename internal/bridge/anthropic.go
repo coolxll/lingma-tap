@@ -530,6 +530,16 @@ func (h *BridgeHandler) mapAnthropicModelToLingma(ctx context.Context, model str
 					return m.Key
 				}
 			}
+			// Debug: log available models when no match found
+			if h.Debug {
+				var keys []string
+				for _, m := range models {
+					keys = append(keys, m.Key)
+				}
+				fmt.Printf("[DEBUG] Model mapping: requested '%s' not found, available: %v\n", model, keys)
+			}
+		} else if h.Debug {
+			fmt.Printf("[DEBUG] Model mapping: fetchModels failed: %v\n", err)
 		}
 	}
 
