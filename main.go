@@ -769,6 +769,7 @@ func (a *App) GetStatus() map[string]interface{} {
 		}
 		status["oauth_expires_at"] = oauthExpiresAt
 		status["oauth_error"] = oauthStatus.Error
+		status["oauth_login_url"] = oauthStatus.LoginURL
 	}
 	return status
 }
@@ -795,25 +796,26 @@ func (a *App) OpenExternal(url string) {
 }
 
 // StartOAuthLogin starts a browser-based Lingma OAuth flow for the desktop app.
-func (a *App) StartOAuthLogin() error {
+// Returns the login URL so the frontend can display it for manual copy.
+func (a *App) StartOAuthLogin() (string, error) {
 	a.mu.Lock()
 	dataDir := a.dataDir
 	oauthLogin := a.oauthLogin
 	openURL := a.openURL
 	a.mu.Unlock()
 	if dataDir == "" {
-		return fmt.Errorf("application data directory is not initialized")
+		return "", fmt.Errorf("application data directory is not initialized")
 	}
 	if oauthLogin == nil {
-		return fmt.Errorf("OAuth login is not initialized")
+		return "", fmt.Errorf("OAuth login is not initialized")
 	}
 	if openURL == nil {
-		return fmt.Errorf("browser opener is not initialized")
+		return "", fmt.Errorf("browser opener is not initialized")
 	}
 
 	machineID, err := auth.OAuthMachineID(dataDir)
 	if err != nil {
-		return fmt.Errorf("prepare OAuth machine ID: %w", err)
+		return "", fmt.Errorf("prepare OAuth machine ID: %w", err)
 	}
 	loginURL, err := oauthLogin.Start(machineID, func(creds *auth.Credentials) error {
 		if err := auth.SaveExchangedCredentials(creds, dataDir); err != nil {
@@ -823,9 +825,21 @@ func (a *App) StartOAuthLogin() error {
 		return nil
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 	openURL(loginURL)
+	return loginURL, nil
+}
+
+// CancelOAuthLogin cancels any in-progress OAuth login.
+func (a *App) CancelOAuthLogin() error {
+	a.mu.Lock()
+	oauthLogin := a.oauthLogin
+	a.mu.Unlock()
+	if oauthLogin == nil {
+		return fmt.Errorf("OAuth login is not initialized")
+	}
+	oauthLogin.Cancel()
 	return nil
 }
 

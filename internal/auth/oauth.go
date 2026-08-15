@@ -43,6 +43,7 @@ type OAuthLoginStatus struct {
 	InProgress bool
 	ExpiresAt  time.Time
 	Error      string
+	LoginURL   string
 }
 
 // OAuthLogin owns the short-lived loopback callback server for one desktop
@@ -56,6 +57,7 @@ type OAuthLogin struct {
 	expiresAt  time.Time
 	inProgress bool
 	lastError  string
+	loginURL   string
 	onComplete func(*Credentials) error
 
 	timeout time.Duration
@@ -119,6 +121,7 @@ func (l *OAuthLogin) Start(machineID string, onComplete func(*Credentials) error
 	l.expiresAt = l.now().Add(l.timeout)
 	l.inProgress = true
 	l.lastError = ""
+	l.loginURL = loginURL
 	l.listener = listener
 	l.onComplete = onComplete
 
@@ -222,6 +225,18 @@ func (l *OAuthLogin) Status() OAuthLoginStatus {
 		InProgress: l.inProgress,
 		ExpiresAt:  l.expiresAt,
 		Error:      l.lastError,
+		LoginURL:   l.loginURL,
+	}
+}
+
+// Cancel aborts an in-progress OAuth login.
+func (l *OAuthLogin) Cancel() {
+	l.mu.Lock()
+	server := l.server
+	l.clearLocked("OAuth login cancelled")
+	l.mu.Unlock()
+	if server != nil {
+		_ = server.Close()
 	}
 }
 

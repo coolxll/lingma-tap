@@ -60,7 +60,9 @@ interface SettingsPanelProps {
   authExpireTime?: number;
   oauthInProgress?: boolean;
   oauthError?: string;
+  oauthLoginURL?: string;
   onStartOAuthLogin?: () => Promise<void>;
+  onCancelOAuthLogin?: () => void;
   stats?: StorageStats | null;
   onClearAll?: () => void;
   onClearBefore?: (days: number) => Promise<number>;
@@ -90,7 +92,9 @@ export const SettingsPanel = memo(function SettingsPanel({
   authExpireTime = 0,
   oauthInProgress = false,
   oauthError = '',
+  oauthLoginURL = '',
   onStartOAuthLogin,
+  onCancelOAuthLogin,
   stats,
   onClearAll,
   onClearBefore,
@@ -98,6 +102,20 @@ export const SettingsPanel = memo(function SettingsPanel({
   onRevealCACert,
 }: SettingsPanelProps) {
   const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyURL = useCallback(async () => {
+    if (oauthLoginURL) {
+      try {
+        await navigator.clipboard.writeText(oauthLoginURL);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch (err) {
+        console.error('Failed to copy URL:', err);
+      }
+    }
+  }, [oauthLoginURL]);
+
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState('');
@@ -361,31 +379,60 @@ export const SettingsPanel = memo(function SettingsPanel({
 
         <section>
           <h2 className="text-sm font-semibold text-zinc-200 mb-4 uppercase tracking-widest opacity-60">{t('settings.authentication')}</h2>
-          <div className="bg-zinc-900/30 rounded-2xl p-5 border border-zinc-800/50 flex items-center justify-between gap-4">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm font-bold text-zinc-100">
-                {authenticated ? <CircleCheck className="w-4 h-4 text-emerald-400 shrink-0" /> : <Shield className="w-4 h-4 text-amber-400 shrink-0" />}
-                <span>{authenticated ? t('settings.authenticated') : t('settings.not_authenticated')}</span>
+          <div className="bg-zinc-900/30 rounded-2xl p-5 border border-zinc-800/50 flex flex-col gap-4">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-sm font-bold text-zinc-100">
+                  {authenticated ? <CircleCheck className="w-4 h-4 text-emerald-400 shrink-0" /> : <Shield className="w-4 h-4 text-amber-400 shrink-0" />}
+                  <span>{authenticated ? t('settings.authenticated') : t('settings.not_authenticated')}</span>
+                </div>
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  {oauthInProgress
+                    ? t('settings.oauth_waiting')
+                    : authenticated
+                      ? authExpiryLabel
+                        ? t('settings.authenticated_hint', { user: authUser || t('settings.unknown_user'), expires: authExpiryLabel })
+                        : t('settings.authenticated_user_hint', { user: authUser || t('settings.unknown_user') })
+                      : t('settings.oauth_hint')}
+                </p>
+                {!oauthInProgress && oauthError && <p className="mt-2 text-[11px] text-red-400">{oauthError}</p>}
               </div>
-              <p className="mt-1 text-[11px] text-zinc-500">
-                {oauthInProgress
-                  ? t('settings.oauth_waiting')
-                  : authenticated
-                    ? authExpiryLabel
-                      ? t('settings.authenticated_hint', { user: authUser || t('settings.unknown_user'), expires: authExpiryLabel })
-                      : t('settings.authenticated_user_hint', { user: authUser || t('settings.unknown_user') })
-                    : t('settings.oauth_hint')}
-              </p>
-              {!oauthInProgress && oauthError && <p className="mt-2 text-[11px] text-red-400">{oauthError}</p>}
+              {!oauthInProgress ? (
+                <button
+                  onClick={() => void onStartOAuthLogin?.()}
+                  disabled={!onStartOAuthLogin}
+                  className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-blue-500/10 text-blue-300 border border-blue-500/20 hover:bg-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  {authenticated ? t('settings.oauth_reauthenticate') : t('settings.oauth_login')}
+                </button>
+              ) : (
+                <button
+                  onClick={onCancelOAuthLogin}
+                  className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-red-500/10 text-red-300 border border-red-500/20 hover:bg-red-500/20"
+                >
+                  {t('settings.oauth_cancel')}
+                </button>
+              )}
             </div>
-            <button
-              onClick={() => void onStartOAuthLogin?.()}
-              disabled={!onStartOAuthLogin || oauthInProgress}
-              className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-blue-500/10 text-blue-300 border border-blue-500/20 hover:bg-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {oauthInProgress ? <LoaderCircle className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
-              {oauthInProgress ? t('settings.oauth_waiting_button') : authenticated ? t('settings.oauth_reauthenticate') : t('settings.oauth_login')}
-            </button>
+            {oauthInProgress && oauthLoginURL && (
+              <div className="flex items-center gap-2 mt-2 p-2 bg-zinc-800/50 rounded-lg">
+                <input
+                  type="text"
+                  readOnly
+                  value={oauthLoginURL}
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                  className="flex-1 bg-transparent text-[11px] text-zinc-400 outline-none font-mono truncate"
+                />
+                <button
+                  onClick={() => navigator.clipboard.writeText(oauthLoginURL)}
+                  className="shrink-0 p-1.5 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/50"
+                  title={t('settings.oauth_copy_url')}
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
           </div>
         </section>
 

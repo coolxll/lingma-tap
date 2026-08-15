@@ -42,7 +42,8 @@ interface WailsWindow extends Window {
         SetProxyLogging: (enabled: boolean) => Promise<void>;
         SetLingmaHTTP2: (enabled: boolean) => Promise<void>;
         GetModels: () => Promise<ModelInfo[]>;
-        StartOAuthLogin: () => Promise<void>;
+        StartOAuthLogin: () => Promise<string>;
+        CancelOAuthLogin: () => Promise<void>;
       };
     };
   };
@@ -173,6 +174,7 @@ function App() {
   const [authExpireTime, setAuthExpireTime] = useState(0);
   const [oauthInProgress, setOAuthInProgress] = useState(false);
   const [oauthError, setOAuthError] = useState('');
+  const [oauthLoginURL, setOAuthLoginURL] = useState('');
   const [displayCount, setDisplayCount] = useState(PROXY_PAGE_SIZE);
   const [canLoadMore, setCanLoadMore] = useState(true);
   const [proxyTypeFilter, setProxyTypeFilter] = useState<ProxyTypeFilter>("chat");
@@ -307,6 +309,12 @@ function App() {
       setOAuthInProgress(s.oauth_in_progress as boolean);
     if (typeof s?.oauth_error === 'string')
       setOAuthError(s.oauth_error);
+    if (typeof s?.oauth_login_url === 'string')
+      setOAuthLoginURL(s.oauth_login_url);
+    if (!(s?.oauth_in_progress as boolean))
+      setOAuthLoginURL('');
+    if (typeof s?.oauth_login_url === 'string')
+      setOAuthLoginURL(s.oauth_login_url);
   }, []);
 
   const fetchProxyRecords = useCallback(async (filter: ProxyTypeFilter, offset: number) => {
@@ -539,13 +547,26 @@ function App() {
   const handleStartOAuthLogin = useCallback(async () => {
     if (!wails?.StartOAuthLogin) return;
     try {
-      await wails.StartOAuthLogin();
+      const url = await wails.StartOAuthLogin();
+      setOAuthLoginURL(url);
       const status = await wails.GetStatus();
       applyStatus(status);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to start OAuth login';
       setOAuthError(message);
       console.error('Failed to start OAuth login:', err);
+    }
+  }, [wails, applyStatus]);
+
+  const handleCancelOAuthLogin = useCallback(async () => {
+    if (!wails?.CancelOAuthLogin) return;
+    try {
+      await wails.CancelOAuthLogin();
+      setOAuthLoginURL('');
+      const status = await wails.GetStatus();
+      applyStatus(status);
+    } catch (err) {
+      console.error('Failed to cancel OAuth login:', err);
     }
   }, [wails, applyStatus]);
 
@@ -776,7 +797,9 @@ function App() {
             authExpireTime={authExpireTime}
             oauthInProgress={oauthInProgress}
             oauthError={oauthError}
+            oauthLoginURL={oauthLoginURL}
             onStartOAuthLogin={handleStartOAuthLogin}
+            onCancelOAuthLogin={handleCancelOAuthLogin}
             stats={stats || null}
             onClearAll={handleClear}
             onClearBefore={handleClearBefore}

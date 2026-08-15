@@ -84,6 +84,8 @@
     "oauth_reauthenticate": "Sign in again",
     "oauth_waiting": "Waiting for browser authentication. Complete the Lingma sign-in in the opened browser window.",
     "oauth_waiting_button": "Waiting for sign-in",
+    "oauth_cancel": "Cancel",
+    "oauth_copy_url": "Copy login URL",
     "oauth_hint": "Sign in through your browser to enable the Lingma gateway without importing local cache files.",
     "authenticated_hint": "Signed in as {{user}}. Token expires {{expires}}.",
     "authenticated_user_hint": "Signed in as {{user}}.",
