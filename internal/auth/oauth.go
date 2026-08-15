@@ -429,7 +429,7 @@ func buildChinaOAuthURL(state, nonce, challenge, machineID string, port int) (st
 	query.Set("machine_id", machineID)
 	inner.RawQuery = query.Encode()
 
-	outer := &url.URL{Scheme: "https", Host: "account.aliyun.com", Path: "/login/login.htm"}
+	outer := &url.URL{Scheme: "https", Host: "signin.aliyun.com", Path: "/login.htm"}
 	outerQuery := outer.Query()
 	outerQuery.Set("oauth_callback", inner.String())
 	outer.RawQuery = outerQuery.Encode()
