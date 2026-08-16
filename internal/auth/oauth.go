@@ -1,28 +1,21 @@
 package auth
 
 import (
-	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
 const (
-	oauthLoginTimeout     = 5 * time.Minute
 	oauthCustomAlphabet   = "_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!"
 	oauthStandardAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 )
@@ -44,211 +37,6 @@ type OAuthLoginStatus struct {
 	ExpiresAt  time.Time
 	Error      string
 	LoginURL   string
-}
-
-// OAuthLogin owns the short-lived loopback callback server for one desktop
-// browser login at a time.
-type OAuthLogin struct {
-	mu         sync.Mutex
-	listener   net.Listener
-	server     *http.Server
-	state      string
-	machineID  string
-	expiresAt  time.Time
-	inProgress bool
-	lastError  string
-	loginURL   string
-	onComplete func(*Credentials) error
-
-	timeout time.Duration
-	now     func() time.Time
-	listen  func(network, address string) (net.Listener, error)
-	random  io.Reader
-}
-
-func NewOAuthLogin() *OAuthLogin {
-	return &OAuthLogin{
-		timeout: oauthLoginTimeout,
-		now:     time.Now,
-		listen:  net.Listen,
-		random:  rand.Reader,
-	}
-}
-
-// Start opens a loopback callback listener and returns the China-region login
-// URL. The caller is responsible for opening the URL in the default browser.
-func (l *OAuthLogin) Start(machineID string, onComplete func(*Credentials) error) (string, error) {
-	if strings.TrimSpace(machineID) == "" {
-		return "", fmt.Errorf("machine ID is required")
-	}
-	if onComplete == nil {
-		return "", fmt.Errorf("OAuth completion callback is required")
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.inProgress {
-		return "", fmt.Errorf("OAuth login is already in progress")
-	}
-
-	listener, err := l.listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", fmt.Errorf("start OAuth callback listener: %w", err)
-	}
-
-	nonce, err := randomHex(l.random, 16)
-	if err != nil {
-		_ = listener.Close()
-		return "", fmt.Errorf("generate OAuth state: %w", err)
-	}
-	verifier, challenge, err := newPKCE(l.random)
-	if err != nil {
-		_ = listener.Close()
-		return "", fmt.Errorf("generate PKCE challenge: %w", err)
-	}
-	_ = verifier // The Lingma browser endpoint consumes the challenge server-side.
-
-	state := "2-" + nonce
-	port := listener.Addr().(*net.TCPAddr).Port
-	loginURL, err := buildChinaOAuthURL(state, nonce, challenge, machineID, port)
-	if err != nil {
-		_ = listener.Close()
-		return "", err
-	}
-
-	l.state = state
-	l.machineID = machineID
-	l.expiresAt = l.now().Add(l.timeout)
-	l.inProgress = true
-	l.lastError = ""
-	l.loginURL = loginURL
-	l.listener = listener
-	l.onComplete = onComplete
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/auth/callback", l.handleCallback)
-	l.server = &http.Server{Handler: mux}
-	server := l.server
-
-	go func() {
-		_ = server.Serve(listener)
-	}()
-	go l.expire(state, server)
-
-	return loginURL, nil
-}
-
-func (l *OAuthLogin) expire(state string, server *http.Server) {
-	timer := time.NewTimer(l.timeout)
-	defer timer.Stop()
-	<-timer.C
-
-	l.mu.Lock()
-	if !l.inProgress || l.state != state {
-		l.mu.Unlock()
-		return
-	}
-	l.clearLocked("OAuth login timed out")
-	l.mu.Unlock()
-	_ = server.Close()
-}
-
-func (l *OAuthLogin) handleCallback(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	state := r.URL.Query().Get("state")
-	l.mu.Lock()
-	if !l.inProgress || state == "" || state != l.state {
-		l.mu.Unlock()
-		http.Error(w, "Invalid or expired OAuth state", http.StatusForbidden)
-		return
-	}
-	onComplete := l.onComplete
-	server := l.server
-	machineID := l.machineID
-	l.clearLocked("") // Consume a matching state before parsing callback data.
-	l.mu.Unlock()
-	if server != nil {
-		go func() { _ = server.Shutdown(context.Background()) }()
-	}
-
-	callback, err := ParseOAuthCallback(r.URL.Query().Get("auth"), r.URL.Query().Get("token"))
-	if err != nil {
-		l.setError("OAuth callback could not be processed")
-		writeOAuthResult(w, http.StatusBadRequest, "Authentication failed", "The login callback was invalid. Return to Lingma Tap and try again.")
-		return
-	}
-
-	// The machine ID is attached to the closure when the callback handler is
-	// started. The callback URL itself never carries credential material.
-	creds, err := CredentialsFromOAuth(callback, machineID)
-	if err != nil {
-		l.setError("OAuth credentials could not be created")
-		writeOAuthResult(w, http.StatusInternalServerError, "Authentication failed", "Lingma Tap could not prepare local credentials. Try again.")
-		return
-	}
-	if err := onComplete(creds); err != nil {
-		l.setError("OAuth credentials could not be saved")
-		writeOAuthResult(w, http.StatusInternalServerError, "Authentication failed", "Lingma Tap could not save the login. Try again.")
-		return
-	}
-
-	l.setError("")
-	writeOAuthResult(w, http.StatusOK, "Authentication successful", "You can close this window and return to Lingma Tap.")
-}
-
-func (l *OAuthLogin) clearLocked(lastError string) {
-	l.listener = nil
-	l.server = nil
-	l.state = ""
-	l.machineID = ""
-	l.expiresAt = time.Time{}
-	l.inProgress = false
-	l.onComplete = nil
-	l.lastError = lastError
-}
-
-func (l *OAuthLogin) setError(message string) {
-	l.mu.Lock()
-	l.lastError = message
-	l.mu.Unlock()
-}
-
-// Status returns display-safe progress and error state.
-func (l *OAuthLogin) Status() OAuthLoginStatus {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return OAuthLoginStatus{
-		InProgress: l.inProgress,
-		ExpiresAt:  l.expiresAt,
-		Error:      l.lastError,
-		LoginURL:   l.loginURL,
-	}
-}
-
-// Cancel aborts an in-progress OAuth login.
-func (l *OAuthLogin) Cancel() {
-	l.mu.Lock()
-	server := l.server
-	l.clearLocked("OAuth login cancelled")
-	l.mu.Unlock()
-	if server != nil {
-		_ = server.Close()
-	}
-}
-
-// Close stops a pending callback listener during application shutdown.
-func (l *OAuthLogin) Close() {
-	l.mu.Lock()
-	server := l.server
-	l.clearLocked("")
-	l.mu.Unlock()
-	if server != nil {
-		_ = server.Close()
-	}
 }
 
 // ParseOAuthCallback decodes the Lingma V2 callback values. auth and token
@@ -410,45 +198,4 @@ func encryptWithAESKey(plaintext, key []byte) ([]byte, error) {
 	ciphertext := make([]byte, len(padded))
 	cipher.NewCBCEncrypter(block, key).CryptBlocks(ciphertext, padded)
 	return ciphertext, nil
-}
-
-func randomHex(random io.Reader, bytes int) (string, error) {
-	buf := make([]byte, bytes)
-	if _, err := io.ReadFull(random, buf); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buf), nil
-}
-
-func newPKCE(random io.Reader) (string, string, error) {
-	buf := make([]byte, 32)
-	if _, err := io.ReadFull(random, buf); err != nil {
-		return "", "", err
-	}
-	verifier := base64.RawURLEncoding.EncodeToString(buf)
-	digest := sha256.Sum256([]byte(verifier))
-	return verifier, base64.RawURLEncoding.EncodeToString(digest[:]), nil
-}
-
-func buildChinaOAuthURL(state, nonce, challenge, machineID string, port int) (string, error) {
-	if port <= 0 || port > 65535 {
-		return "", fmt.Errorf("invalid OAuth callback port")
-	}
-	u := &url.URL{Scheme: "https", Host: "devops.aliyun.com", Path: "/lingma/login"}
-	query := u.Query()
-	query.Set("nonce", nonce)
-	query.Set("port", strconv.Itoa(port))
-	query.Set("state", state)
-	query.Set("challenge", challenge)
-	query.Set("challenge_method", "S256")
-	query.Set("machine_id", machineID)
-	u.RawQuery = query.Encode()
-	return u.String(), nil
-}
-
-func writeOAuthResult(w http.ResponseWriter, status int, title, message string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_, _ = fmt.Fprintf(w, "<!doctype html><html><head><meta charset=\"utf-8\"><title>%s</title></head><body><main><h1>%s</h1><p>%s</p></main></body></html>", title, title, message)
 }

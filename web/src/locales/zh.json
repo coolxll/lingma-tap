@@ -88,6 +88,7 @@
     "oauth_cancel": "取消登录",
     "oauth_copy_url": "复制登录链接",
     "oauth_hint": "通过浏览器登录后即可启用灵码网关，无需导入本地缓存文件。",
+    "oauth_unavailable": "OAuth 暂不可用：{{reason}}",
     "authenticated_hint": "当前登录账号：{{user}}。令牌过期时间：{{expires}}。",
     "authenticated_user_hint": "当前登录账号：{{user}}。",
     "unknown_user": "灵码账号",

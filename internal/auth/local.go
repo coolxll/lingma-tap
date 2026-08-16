@@ -323,16 +323,3 @@ func writeFileAtomic(path string, contents []byte, mode os.FileMode) (err error)
 func LoadCredentialsFromDir(dir string) (*Credentials, error) {
 	return loadFromDir(dir)
 }
-
-// OAuthMachineID returns the persisted app machine ID when available, or a
-// new ID that is persisted only after a successful OAuth callback.
-func OAuthMachineID(dataDir string) (string, error) {
-	content, err := readTrimmed(filepath.Join(dataDir, "auth", "id"))
-	if err == nil {
-		machineID := parseMachineID(content)
-		if machineID != "" {
-			return machineID, nil
-		}
-	}
-	return newUUID(), nil
-}

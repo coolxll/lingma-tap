@@ -54,10 +54,11 @@ type App struct {
 	bridgeHandlerField *bridge.BridgeHandler
 	managementHandler  *api.Handler
 	gatewayHandler     *api.Handler
-	oauthLogin         *auth.OAuthLogin
+	oauthLogin         *auth.OAuthController
 	authUser           string
 	authExpireTime     int64
 	openURL            func(string)
+	findLingmaBinary   func() (string, error)
 	apiLn              net.Listener
 	proxyRunning       bool
 	proxyPort          int
@@ -72,8 +73,9 @@ func NewApp() *App {
 	a := &App{
 		gatewayLogging: true,
 		proxyLogging:   true,
-		oauthLogin:     auth.NewOAuthLogin(),
+		oauthLogin:     auth.NewOAuthController(),
 	}
+	a.findLingmaBinary = auth.FindLingmaServiceBinary
 	a.openURL = func(url string) {
 		runtime.BrowserOpenURL(a.ctx, url)
 	}
@@ -759,6 +761,7 @@ func (a *App) GetStatus() map[string]interface{} {
 		status["ws_clients"] = a.hub.ClientCount()
 	}
 	oauthLogin := a.oauthLogin
+	findBinary := a.findLingmaBinary
 	a.mu.Unlock()
 	if oauthLogin != nil {
 		oauthStatus := oauthLogin.Status()
@@ -770,6 +773,15 @@ func (a *App) GetStatus() map[string]interface{} {
 		status["oauth_expires_at"] = oauthExpiresAt
 		status["oauth_error"] = oauthStatus.Error
 		status["oauth_login_url"] = oauthStatus.LoginURL
+		if findBinary != nil {
+			_, err := findBinary()
+			status["oauth_available"] = err == nil
+			if err != nil {
+				status["oauth_unavailable_reason"] = err.Error()
+			} else {
+				status["oauth_unavailable_reason"] = ""
+			}
+		}
 	}
 	return status
 }
@@ -802,6 +814,8 @@ func (a *App) StartOAuthLogin() (string, error) {
 	dataDir := a.dataDir
 	oauthLogin := a.oauthLogin
 	openURL := a.openURL
+	findLingmaBinary := a.findLingmaBinary
+	startCtx := a.ctx
 	a.mu.Unlock()
 	if dataDir == "" {
 		return "", fmt.Errorf("application data directory is not initialized")
@@ -813,13 +827,34 @@ func (a *App) StartOAuthLogin() (string, error) {
 		return "", fmt.Errorf("browser opener is not initialized")
 	}
 
-	machineID, err := auth.OAuthMachineID(dataDir)
-	if err != nil {
-		return "", fmt.Errorf("prepare OAuth machine ID: %w", err)
+	if findLingmaBinary == nil {
+		findLingmaBinary = auth.FindLingmaServiceBinary
 	}
-	loginURL, err := oauthLogin.Start(machineID, func(creds *auth.Credentials) error {
-		if err := auth.SaveExchangedCredentials(creds, dataDir); err != nil {
-			return err
+	binaryPath, err := findLingmaBinary()
+	if err != nil {
+		return "", err
+	}
+	if startCtx == nil {
+		startCtx = context.Background()
+	}
+	loginURL, err := oauthLogin.Start(startCtx, auth.OAuthOptions{
+		ListenAddr: "127.0.0.1:0",
+		Timeout:    5 * time.Minute,
+	}, binaryPath, func(creds *auth.Credentials) error {
+		if creds == nil || creds.CosyKey == "" || creds.EncryptUserInfo == "" || creds.UID == "" {
+			return fmt.Errorf("OAuth credentials are incomplete")
+		}
+		verifyCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		models, verifyErr := bridge.NewLingmaClient(auth.NewSession(creds)).FetchModels(verifyCtx)
+		if verifyErr != nil {
+			return fmt.Errorf("verify Lingma credentials: %w", verifyErr)
+		}
+		if len(models) == 0 {
+			return fmt.Errorf("verify Lingma credentials: model list is empty")
+		}
+		if saveErr := auth.SaveExchangedCredentials(creds, dataDir); saveErr != nil {
+			return saveErr
 		}
 		a.installCredentials(creds)
 		return nil

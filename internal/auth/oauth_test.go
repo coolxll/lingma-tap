@@ -2,13 +2,8 @@ package auth
 
 import (
 	"encoding/base64"
-	"net"
-	"net/http"
-	"net/url"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 )
 
 const (
@@ -104,104 +99,5 @@ func TestSaveExchangedCredentialsRoundTrip(t *testing.T) {
 	}
 	if loaded.AID != creds.AID || loaded.CosyKey != creds.CosyKey || loaded.RefreshToken != creds.RefreshToken {
 		t.Fatalf("credentials did not round trip: %+v", loaded)
-	}
-}
-
-func TestOAuthLoginCallbackCompletesOnce(t *testing.T) {
-	login := NewOAuthLogin()
-	defer login.Close()
-
-	completed := make(chan *Credentials, 1)
-	loginURL, err := login.Start("12345678-1234-1234-1234-123456789012", func(creds *Credentials) error {
-		completed <- creds
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("Start error: %v", err)
-	}
-
-	login.mu.Lock()
-	callbackAddr := login.listener.Addr().String()
-	login.mu.Unlock()
-	_, portStr, err := net.SplitHostPort(callbackAddr)
-	if err != nil {
-		t.Fatalf("parse callback address: %v", err)
-	}
-
-	relayURL, err := url.Parse(loginURL)
-	if err != nil {
-		t.Fatalf("parse login URL: %v", err)
-	}
-	if relayURL.Host != "devops.aliyun.com" || relayURL.Path != "/lingma/login" ||
-		relayURL.Query().Get("port") != portStr || relayURL.Query().Get("state") == "" ||
-		relayURL.Query().Get("challenge_method") != "S256" {
-		t.Fatalf("login URL not pointed at Lingma relay with local port: %s", relayURL.String())
-	}
-
-	query := url.Values{
-		"state": {relayURL.Query().Get("state")},
-		"auth":  {callbackAuthFixture},
-		"token": {callbackTokenFixture},
-	}
-	resp, err := http.Get("http://" + callbackAddr + "/auth/callback?" + query.Encode())
-	if err != nil {
-		t.Fatalf("send OAuth callback: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("callback status = %d, want 200", resp.StatusCode)
-	}
-
-	select {
-	case creds := <-completed:
-		if creds.UID != "uid-123" || creds.MachineID == "" {
-			t.Fatalf("unexpected callback credentials: %+v", creds)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("OAuth completion was not called")
-	}
-	if status := login.Status(); status.InProgress || status.Error != "" {
-		t.Fatalf("unexpected login status after callback: %+v", status)
-	}
-}
-
-func TestOAuthLoginRejectsInvalidStateWithoutConsumingFlow(t *testing.T) {
-	login := NewOAuthLogin()
-	defer login.Close()
-
-	if _, err := login.Start("12345678-1234-1234-1234-123456789012", func(*Credentials) error { return nil }); err != nil {
-		t.Fatalf("Start error: %v", err)
-	}
-	login.mu.Lock()
-	callbackAddr := login.listener.Addr().String()
-	login.mu.Unlock()
-	resp, err := http.Get("http://" + callbackAddr + "/auth/callback?state=wrong")
-	if err != nil {
-		t.Fatalf("send invalid callback: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("invalid callback status = %d, want 403", resp.StatusCode)
-	}
-	if !login.Status().InProgress {
-		t.Fatal("invalid state consumed active OAuth login")
-	}
-}
-
-func TestOAuthLoginTimesOut(t *testing.T) {
-	login := NewOAuthLogin()
-	login.timeout = 20 * time.Millisecond
-	defer login.Close()
-
-	if _, err := login.Start("12345678-1234-1234-1234-123456789012", func(*Credentials) error { return nil }); err != nil {
-		t.Fatalf("Start error: %v", err)
-	}
-	deadline := time.Now().Add(time.Second)
-	for login.Status().InProgress && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	status := login.Status()
-	if status.InProgress || !strings.Contains(status.Error, "timed out") {
-		t.Fatalf("unexpected timeout status: %+v", status)
 	}
 }

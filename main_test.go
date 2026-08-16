@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +11,24 @@ import (
 	"github.com/coolxll/lingma-tap/internal/proto"
 	"github.com/coolxll/lingma-tap/internal/storage"
 )
+
+type blockingOAuthSession struct {
+	closed chan struct{}
+}
+
+func (s *blockingOAuthSession) Wait() (auth.OAuthResult, error) {
+	<-s.closed
+	return auth.OAuthResult{}, context.Canceled
+}
+
+func (s *blockingOAuthSession) Close() error {
+	select {
+	case <-s.closed:
+	default:
+		close(s.closed)
+	}
+	return nil
+}
 
 // newTestApp creates an App with real dependencies for testing.
 func newTestApp(t *testing.T) (*App, *storage.DB, func()) {
@@ -237,7 +256,14 @@ func TestStartOAuthLoginOpensBrowserAndUpdatesStatus(t *testing.T) {
 	app, _, cleanup := newTestApp(t)
 	defer cleanup()
 	app.dataDir = t.TempDir()
-	app.oauthLogin = auth.NewOAuthLogin()
+	app.oauthLogin = auth.NewOAuthController(func(context.Context, auth.OAuthOptions, string) (auth.OAuthSession, auth.OAuthStartInfo, error) {
+		return &blockingOAuthSession{closed: make(chan struct{})}, auth.OAuthStartInfo{
+			LoginURL:        "https://devops.aliyun.com/lingma/login?test=1",
+			CallbackAddress: "127.0.0.1:40001",
+			ExpiresAt:       time.Now().Add(time.Minute),
+		}, nil
+	})
+	app.findLingmaBinary = func() (string, error) { return "/tmp/Lingma", nil }
 	defer app.oauthLogin.Close()
 
 	openedURL := ""

@@ -8,14 +8,11 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/coolxll/lingma-tap/internal/auth"
 	"github.com/coolxll/lingma-tap/internal/bridge"
-	"github.com/coolxll/lingma-tap/internal/encoding"
 	"github.com/coolxll/lingma-tap/internal/storage"
 )
 
@@ -46,9 +43,6 @@ func TestNewServer(t *testing.T) {
 	}
 	if s.Handler == nil {
 		t.Error("expected Handler to be set")
-	}
-	if s.PendingOAuthStates == nil {
-		t.Error("expected PendingOAuthStates to be set")
 	}
 }
 
@@ -240,88 +234,6 @@ func TestHandleAuthUpload_InvalidCredentials(t *testing.T) {
 	}
 }
 
-func TestHandleAuthCallback_Success(t *testing.T) {
-	s, cleanup := newTestServer(t)
-	defer cleanup()
-
-	state := "test-state-123"
-	s.PendingOAuthStates.Store(state, time.Now())
-
-	// Mock exchange callback
-	s.ExchangeCallback = func(userID, token, machineID string) (*auth.Credentials, error) {
-		return &auth.Credentials{Name: "OAuth User", UID: "oauth-uid"}, nil
-	}
-	s.SaveExchangedCredentials = func(creds *auth.Credentials, dataDir string) error {
-		return nil
-	}
-
-	// Pre-create a bridge so buildBridge works
-	s.BridgeInst = nil
-
-	// Encode auth and token using the custom alphabet
-	authJSON := `{"userId":"test-user"}`
-	encodedAuth := encoding.Encode([]byte(authJSON))
-	encodedToken := encoding.Encode([]byte("test-token"))
-
-	q := make(url.Values)
-	q.Set("state", state)
-	q.Set("auth", encodedAuth)
-	q.Set("token", encodedToken)
-	req := httptest.NewRequest(http.MethodGet, "/api/auth/callback?"+q.Encode(), nil)
-	w := httptest.NewRecorder()
-	s.HandleAuthCallback(w, req)
-
-	// Should return HTML success page
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	if !bytes.Contains(w.Body.Bytes(), []byte("Authentication Successful")) {
-		t.Errorf("expected success page, got: %s", w.Body.String())
-	}
-}
-
-func TestHandleAuthCallback_MissingState(t *testing.T) {
-	s, cleanup := newTestServer(t)
-	defer cleanup()
-
-	req := httptest.NewRequest(http.MethodGet, "/api/auth/callback?state=", nil)
-	w := httptest.NewRecorder()
-	s.HandleAuthCallback(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-}
-
-func TestHandleAuthCallback_InvalidState(t *testing.T) {
-	s, cleanup := newTestServer(t)
-	defer cleanup()
-
-	req := httptest.NewRequest(http.MethodGet, "/api/auth/callback?state=invalid", nil)
-	w := httptest.NewRecorder()
-	s.HandleAuthCallback(w, req)
-
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", w.Code)
-	}
-}
-
-func TestGetOrGenerateMachineID_GeneratesNew(t *testing.T) {
-	s, cleanup := newTestServer(t)
-	defer cleanup()
-
-	id := s.GetOrGenerateMachineID()
-	if id == "" {
-		t.Fatal("expected non-empty machine ID")
-	}
-
-	// Should persist the ID
-	id2 := s.GetOrGenerateMachineID()
-	if id != id2 {
-		t.Errorf("expected same ID on second call, got %q vs %q", id, id2)
-	}
-}
-
 func TestRegisterManagementRoutes(t *testing.T) {
 	s, cleanup := newTestServer(t)
 	defer cleanup()
@@ -333,8 +245,6 @@ func TestRegisterManagementRoutes(t *testing.T) {
 		"/api/health",
 		"/api/auth/status",
 		"/api/auth/upload",
-		"/api/auth/probe",
-		"/api/auth/callback",
 		"/api/status",
 		"/api/gateway/logs",
 	}
@@ -346,6 +256,14 @@ func TestRegisterManagementRoutes(t *testing.T) {
 		// Routes should be registered (not 404)
 		if w.Code == http.StatusNotFound {
 			t.Errorf("route %s not registered", path)
+		}
+	}
+	for _, path := range []string{"/api/auth/probe", "/api/auth/callback"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("legacy OAuth route %s returned %d, want 404", path, w.Code)
 		}
 	}
 }

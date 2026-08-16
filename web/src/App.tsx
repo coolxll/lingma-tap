@@ -173,6 +173,8 @@ function App() {
   const [authUser, setAuthUser] = useState('');
   const [authExpireTime, setAuthExpireTime] = useState(0);
   const [oauthInProgress, setOAuthInProgress] = useState(false);
+  const [oauthAvailable, setOAuthAvailable] = useState(true);
+  const [oauthUnavailableReason, setOAuthUnavailableReason] = useState('');
   const [oauthError, setOAuthError] = useState('');
   const [oauthLoginURL, setOAuthLoginURL] = useState('');
   const [displayCount, setDisplayCount] = useState(PROXY_PAGE_SIZE);
@@ -307,6 +309,10 @@ function App() {
       setAuthExpireTime(s.auth_expire_time);
     if (s?.oauth_in_progress !== undefined)
       setOAuthInProgress(s.oauth_in_progress as boolean);
+    if (s?.oauth_available !== undefined)
+      setOAuthAvailable(s.oauth_available as boolean);
+    if (typeof s?.oauth_unavailable_reason === 'string')
+      setOAuthUnavailableReason(s.oauth_unavailable_reason);
     if (typeof s?.oauth_error === 'string')
       setOAuthError(s.oauth_error);
     if (typeof s?.oauth_login_url === 'string')
@@ -796,6 +802,8 @@ function App() {
             authUser={authUser}
             authExpireTime={authExpireTime}
             oauthInProgress={oauthInProgress}
+            oauthAvailable={oauthAvailable}
+            oauthUnavailableReason={oauthUnavailableReason}
             oauthError={oauthError}
             oauthLoginURL={oauthLoginURL}
             onStartOAuthLogin={handleStartOAuthLogin}
