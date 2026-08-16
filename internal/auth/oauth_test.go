@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/base64"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -119,19 +120,26 @@ func TestOAuthLoginCallbackCompletesOnce(t *testing.T) {
 		t.Fatalf("Start error: %v", err)
 	}
 
-	outer, err := url.Parse(loginURL)
-	if err != nil {
-		t.Fatalf("parse login URL: %v", err)
-	}
-	if outer.Host != "devops.aliyun.com" || outer.Path != "/lingma/login" || outer.Query().Get("state") == "" || outer.Query().Get("challenge_method") != "S256" {
-		t.Fatalf("unexpected login URL: %s", outer.String())
-	}
-
 	login.mu.Lock()
 	callbackAddr := login.listener.Addr().String()
 	login.mu.Unlock()
+	_, portStr, err := net.SplitHostPort(callbackAddr)
+	if err != nil {
+		t.Fatalf("parse callback address: %v", err)
+	}
+
+	relayURL, err := url.Parse(loginURL)
+	if err != nil {
+		t.Fatalf("parse login URL: %v", err)
+	}
+	if relayURL.Host != "devops.aliyun.com" || relayURL.Path != "/lingma/login" ||
+		relayURL.Query().Get("port") != portStr || relayURL.Query().Get("state") == "" ||
+		relayURL.Query().Get("challenge_method") != "S256" {
+		t.Fatalf("login URL not pointed at Lingma relay with local port: %s", relayURL.String())
+	}
+
 	query := url.Values{
-		"state": {outer.Query().Get("state")},
+		"state": {relayURL.Query().Get("state")},
 		"auth":  {callbackAuthFixture},
 		"token": {callbackTokenFixture},
 	}

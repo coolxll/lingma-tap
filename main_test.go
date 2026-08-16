@@ -242,7 +242,7 @@ func TestStartOAuthLoginOpensBrowserAndUpdatesStatus(t *testing.T) {
 
 	openedURL := ""
 	app.openURL = func(url string) { openedURL = url }
-	if err := app.StartOAuthLogin(); err != nil {
+	if _, err := app.StartOAuthLogin(); err != nil {
 		t.Fatalf("StartOAuthLogin error: %v", err)
 	}
 	if openedURL == "" {

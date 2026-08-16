@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, memo } from 'react';
-import { RefreshCw, Copy, Check, Shield, ShieldOff, Server, ServerOff, Trash2, FolderOpen, FileKey, ExternalLink, LogIn, CircleCheck, LoaderCircle } from 'lucide-react';
+import { RefreshCw, Copy, Check, Shield, ShieldOff, Server, ServerOff, Trash2, FolderOpen, FileKey, ExternalLink, LogIn, CircleCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 const GITHUB_OWNER = 'coolxll';
@@ -102,19 +102,6 @@ export const SettingsPanel = memo(function SettingsPanel({
   onRevealCACert,
 }: SettingsPanelProps) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-
-  const handleCopyURL = useCallback(async () => {
-    if (oauthLoginURL) {
-      try {
-        await navigator.clipboard.writeText(oauthLoginURL);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      } catch (err) {
-        console.error('Failed to copy URL:', err);
-      }
-    }
-  }, [oauthLoginURL]);
 
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);

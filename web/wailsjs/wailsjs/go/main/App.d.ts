@@ -3,6 +3,8 @@
 import {proto} from '../models';
 import {bridge} from '../models';
 
+export function CancelOAuthLogin():Promise<void>;
+
 export function ClearGatewayLogs():Promise<void>;
 
 export function ClearProxyRecords():Promise<void>;
@@ -59,7 +61,7 @@ export function SetProxyLogging(arg1:boolean):Promise<void>;
 
 export function StartGateway(arg1:number,arg2:string):Promise<void>;
 
-export function StartOAuthLogin():Promise<void>;
+export function StartOAuthLogin():Promise<string>;
 
 export function StartProxy(arg1:number):Promise<void>;
 
