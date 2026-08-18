@@ -267,3 +267,31 @@ func TestRegisterManagementRoutes(t *testing.T) {
 		}
 	}
 }
+
+func TestHTTPHandlerProtectsGatewayAndManagementRoutes(t *testing.T) {
+	s, cleanup := newTestServer(t)
+	defer cleanup()
+
+	const apiKey = "lt_server-test-key"
+	handler := s.HTTPHandler(apiKey)
+	for _, path := range []string{"/v1/models", "/api/health", "/api/auth/upload", "/api/gateway/logs"} {
+		t.Run(path+" unauthorized", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("route %s returned %d without a key, want 401", path, w.Code)
+			}
+		})
+
+		t.Run(path+" authorized", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code == http.StatusUnauthorized {
+				t.Fatalf("route %s rejected a valid key", path)
+			}
+		})
+	}
+}

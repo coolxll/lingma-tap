@@ -38,6 +38,35 @@ Lingma Tap 是一个专为 Lingma API 设计的数据包可视化与抓取工具
    wails dev
    ```
 
+### 网关 API Key
+
+AI Gateway 的所有入站请求都必须携带 API Key。桌面端会在首次启动时自动生成密钥并保存到 `~/.lingma-tap/gateway-api-key`，可在设置页复制或轮换：
+
+```bash
+# OpenAI 兼容客户端
+curl http://127.0.0.1:9090/v1/models \
+  -H "Authorization: Bearer <gateway-api-key>"
+
+# Anthropic 兼容客户端
+curl http://127.0.0.1:9090/v1/models \
+  -H "x-api-key: <gateway-api-key>"
+```
+
+Docker/headless 模式要求显式设置 `GATEWAY_API_KEY`，且同端口的 `/api/*` 管理接口也使用相同密钥保护：
+
+```bash
+export GATEWAY_API_KEY="$(openssl rand -hex 32)"
+docker compose up --build
+```
+
+通过 Cloudflare Tunnel 发布时，Tunnel 可以继续连接仅监听回环地址的桌面网关，源站 API Key 仍会强制校验：
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:9090
+```
+
+请将 API Key 作为密钥管理，不要写入仓库、URL 查询参数或日志。公网部署还应结合 Cloudflare Access/WAF、最小化路由范围及密钥定期轮换。
+
 ### 编译打包
 
 - **macOS**: `wails build` (生成 `.app` 文件)

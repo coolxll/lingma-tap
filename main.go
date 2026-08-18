@@ -64,6 +64,7 @@ type App struct {
 	proxyPort          int
 	gatewayRunning     bool
 	gatewayServer      *http.Server
+	gatewayAPIKey      string
 	gatewayLogging     bool
 	proxyLogging       bool
 	lingmaHTTP2        bool
@@ -261,6 +262,11 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.db = db
 	a.sink = storage.NewAsyncSink(db, 10000)
+
+	if err := a.loadOrCreateGatewayAPIKey(); err != nil {
+		log.Printf("[app] Gateway API key init error: %v", err)
+		return
+	}
 
 	lingmaHTTP2Setting, _ := a.db.GetSetting("lingma_http2")
 	if lingmaHTTP2Setting == "" {
@@ -460,6 +466,9 @@ func (a *App) GetNetworkInterfaces() []map[string]string {
 func (a *App) StartGateway(port int, listenAddr string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.gatewayAPIKey == "" {
+		return fmt.Errorf("gateway API key is not initialized")
+	}
 
 	// Validate listenAddr before closing existing server
 	if listenAddr == "" {
@@ -496,7 +505,7 @@ func (a *App) StartGateway(port int, listenAddr string) error {
 
 	a.gatewayServer = &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: api.APIKeyMiddleware(a.gatewayAPIKey, mux),
 	}
 
 	go func() {
@@ -506,6 +515,81 @@ func (a *App) StartGateway(port int, listenAddr string) error {
 		}
 	}()
 
+	return nil
+}
+
+// GetGatewayAPIKey returns the locally stored key for display in the desktop
+// UI. It is exposed only through the in-process Wails binding, not HTTP.
+func (a *App) GetGatewayAPIKey() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.gatewayAPIKey
+}
+
+// RotateGatewayAPIKey replaces the gateway key while the listener is stopped.
+func (a *App) RotateGatewayAPIKey() (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.gatewayServer != nil {
+		return "", fmt.Errorf("stop the gateway before rotating its API key")
+	}
+	key, err := api.GenerateAPIKey()
+	if err != nil {
+		return "", fmt.Errorf("generate gateway API key: %w", err)
+	}
+	if err := a.persistGatewayAPIKey(key); err != nil {
+		return "", err
+	}
+	a.gatewayAPIKey = key
+	return key, nil
+}
+
+func (a *App) loadOrCreateGatewayAPIKey() error {
+	if strings.TrimSpace(a.dataDir) == "" {
+		return fmt.Errorf("application data directory is not initialized")
+	}
+	path := filepath.Join(a.dataDir, "gateway-api-key")
+	keyBytes, err := os.ReadFile(path)
+	if err == nil {
+		key := strings.TrimSpace(string(keyBytes))
+		if err := api.ValidateAPIKey(key); err != nil {
+			return fmt.Errorf("invalid gateway API key file %s: %w", path, err)
+		}
+		if err := os.Chmod(path, 0600); err != nil {
+			return fmt.Errorf("secure gateway API key file: %w", err)
+		}
+		a.gatewayAPIKey = key
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("read gateway API key: %w", err)
+	}
+
+	key, err := api.GenerateAPIKey()
+	if err != nil {
+		return fmt.Errorf("generate gateway API key: %w", err)
+	}
+	if err := a.persistGatewayAPIKey(key); err != nil {
+		return err
+	}
+	a.gatewayAPIKey = key
+	return nil
+}
+
+func (a *App) persistGatewayAPIKey(key string) error {
+	if err := api.ValidateAPIKey(key); err != nil {
+		return err
+	}
+	if strings.TrimSpace(a.dataDir) == "" {
+		return fmt.Errorf("application data directory is not initialized")
+	}
+	path := filepath.Join(a.dataDir, "gateway-api-key")
+	if err := os.WriteFile(path, []byte(key+"\n"), 0600); err != nil {
+		return fmt.Errorf("write gateway API key: %w", err)
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("secure gateway API key file: %w", err)
+	}
 	return nil
 }
 

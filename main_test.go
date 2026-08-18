@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +47,7 @@ func newTestApp(t *testing.T) (*App, *storage.DB, func()) {
 	go hub.Run()
 
 	app := NewApp()
+	app.dataDir = tmpDir
 	app.db = db
 	app.sink = sink
 	app.hub = hub
@@ -65,6 +70,60 @@ func TestNewApp(t *testing.T) {
 	}
 	if !app.proxyLogging {
 		t.Error("expected proxyLogging to be true by default")
+	}
+}
+
+func TestGatewayAPIKeyPersistenceAndRotation(t *testing.T) {
+	app := NewApp()
+	app.dataDir = t.TempDir()
+	if err := app.loadOrCreateGatewayAPIKey(); err != nil {
+		t.Fatalf("loadOrCreateGatewayAPIKey: %v", err)
+	}
+	first := app.GetGatewayAPIKey()
+	if !strings.HasPrefix(first, "lt_") {
+		t.Fatalf("generated key %q has unexpected format", first)
+	}
+
+	keyPath := filepath.Join(app.dataDir, "gateway-api-key")
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("stat gateway key: %v", err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+		t.Fatalf("gateway key permissions = %o, want 600", info.Mode().Perm())
+	}
+
+	reloaded := NewApp()
+	reloaded.dataDir = app.dataDir
+	if err := reloaded.loadOrCreateGatewayAPIKey(); err != nil {
+		t.Fatalf("reload gateway API key: %v", err)
+	}
+	if got := reloaded.GetGatewayAPIKey(); got != first {
+		t.Fatalf("reloaded key = %q, want original key", got)
+	}
+
+	rotated, err := reloaded.RotateGatewayAPIKey()
+	if err != nil {
+		t.Fatalf("RotateGatewayAPIKey: %v", err)
+	}
+	if rotated == first {
+		t.Fatal("rotated key must differ from the original")
+	}
+	persisted, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read rotated key: %v", err)
+	}
+	if strings.TrimSpace(string(persisted)) != rotated {
+		t.Fatal("rotated key was not persisted")
+	}
+}
+
+func TestRotateGatewayAPIKeyRequiresStoppedGateway(t *testing.T) {
+	app := NewApp()
+	app.dataDir = t.TempDir()
+	app.gatewayServer = &http.Server{}
+	if _, err := app.RotateGatewayAPIKey(); err == nil {
+		t.Fatal("expected rotation to fail while gateway is running")
 	}
 }
 

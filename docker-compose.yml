@@ -8,6 +8,7 @@ services:
     environment:
       - GATEWAY_PORT=9090
       - GATEWAY_DEBUG=0
+      - GATEWAY_API_KEY=${GATEWAY_API_KEY:?set GATEWAY_API_KEY}
     restart: unless-stopped
 
 volumes:

@@ -19,6 +19,8 @@ interface WailsWindow extends Window {
         SaveAnthropicMapping: (mapping: Record<string, string>, defaultModel: string) => Promise<void>;
         OpenExternal: (url: string) => Promise<void>;
         GetVersion: () => Promise<string>;
+        GetGatewayAPIKey: () => Promise<string>;
+        RotateGatewayAPIKey: () => Promise<string>;
       };
     };
   };
@@ -126,6 +128,10 @@ export const SettingsPanel = memo(function SettingsPanel({
   const [latestVersion, setLatestVersion] = useState('');
   const [networkInterfaces, setNetworkInterfaces] = useState<Array<{name: string; addr: string; type: string}>>([]);
   const [updateError, setUpdateError] = useState('');
+  const [gatewayAPIKey, setGatewayAPIKey] = useState('');
+  const [apiKeyVisible, setAPIKeyVisible] = useState(false);
+  const [apiKeyError, setAPIKeyError] = useState('');
+  const [rotatingAPIKey, setRotatingAPIKey] = useState(false);
 
   const getCutoffDate = (days: number) => {
     const date = new Date();
@@ -217,6 +223,32 @@ export const SettingsPanel = memo(function SettingsPanel({
     };
     fetchVersion();
   }, []);
+
+  useEffect(() => {
+    const w = (window as unknown as WailsWindow).go;
+    const getKey = w?.main?.App?.GetGatewayAPIKey;
+    if (!getKey) return;
+    getKey()
+      .then((key) => setGatewayAPIKey(key || ''))
+      .catch((err) => setAPIKeyError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  const rotateGatewayAPIKey = async () => {
+    setRotatingAPIKey(true);
+    setAPIKeyError('');
+    try {
+      const w = (window as unknown as WailsWindow).go;
+      const key = await w?.main?.App?.RotateGatewayAPIKey();
+      if (key) {
+        setGatewayAPIKey(key);
+        setAPIKeyVisible(true);
+      }
+    } catch (err) {
+      setAPIKeyError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRotatingAPIKey(false);
+    }
+  };
 
   const handleSaveMapping = async () => {
     setSavingMapping(true);
@@ -567,6 +599,45 @@ export const SettingsPanel = memo(function SettingsPanel({
                     <span className="text-[10px] text-amber-300/90 leading-relaxed">{t('settings.listen_addr_warning')}</span>
                   </div>
                 )}
+                <div className="mt-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-tighter">{t('settings.gateway_api_key')}</span>
+                    <span className="text-[9px] text-emerald-500/80">{t('settings.gateway_api_key_required')}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type={apiKeyVisible ? 'text' : 'password'}
+                      value={gatewayAPIKey}
+                      readOnly
+                      spellCheck={false}
+                      className="min-w-0 flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-xs font-mono text-zinc-300 focus:outline-none"
+                    />
+                    <button
+                      onClick={() => setAPIKeyVisible((visible) => !visible)}
+                      className="px-2 py-1 rounded-lg text-[10px] text-zinc-400 hover:text-zinc-200 bg-zinc-900 border border-zinc-800 transition-colors"
+                    >
+                      {apiKeyVisible ? t('settings.hide_api_key') : t('settings.show_api_key')}
+                    </button>
+                    <button
+                      onClick={() => copyToClipboard(gatewayAPIKey)}
+                      disabled={!gatewayAPIKey}
+                      className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 bg-zinc-900 border border-zinc-800 disabled:opacity-40 transition-colors"
+                      title={t('common.copy')}
+                    >
+                      {copied === gatewayAPIKey ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                    </button>
+                    <button
+                      onClick={rotateGatewayAPIKey}
+                      disabled={gatewayRunning || rotatingAPIKey}
+                      className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 bg-zinc-900 border border-zinc-800 disabled:opacity-40 transition-colors"
+                      title={t('settings.rotate_api_key')}
+                    >
+                      <RefreshCw className={`w-3 h-3 ${rotatingAPIKey ? 'animate-spin' : ''}`} />
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[9px] text-zinc-600 leading-relaxed">{t('settings.gateway_api_key_hint')}</p>
+                  {apiKeyError && <p className="mt-1 text-[9px] text-red-400">{apiKeyError}</p>}
+                </div>
               </div>
               
               <div className="mt-4 flex items-center justify-between pt-3 border-t border-zinc-800/50">

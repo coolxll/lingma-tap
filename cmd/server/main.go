@@ -160,6 +160,15 @@ func (s *Server) RegisterManagementRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/gateway/logs", s.HandleGatewayLogs)
 }
 
+// HTTPHandler builds the public listener and applies API key authentication to
+// both compatible model routes and management routes.
+func (s *Server) HTTPHandler(apiKey string) http.Handler {
+	mux := http.NewServeMux()
+	s.Handler.RegisterGatewayRoutes(mux)
+	s.RegisterManagementRoutes(mux)
+	return api.APIKeyMiddleware(apiKey, mux)
+}
+
 func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
@@ -314,6 +323,11 @@ func main() {
 	}
 	log.Printf("[server] Starting Lingma Gateway on :%s (data=%s, debug=%v)", port, dataDir, debug)
 
+	apiKey := strings.TrimSpace(os.Getenv("GATEWAY_API_KEY"))
+	if err := api.ValidateAPIKey(apiKey); err != nil {
+		log.Fatalf("[server] invalid GATEWAY_API_KEY: %v", err)
+	}
+
 	// SQLite
 	dbPath := filepath.Join(dataDir, "lingma-tap.db")
 	db, err = storage.Open(dbPath)
@@ -330,16 +344,11 @@ func main() {
 	server := NewServer(dataDir, db, debug)
 	handler = server.Handler
 
-	// HTTP mux
-	mux := http.NewServeMux()
-	handler.RegisterGatewayRoutes(mux)
-	server.RegisterManagementRoutes(mux)
-
 	listenAddr := envOrDefault("LISTEN_ADDR", "0.0.0.0")
 	addr := listenAddr + ":" + port
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      server.HTTPHandler(apiKey),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 0, // SSE streaming needs no write timeout
 		IdleTimeout:  120 * time.Second,
