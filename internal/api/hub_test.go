@@ -14,13 +14,16 @@ import (
 // Returns (client-side conn, server-side conn, cleanup).
 func newTestWSConn(t *testing.T) (clientConn, serverConn *websocket.Conn, cleanup func()) {
 	t.Helper()
-	var upgrader = websocket.Upgrader{}
+	type upgradeResult struct {
+		conn *websocket.Conn
+		err  error
+	}
+
+	upgrader := websocket.Upgrader{}
+	upgradeDone := make(chan upgradeResult, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Fatalf("upgrade failed: %v", err)
-		}
-		serverConn = conn
+		upgradeDone <- upgradeResult{conn: conn, err: err}
 	}))
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
@@ -30,14 +33,18 @@ func newTestWSConn(t *testing.T) (clientConn, serverConn *websocket.Conn, cleanu
 		t.Fatalf("dial failed: %v", err)
 	}
 
-	// Wait for serverConn to be set
-	for i := 0; i < 50 && serverConn == nil; i++ {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if serverConn == nil {
+	select {
+	case result := <-upgradeDone:
+		if result.err != nil {
+			clientConn.Close()
+			server.Close()
+			t.Fatalf("upgrade failed: %v", result.err)
+		}
+		serverConn = result.conn
+	case <-time.After(2 * time.Second):
 		clientConn.Close()
 		server.Close()
-		t.Fatal("serverConn not set")
+		t.Fatal("timed out waiting for server WebSocket connection")
 	}
 
 	cleanup = func() {
@@ -58,9 +65,17 @@ func TestNewHub(t *testing.T) {
 	}
 }
 
+func TestHubStartStopIsIdempotent(t *testing.T) {
+	h := NewHub()
+	h.Start()
+	h.Start()
+	h.Stop()
+	h.Stop()
+}
+
 func TestHub_RegisterAndCount(t *testing.T) {
 	h := NewHub()
-	go h.Run()
+	h.Start()
 	defer h.Stop()
 
 	_, sc, cleanup := newTestWSConn(t)
@@ -84,7 +99,7 @@ func TestHub_RegisterAndCount(t *testing.T) {
 
 func TestHub_Unregister(t *testing.T) {
 	h := NewHub()
-	go h.Run()
+	h.Start()
 	defer h.Stop()
 
 	_, sc, cleanup := newTestWSConn(t)
@@ -118,7 +133,7 @@ func TestHub_Unregister(t *testing.T) {
 
 func TestHub_Broadcast(t *testing.T) {
 	h := NewHub()
-	go h.Run()
+	h.Start()
 	defer h.Stop()
 
 	// Create two clients, each with their own WebSocket connection
@@ -195,7 +210,7 @@ func TestHub_Broadcast(t *testing.T) {
 
 func TestHub_DuplicateClientID(t *testing.T) {
 	h := NewHub()
-	go h.Run()
+	h.Start()
 	defer h.Stop()
 
 	_, sc1, cleanup1 := newTestWSConn(t)
@@ -233,7 +248,7 @@ func TestHub_DuplicateClientID(t *testing.T) {
 
 func TestHub_CapacityEviction(t *testing.T) {
 	h := NewHub()
-	go h.Run()
+	h.Start()
 	defer h.Stop()
 
 	// Register a small number of clients with unique IDs
@@ -260,7 +275,7 @@ func TestHub_CapacityEviction(t *testing.T) {
 
 func TestHub_SlowConsumerDrop(t *testing.T) {
 	h := NewHub()
-	go h.Run()
+	h.Start()
 	defer h.Stop()
 
 	// Create a client but do NOT start WritePump, so its send channel fills up.
@@ -304,7 +319,7 @@ func TestHub_SlowConsumerDrop(t *testing.T) {
 
 func TestClient_ReadPump(t *testing.T) {
 	h := NewHub()
-	go h.Run()
+	h.Start()
 	defer h.Stop()
 
 	cc, sc, cleanup := newTestWSConn(t)
@@ -343,7 +358,7 @@ func TestClient_ReadPump(t *testing.T) {
 
 func TestClient_WritePump(t *testing.T) {
 	h := NewHub()
-	go h.Run()
+	h.Start()
 	defer h.Stop()
 
 	cc, sc, cleanup := newTestWSConn(t)

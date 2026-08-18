@@ -44,7 +44,7 @@ func newTestApp(t *testing.T) (*App, *storage.DB, func()) {
 
 	sink := storage.NewAsyncSink(db, 1000)
 	hub := api.NewHub()
-	go hub.Run()
+	hub.Start()
 
 	app := NewApp()
 	app.dataDir = tmpDir

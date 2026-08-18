@@ -24,6 +24,7 @@ type Hub struct {
 	register   chan *Client
 	unregister chan *Client
 	done       chan struct{}
+	startOnce  sync.Once
 	stopOnce   sync.Once
 	wg         sync.WaitGroup
 }
@@ -46,8 +47,16 @@ func NewHub() *Hub {
 	}
 }
 
-func (h *Hub) Run() {
-	h.wg.Add(1)
+// Start launches the hub event loop once. Registering the WaitGroup before the
+// goroutine starts keeps an immediate Stop from racing with WaitGroup.Add.
+func (h *Hub) Start() {
+	h.startOnce.Do(func() {
+		h.wg.Add(1)
+		go h.run()
+	})
+}
+
+func (h *Hub) run() {
 	defer h.wg.Done()
 
 	for {

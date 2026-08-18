@@ -277,7 +277,7 @@ func (a *App) startup(ctx context.Context) {
 
 	// Initialize WebSocket Hub
 	a.hub = api.NewHub()
-	go a.hub.Run()
+	a.hub.Start()
 	a.sink.SetOnSaved(func(rec *proto.Record) {
 		if a.hub != nil {
 			a.hub.Broadcast(rec)
