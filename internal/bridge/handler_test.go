@@ -1461,3 +1461,158 @@ func TestBridgeHandler_HandleKModel_ClaudeCode(t *testing.T) {
 		t.Errorf("Billing header was not stripped for kmodel request")
 	}
 }
+
+func TestBridgeHandler_OpenAIChatNormalizesDeveloperRole(t *testing.T) {
+	session := &auth.Session{CosyKey: "test-key"}
+	handler := NewBridgeHandler(session, func(log *proto.GatewayLog) {})
+
+	var capturedBody map[string]any
+	handler.client.client.Transport = &mockTransport{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			if req.Body != nil {
+				b, _ := io.ReadAll(req.Body)
+				decoded, err := encoding.Decode(string(b))
+				if err == nil {
+					_ = json.Unmarshal([]byte(decoded), &capturedBody)
+				}
+			}
+			if req.Method == http.MethodGet {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"chat":[]}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			mockResp := `data: {"choices":[{"delta":{"content":"OK"}}], "finish_reason":"stop"}` + "\n\ndata: [DONE]\n\n"
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(mockResp)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	reqBody := `{
+		"model": "gpt-4o",
+		"messages": [
+			{"role": "developer", "content": "You are an expert coding assistant."},
+			{"role": "user", "content": [{"type": "text", "text": "Reply with exactly: OK"}]}
+		],
+		"stream": true
+	}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	handler.HandleOpenAIChat(w, req)
+
+	if capturedBody == nil {
+		t.Fatal("Failed to capture request body")
+	}
+	messages, ok := capturedBody["messages"].([]any)
+	if !ok || len(messages) < 2 {
+		t.Fatalf("Expected at least 2 messages in captured body, got: %#v", capturedBody["messages"])
+	}
+	firstMsg, ok := messages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("First message is not a map: %#v", messages[0])
+	}
+	if firstMsg["role"] != "system" {
+		t.Errorf("Expected role 'system' after normalization, got %v", firstMsg["role"])
+	}
+}
+
+func TestBridgeHandler_QModelLatest418RedactionRetry(t *testing.T) {
+	session := &auth.Session{CosyKey: "test-key"}
+	handler := NewBridgeHandler(session, func(log *proto.GatewayLog) {})
+
+	attempts := 0
+	var retryCapturedBody map[string]any
+	handler.client.client.Transport = &mockTransport{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"chat":[]}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+
+			attempts++
+			if req.Body != nil {
+				b, _ := io.ReadAll(req.Body)
+				decoded, err := encoding.Decode(string(b))
+				if err == nil && attempts > 1 {
+					_ = json.Unmarshal([]byte(decoded), &retryCapturedBody)
+				}
+			}
+
+			if attempts == 1 {
+				// First attempt returns 418 Unknown sse issue
+				mockErrResp := `data: {"headers":{"Content-Type":["application/json"]},"body":"{\"code\":\"418\",\"message\":\"Unknown sse issue\"}","statusCodeValue":418,"statusCode":"I_AM_A_TEAPOT"}` + "\n\n"
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(mockErrResp)),
+					Header:     make(http.Header),
+				}, nil
+			}
+
+			// Retry attempt returns success
+			mockSuccessResp := `data: {"choices":[{"delta":{"content":"Search results recovered"}}], "finish_reason":"stop"}` + "\n\ndata: [DONE]\n\n"
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(mockSuccessResp)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	reqBody := `{
+		"model": "qmodel_latest",
+		"messages": [
+			{"role": "user", "content": "Search for news"},
+			{
+				"role": "assistant",
+				"tool_calls": [
+					{
+						"id": "call_123",
+						"type": "function",
+						"function": {"name": "web_search", "arguments": "{\"query\":\"news\"}"}
+					}
+				]
+			},
+			{
+				"role": "tool",
+				"tool_call_id": "call_123",
+				"content": "huge raw search payload with potential toxic/blocked terms"
+			},
+			{"role": "user", "content": "continue"}
+		],
+		"stream": true
+	}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	handler.HandleOpenAIChat(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected HTTP 200, got %d", resp.StatusCode)
+	}
+	if attempts < 2 {
+		t.Fatalf("Expected at least 2 attempts (retry triggered), got %d", attempts)
+	}
+
+	// Verify that the retry body had the tool call arguments and tool result redacted
+	if retryCapturedBody == nil {
+		t.Fatal("Retry body was not captured")
+	}
+	messages, ok := retryCapturedBody["messages"].([]any)
+	if !ok || len(messages) < 4 {
+		t.Fatalf("Expected 4 messages in retry body, got: %#v", retryCapturedBody["messages"])
+	}
+	toolResultMsg := messages[2].(map[string]any)
+	if !strings.Contains(toolResultMsg["content"].(string), "omitted by Lingma Tap") {
+		t.Errorf("Expected tool result to be redacted in retry, got %v", toolResultMsg["content"])
+	}
+}
+

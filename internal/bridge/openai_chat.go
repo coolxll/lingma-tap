@@ -153,9 +153,10 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Sanitize messages (e.g., strip billing headers from Claude Code)
+	// Sanitize messages (e.g., strip billing headers from Claude Code, normalize developer role)
 	for i, m := range req.Messages {
 		req.Messages[i] = sanitizeMessage(m)
+		normalizeOpenAIMessageRole(req.Messages[i])
 	}
 
 	// Dynamically map model name to Lingma model key
@@ -881,3 +882,14 @@ func friendlyName(key string, apiDisplayName string) string {
 	}
 	return key
 }
+
+// normalizeOpenAIMessageRole normalizes OpenAI developer role to system role for Lingma upstream compatibility.
+func normalizeOpenAIMessageRole(msg map[string]any) {
+	if msg == nil {
+		return
+	}
+	if role, ok := msg["role"].(string); ok && strings.EqualFold(strings.TrimSpace(role), "developer") {
+		msg["role"] = "system"
+	}
+}
+

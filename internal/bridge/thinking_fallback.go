@@ -83,7 +83,7 @@ func loadLingmaThinkingFallbackConfig() (bool, time.Duration) {
 
 func inspectLingmaRequest(body map[string]any, modelKey string) lingmaRequestProfile {
 	profile := lingmaRequestProfile{}
-	if !strings.EqualFold(strings.TrimSpace(modelKey), "gm51model") || body == nil {
+	if body == nil {
 		return profile
 	}
 
@@ -201,10 +201,13 @@ func (h *BridgeHandler) applyThinkingFallback(protocol, modelKey string, rawBody
 }
 
 func (h *BridgeHandler) retryLingmaThinkingFallbackBody(protocol, modelKey string, body map[string]any, profile lingmaRequestProfile, fallback lingmaThinkingFallbackDecision, err error, emittedContent bool) (map[string]any, lingmaThinkingFallbackDecision, bool) {
-	if h == nil || !h.thinkingFallbackEnabled || !profile.LargeThinking || fallback.Applied || emittedContent || err == nil {
+	if h == nil || !h.thinkingFallbackEnabled || fallback.Applied || emittedContent || err == nil {
 		return nil, lingmaThinkingFallbackDecision{}, false
 	}
 	if !isRetryableLingmaThinkingFallbackError(err) {
+		return nil, lingmaThinkingFallbackDecision{}, false
+	}
+	if !isLingmaUnknownSSEError(err) && !profile.LargeThinking {
 		return nil, lingmaThinkingFallbackDecision{}, false
 	}
 
