@@ -34,6 +34,10 @@ export function GetCACertPath() {
   return window['go']['main']['App']['GetCACertPath']();
 }
 
+export function GetGatewayAPIKey() {
+  return window['go']['main']['App']['GetGatewayAPIKey']();
+}
+
 export function GetGatewayLogs(arg1, arg2) {
   return window['go']['main']['App']['GetGatewayLogs'](arg1, arg2);
 }
@@ -96,6 +100,10 @@ export function RecentRecords(arg1) {
 
 export function RevealCACert() {
   return window['go']['main']['App']['RevealCACert']();
+}
+
+export function RotateGatewayAPIKey() {
+  return window['go']['main']['App']['RotateGatewayAPIKey']();
 }
 
 export function SaveAnthropicMapping(arg1, arg2) {
