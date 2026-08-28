@@ -232,62 +232,216 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWriter, reqID string, created json.Number, modelKey string, body map[string]any, gLog *proto.GatewayLog, startTime time.Time, profile lingmaRequestProfile, fallback lingmaThinkingFallbackDecision) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	if fallback.Applied {
-		w.Header().Set(lingmaThinkingFallbackHeaderName, lingmaThinkingFallbackHeaderValue)
-	}
-	w.WriteHeader(http.StatusOK)
-
 	flusher, canFlush := w.(http.Flusher)
-
-	// Track tool call state for proper ID management
-	toolCallIDs := make(map[int]string)
-	toolCallNames := make(map[int]string)
-	toolCallArgs := make(map[int]*strings.Builder)
-	toolCallInitialized := make(map[int]bool)
-	var fullContent strings.Builder
-	var usage *Usage
-	var finishReason string
 	recordPayloads := h.shouldRecordPayloads()
 
-	finishSent := false
-	firstChunkSent := false
-	sawUpstreamEvent := false
-
-	// TTFB 自测量：记录第一个包含内容的 data 事件时间
-	var firstTokenTime time.Time
-	firstTokenRecorded := false
-
-	err := h.chatStream(ctx, body, gLog, func(event SSEEvent) error {
-		sawUpstreamEvent = true
-		if h.Debug {
-			fmt.Printf("[debug] SSE Event: Type=%s, ContentLen=%d, ToolCalls=%d, FinishReason=%s\n",
-				event.Type, len(event.Content), len(event.ToolCalls), event.FinishReason)
+	headersSent := false
+	ensureHeaders := func() {
+		if headersSent {
+			return
 		}
+		headersSent = true
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		if fallback.Applied {
+			w.Header().Set(lingmaThinkingFallbackHeaderName, lingmaThinkingFallbackHeaderValue)
+		}
+		w.WriteHeader(http.StatusOK)
+	}
 
-		switch event.Type {
-		case "data":
-			if event.HasError {
-				if err := errorFromSSEEvent(event); err != nil {
-					return err
+	var (
+		toolCallIDs         map[int]string
+		toolCallNames       map[int]string
+		toolCallArgs        map[int]*strings.Builder
+		toolCallInitialized map[int]bool
+		fullContent         strings.Builder
+		usage               *Usage
+		finishReason        string
+		finishSent          bool
+		firstChunkSent      bool
+		sawUpstreamEvent    bool
+		firstTokenTime      time.Time
+		firstTokenRecorded  bool
+		err                 error
+	)
+
+	for {
+		toolCallIDs = make(map[int]string)
+		toolCallNames = make(map[int]string)
+		toolCallArgs = make(map[int]*strings.Builder)
+		toolCallInitialized = make(map[int]bool)
+		fullContent.Reset()
+		usage = nil
+		finishReason = ""
+		finishSent = false
+		firstChunkSent = false
+		sawUpstreamEvent = false
+		firstTokenRecorded = false
+
+		err = h.chatStream(ctx, body, gLog, func(event SSEEvent) error {
+			sawUpstreamEvent = true
+			if h.Debug {
+				fmt.Printf("[debug] SSE Event: Type=%s, ContentLen=%d, ToolCalls=%d, FinishReason=%s\n",
+					event.Type, len(event.Content), len(event.ToolCalls), event.FinishReason)
+			}
+
+			switch event.Type {
+			case "data":
+				if event.HasError {
+					if err := errorFromSSEEvent(event); err != nil {
+						return err
+					}
 				}
-			}
 
-			// 记录第一个包含内容的 token 时间（用于 TTFB 自测量）
-			if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "") {
-				firstTokenTime = time.Now()
-				firstTokenRecorded = true
-			}
+				// 记录第一个包含内容的 token 时间（用于 TTFB 自测量）
+				if !firstTokenRecorded && (event.Content != "" || event.ReasoningContent != "") {
+					firstTokenTime = time.Now()
+					firstTokenRecorded = true
+				}
 
-			// Skip truly empty data events (no content, reasoning, tool calls, or finish reason)
-			if event.Content == "" && event.ReasoningContent == "" && len(event.ToolCalls) == 0 && event.FinishReason == "" {
+				// Skip truly empty data events (no content, reasoning, tool calls, or finish reason)
+				if event.Content == "" && event.ReasoningContent == "" && len(event.ToolCalls) == 0 && event.FinishReason == "" {
+					if event.Usage != nil {
+						usage = event.Usage
+						applyUsageToGatewayLog(gLog, usage)
+
+						// Still send usage info as a chunk
+						chunk := map[string]any{
+							"id":      reqID,
+							"object":  "chat.completion.chunk",
+							"created": created,
+							"model":   modelKey,
+							"choices": []map[string]any{{
+								"index":         0,
+								"delta":         map[string]any{},
+								"finish_reason": nil,
+							}},
+							"usage": event.Usage,
+						}
+						ensureHeaders()
+						writeSSE(w, "data: ", chunk)
+						if canFlush {
+							flusher.Flush()
+						}
+					}
+					return nil
+				}
+
+				if recordPayloads && event.Content != "" {
+					fullContent.WriteString(event.Content)
+				}
+
+				chunk := map[string]any{
+					"id":      reqID,
+					"object":  "chat.completion.chunk",
+					"created": created,
+					"model":   modelKey,
+				}
+
+				delta := map[string]any{}
+				if !firstChunkSent {
+					delta["role"] = "assistant"
+					firstChunkSent = true
+				}
+				if event.ReasoningContent != "" {
+					delta["reasoning_content"] = event.ReasoningContent
+				}
+				if event.Content != "" {
+					delta["content"] = event.Content
+				}
+
+				if len(event.ToolCalls) > 0 {
+					var toolCalls []map[string]any
+					for _, tc := range event.ToolCalls {
+						// Lock the first ID for each index. Some upstreams send a
+						// generated/missing ID first and a different late ID later;
+						// changing it would break tool-result correlation.
+						tcID, exists := toolCallIDs[tc.Index]
+						if !exists {
+							tcID = normalizeOpenAIToolID(tc.ID)
+							toolCallIDs[tc.Index] = tcID
+						}
+						if tc.Name != "" {
+							toolCallNames[tc.Index] = tc.Name
+						}
+						if recordPayloads && toolCallArgs[tc.Index] == nil {
+							toolCallArgs[tc.Index] = &strings.Builder{}
+						}
+						if recordPayloads && tc.Arguments != "" {
+							toolCallArgs[tc.Index].WriteString(tc.Arguments)
+						}
+
+						tcObj := map[string]any{
+							"index": tc.Index,
+						}
+
+						isNew := false
+						if !toolCallInitialized[tc.Index] {
+							isNew = true
+							toolCallInitialized[tc.Index] = true
+							tcObj["id"] = tcID
+							tcObj["type"] = "function"
+						}
+
+						if tc.Name != "" || isNew {
+							fn := map[string]any{}
+							if tc.Name != "" {
+								fn["name"] = tc.Name
+							}
+							if tc.Arguments != "" || isNew {
+								fn["arguments"] = tc.Arguments
+							}
+							tcObj["function"] = fn
+						} else if tc.Arguments != "" {
+							tcObj["function"] = map[string]any{
+								"arguments": tc.Arguments,
+							}
+						}
+						toolCalls = append(toolCalls, tcObj)
+					}
+					delta["tool_calls"] = toolCalls
+				}
+
+				if event.FinishReason != "" {
+					finishSent = true
+					finishReason = event.FinishReason
+					chunk["choices"] = []map[string]any{{
+						"index":         0,
+						"delta":         map[string]any{},
+						"finish_reason": event.FinishReason,
+					}}
+					gLog.FinishReason = event.FinishReason
+				} else {
+					chunk["choices"] = []map[string]any{{
+						"index":         0,
+						"delta":         delta,
+						"finish_reason": nil,
+					}}
+				}
+
 				if event.Usage != nil {
+					chunk["usage"] = event.Usage
 					usage = event.Usage
 					applyUsageToGatewayLog(gLog, usage)
+				}
 
-					// Still send usage info as a chunk
+				ensureHeaders()
+				writeSSE(w, "data: ", chunk)
+				if canFlush {
+					flusher.Flush()
+				}
+
+			case "finish":
+				applyFinishEvent(gLog, event)
+				if event.Usage != nil {
+					usage = event.Usage
+				}
+				if !finishSent {
+					fReason := "stop"
+					if len(toolCallIDs) > 0 {
+						fReason = "tool_calls"
+					}
 					chunk := map[string]any{
 						"id":      reqID,
 						"object":  "chat.completion.chunk",
@@ -296,246 +450,122 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 						"choices": []map[string]any{{
 							"index":         0,
 							"delta":         map[string]any{},
-							"finish_reason": nil,
+							"finish_reason": fReason,
 						}},
-						"usage": event.Usage,
 					}
+					ensureHeaders()
 					writeSSE(w, "data: ", chunk)
-					if canFlush {
-						flusher.Flush()
+					if finishReason == "" {
+						finishReason = fReason
 					}
 				}
-				return nil
-			}
-
-			if recordPayloads && event.Content != "" {
-				fullContent.WriteString(event.Content)
-			}
-
-			chunk := map[string]any{
-				"id":      reqID,
-				"object":  "chat.completion.chunk",
-				"created": created,
-				"model":   modelKey,
-			}
-
-			delta := map[string]any{}
-			if !firstChunkSent {
-				delta["role"] = "assistant"
-				firstChunkSent = true
-			}
-			if event.ReasoningContent != "" {
-				delta["reasoning_content"] = event.ReasoningContent
-			}
-			if event.Content != "" {
-				delta["content"] = event.Content
-			}
-
-			if len(event.ToolCalls) > 0 {
-				var toolCalls []map[string]any
-				for _, tc := range event.ToolCalls {
-					// Lock the first ID for each index. Some upstreams send a
-					// generated/missing ID first and a different late ID later;
-					// changing it would break tool-result correlation.
-					tcID, exists := toolCallIDs[tc.Index]
-					if !exists {
-						tcID = normalizeOpenAIToolID(tc.ID)
-						toolCallIDs[tc.Index] = tcID
+			case "done":
+				if !finishSent {
+					fReason := "stop"
+					if len(toolCallIDs) > 0 {
+						fReason = "tool_calls"
 					}
-					if tc.Name != "" {
-						toolCallNames[tc.Index] = tc.Name
+					chunk := map[string]any{
+						"id":      reqID,
+						"object":  "chat.completion.chunk",
+						"created": created,
+						"model":   modelKey,
+						"choices": []map[string]any{{
+							"index":         0,
+							"delta":         map[string]any{},
+							"finish_reason": fReason,
+						}},
 					}
-					if recordPayloads && toolCallArgs[tc.Index] == nil {
-						toolCallArgs[tc.Index] = &strings.Builder{}
-					}
-					if recordPayloads && tc.Arguments != "" {
-						toolCallArgs[tc.Index].WriteString(tc.Arguments)
-					}
-
-					tcObj := map[string]any{
-						"index": tc.Index,
-					}
-
-					isNew := false
-					if !toolCallInitialized[tc.Index] {
-						isNew = true
-						toolCallInitialized[tc.Index] = true
-						tcObj["id"] = tcID
-						tcObj["type"] = "function"
-					}
-
-					if tc.Name != "" || isNew {
-						fn := map[string]any{}
-						if tc.Name != "" {
-							fn["name"] = tc.Name
-						}
-						if tc.Arguments != "" || isNew {
-							fn["arguments"] = tc.Arguments
-						}
-						tcObj["function"] = fn
-					} else if tc.Arguments != "" {
-						tcObj["function"] = map[string]any{
-							"arguments": tc.Arguments,
-						}
-					}
-					toolCalls = append(toolCalls, tcObj)
-				}
-				delta["tool_calls"] = toolCalls
-			}
-
-			if event.FinishReason != "" {
-				finishSent = true
-				finishReason = event.FinishReason
-				chunk["choices"] = []map[string]any{{
-					"index":         0,
-					"delta":         map[string]any{},
-					"finish_reason": event.FinishReason,
-				}}
-				gLog.FinishReason = event.FinishReason
-			} else {
-				chunk["choices"] = []map[string]any{{
-					"index":         0,
-					"delta":         delta,
-					"finish_reason": nil,
-				}}
-			}
-
-			if event.Usage != nil {
-				chunk["usage"] = event.Usage
-				usage = event.Usage
-				applyUsageToGatewayLog(gLog, usage)
-			}
-
-			writeSSE(w, "data: ", chunk)
-			if canFlush {
-				flusher.Flush()
-			}
-
-		case "finish":
-			applyFinishEvent(gLog, event)
-			if event.Usage != nil {
-				usage = event.Usage
-			}
-			if !finishSent {
-				fReason := "stop"
-				if len(toolCallIDs) > 0 {
-					fReason = "tool_calls"
-				}
-				chunk := map[string]any{
-					"id":      reqID,
-					"object":  "chat.completion.chunk",
-					"created": created,
-					"model":   modelKey,
-					"choices": []map[string]any{{
-						"index":         0,
-						"delta":         map[string]any{},
-						"finish_reason": fReason,
-					}},
-				}
-				writeSSE(w, "data: ", chunk)
-				if finishReason == "" {
+					ensureHeaders()
+					writeSSE(w, "data: ", chunk)
 					finishReason = fReason
+					finishSent = true
 				}
-			}
-		case "done":
-			if !finishSent {
-				fReason := "stop"
-				if len(toolCallIDs) > 0 {
-					fReason = "tool_calls"
+
+				ensureHeaders()
+				io.WriteString(w, "data: [DONE]\n\n")
+				if canFlush {
+					flusher.Flush()
 				}
-				chunk := map[string]any{
-					"id":      reqID,
-					"object":  "chat.completion.chunk",
-					"created": created,
-					"model":   modelKey,
-					"choices": []map[string]any{{
+
+				gLog.Status = 200
+				if gLog.TTFT == 0 && firstTokenRecorded {
+					gLog.TTFT = firstTokenTime.Sub(startTime).Milliseconds()
+				}
+				if finishReason == "" {
+					finishReason = "stop"
+				}
+				gLog.FinishReason = finishReason
+
+				if recordPayloads {
+					resp := map[string]any{
+						"id":      reqID,
+						"object":  "chat.completion",
+						"created": created,
+						"model":   modelKey,
+					}
+					choice := map[string]any{
 						"index":         0,
-						"delta":         map[string]any{},
-						"finish_reason": fReason,
-					}},
-				}
-				writeSSE(w, "data: ", chunk)
-				finishReason = fReason
-				finishSent = true
-			}
-
-			io.WriteString(w, "data: [DONE]\n\n")
-			if canFlush {
-				flusher.Flush()
-			}
-
-			gLog.Status = 200
-			if gLog.TTFT == 0 && firstTokenRecorded {
-				gLog.TTFT = firstTokenTime.Sub(startTime).Milliseconds()
-			}
-			if finishReason == "" {
-				finishReason = "stop"
-			}
-			gLog.FinishReason = finishReason
-
-			if recordPayloads {
-				resp := map[string]any{
-					"id":      reqID,
-					"object":  "chat.completion",
-					"created": created,
-					"model":   modelKey,
-				}
-				choice := map[string]any{
-					"index":         0,
-					"finish_reason": finishReason,
-					"message": map[string]any{
-						"role":    "assistant",
-						"content": fullContent.String(),
-					},
-				}
-				if len(toolCallIDs) > 0 {
-					var tcList []map[string]any
-					var keys []int
-					for idx := range toolCallIDs {
-						keys = append(keys, idx)
+						"finish_reason": finishReason,
+						"message": map[string]any{
+							"role":    "assistant",
+							"content": fullContent.String(),
+						},
 					}
-					sort.Ints(keys)
-
-					for _, idx := range keys {
-						args := ""
-						if toolCallArgs[idx] != nil {
-							args = toolCallArgs[idx].String()
+					if len(toolCallIDs) > 0 {
+						var tcList []map[string]any
+						var keys []int
+						for idx := range toolCallIDs {
+							keys = append(keys, idx)
 						}
-						tcList = append(tcList, map[string]any{
-							"id":    toolCallIDs[idx],
-							"type":  "function",
-							"index": idx,
-							"function": map[string]any{
-								"name":      toolCallNames[idx],
-								"arguments": args,
-							},
-						})
+						sort.Ints(keys)
+
+						for _, idx := range keys {
+							args := ""
+							if toolCallArgs[idx] != nil {
+								args = toolCallArgs[idx].String()
+							}
+							tcList = append(tcList, map[string]any{
+								"id":    toolCallIDs[idx],
+								"type":  "function",
+								"index": idx,
+								"function": map[string]any{
+									"name":      toolCallNames[idx],
+									"arguments": args,
+								},
+							})
+						}
+						choice["message"].(map[string]any)["tool_calls"] = tcList
 					}
-					choice["message"].(map[string]any)["tool_calls"] = tcList
-				}
-				resp["choices"] = []map[string]any{choice}
-				if usage != nil {
-					resp["usage"] = usage
-				} else {
-					resp["usage"] = map[string]any{
-						"prompt_tokens":     gLog.InputTokens,
-						"completion_tokens": gLog.OutputTokens,
-						"total_tokens":      gLog.InputTokens + gLog.OutputTokens,
+					resp["choices"] = []map[string]any{choice}
+					if usage != nil {
+						resp["usage"] = usage
+					} else {
+						resp["usage"] = map[string]any{
+							"prompt_tokens":     gLog.InputTokens,
+							"completion_tokens": gLog.OutputTokens,
+							"total_tokens":      gLog.InputTokens + gLog.OutputTokens,
+						}
 					}
+					h.captureResponseBody(gLog, resp)
 				}
-				h.captureResponseBody(gLog, resp)
+				gLog.Latency = time.Since(startTime).Milliseconds()
+				h.recorder(gLog)
 			}
-			gLog.Latency = time.Since(startTime).Milliseconds()
-			h.recorder(gLog)
+			return nil
+		})
+
+		if err != nil {
+			if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("openai_chat", modelKey, body, profile, fallback, err, firstChunkSent); ok {
+				body = retryBody
+				fallback = retryFallback
+				continue
+			}
 		}
-		return nil
-	})
+		break
+	}
 
 	if err != nil {
-		if retryBody, retryFallback, ok := h.retryLingmaThinkingFallbackBody("openai_chat", modelKey, body, profile, fallback, err, firstChunkSent); ok {
-			h.streamOpenAIChat(ctx, w, reqID, created, modelKey, retryBody, gLog, startTime, profile, retryFallback)
-			return
-		}
 		h.rememberThinkingFallback(err, fallback, profile, modelKey, "openai_chat", sawUpstreamEvent)
 		if recordContextError(ctx, gLog, startTime, err, h.recorder) {
 			return
@@ -545,6 +575,7 @@ func (h *BridgeHandler) streamOpenAIChat(ctx context.Context, w http.ResponseWri
 		gLog.Status = statusForLingmaUpstreamError(err)
 		gLog.Latency = time.Since(startTime).Milliseconds()
 		h.recorder(gLog)
+		ensureHeaders()
 		fmt.Fprintf(w, `data: {"error":{"message":"%s","type":"server_error"}}`+"\n\n", escapeJSON(message))
 		if canFlush {
 			flusher.Flush()

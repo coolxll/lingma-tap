@@ -218,8 +218,14 @@ func (h *BridgeHandler) retryLingmaThinkingFallbackBody(protocol, modelKey strin
 	}
 
 	reason := "thinking_disabled"
-	if isLingmaUnknownSSEError(err) && redactLatestToolTurn(retryBody) {
-		reason = "latest_tool_turn_redacted"
+	if isLingmaUnknownSSEError(err) {
+		redactedTurns := redactRecentToolTurns(retryBody, 3)
+		truncatedResults := truncateHistoricalToolResults(retryBody, 4096)
+		if redactedTurns > 0 || truncatedResults > 0 {
+			reason = fmt.Sprintf("recent_tool_turns_redacted(turns=%d,truncated=%d)", redactedTurns, truncatedResults)
+		} else {
+			disableLingmaThinking(retryBody)
+		}
 	} else {
 		disableLingmaThinking(retryBody)
 	}
@@ -270,13 +276,20 @@ func disableLingmaThinking(body map[string]any) {
 	body["agent_id"] = "agent_common"
 }
 
-func redactLatestToolTurn(body map[string]any) bool {
+func redactRecentToolTurns(body map[string]any, maxTurns int) int {
+	if maxTurns <= 0 {
+		maxTurns = 3
+	}
 	messages := lingmaMessages(body)
 	if len(messages) == 0 {
-		return false
+		return 0
 	}
 
+	changed := 0
 	for toolIdx := len(messages) - 1; toolIdx >= 0; toolIdx-- {
+		if changed >= maxTurns {
+			break
+		}
 		toolMsg := messages[toolIdx]
 		if !strings.EqualFold(strings.TrimSpace(roleString(toolMsg["role"])), "tool") {
 			continue
@@ -290,14 +303,38 @@ func redactLatestToolTurn(body map[string]any) bool {
 			if !strings.EqualFold(strings.TrimSpace(roleString(assistantMsg["role"])), "assistant") {
 				continue
 			}
-			if !redactToolCallByID(assistantMsg, toolCallID) {
-				break
+			if redactToolCallByID(assistantMsg, toolCallID) {
+				toolMsg["content"] = "[tool result omitted by Lingma Tap after upstream rejected the original tool turn]"
+				changed++
 			}
-			toolMsg["content"] = "[tool result omitted by Lingma Tap after upstream rejected the original tool turn]"
-			return true
+			break
 		}
 	}
-	return false
+	return changed
+}
+
+func truncateHistoricalToolResults(body map[string]any, limit int) int {
+	if limit <= 0 {
+		limit = 4096
+	}
+	messages := lingmaMessages(body)
+	changed := 0
+	for _, msg := range messages {
+		if !strings.EqualFold(strings.TrimSpace(roleString(msg["role"])), "tool") {
+			continue
+		}
+		content, ok := msg["content"].(string)
+		if !ok || len(content) <= limit {
+			continue
+		}
+		msg["content"] = content[:limit] + "\n[tool result truncated by Lingma Tap]"
+		changed++
+	}
+	return changed
+}
+
+func redactLatestToolTurn(body map[string]any) bool {
+	return redactRecentToolTurns(body, 3) > 0
 }
 
 func lingmaMessages(body map[string]any) []map[string]any {

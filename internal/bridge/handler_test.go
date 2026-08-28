@@ -1616,3 +1616,134 @@ func TestBridgeHandler_QModelLatest418RedactionRetry(t *testing.T) {
 	}
 }
 
+func TestBridgeHandler_MultiTurn418RedactionRetry(t *testing.T) {
+	session := &auth.Session{CosyKey: "test-key"}
+	handler := NewBridgeHandler(session, func(log *proto.GatewayLog) {})
+
+	attempts := 0
+	var retryCapturedBody map[string]any
+	handler.client.client.Transport = &mockTransport{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"chat":[]}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+
+			attempts++
+			if req.Body != nil {
+				b, _ := io.ReadAll(req.Body)
+				decoded, err := encoding.Decode(string(b))
+				if err == nil && attempts > 1 {
+					_ = json.Unmarshal([]byte(decoded), &retryCapturedBody)
+				}
+			}
+
+			if attempts == 1 {
+				// First attempt returns 418 Unknown sse issue
+				mockErrResp := `data: {"headers":{"Content-Type":["application/json"]},"body":"{\"code\":\"418\",\"message\":\"Unknown sse issue\"}","statusCodeValue":418,"statusCode":"I_AM_A_TEAPOT"}` + "\n\n"
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(mockErrResp)),
+					Header:     make(http.Header),
+				}, nil
+			}
+
+			// Retry attempt returns success
+			mockSuccessResp := `data: {"choices":[{"delta":{"content":"Multi-turn search results recovered"}}], "finish_reason":"stop"}` + "\n\ndata: [DONE]\n\n"
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(mockSuccessResp)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	// Request has 2 distinct tool turns
+	reqBody := `{
+		"model": "qmodel_latest",
+		"messages": [
+			{"role": "user", "content": "Search 1"},
+			{
+				"role": "assistant",
+				"tool_calls": [
+					{
+						"id": "call_1",
+						"type": "function",
+						"function": {"name": "web_search", "arguments": "{\"query\":\"news 1\"}"}
+					}
+				]
+			},
+			{
+				"role": "tool",
+				"tool_call_id": "call_1",
+				"content": "first search result with sensitive term"
+			},
+			{"role": "user", "content": "Search 2"},
+			{
+				"role": "assistant",
+				"tool_calls": [
+					{
+						"id": "call_2",
+						"type": "function",
+						"function": {"name": "web_search", "arguments": "{\"query\":\"news 2\"}"}
+					}
+				]
+			},
+			{
+				"role": "tool",
+				"tool_call_id": "call_2",
+				"content": "second search result with sensitive term"
+			}
+		],
+		"stream": true
+	}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	handler.HandleOpenAIChat(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected HTTP 200, got %d", resp.StatusCode)
+	}
+	if attempts < 2 {
+		t.Fatalf("Expected retry attempt, got attempts=%d", attempts)
+	}
+
+	if retryCapturedBody == nil {
+		t.Fatal("Retry body was not captured")
+	}
+	messages, ok := retryCapturedBody["messages"].([]any)
+	if !ok || len(messages) < 6 {
+		t.Fatalf("Expected at least 6 messages, got %#v", retryCapturedBody["messages"])
+	}
+
+	// Verify BOTH tool turns were redacted
+	toolMsg1 := messages[2].(map[string]any)
+	toolMsg2 := messages[5].(map[string]any)
+
+	if !strings.Contains(toolMsg1["content"].(string), "omitted by Lingma Tap") {
+		t.Errorf("Expected toolMsg1 to be redacted, got: %v", toolMsg1["content"])
+	}
+	if !strings.Contains(toolMsg2["content"].(string), "omitted by Lingma Tap") {
+		t.Errorf("Expected toolMsg2 to be redacted, got: %v", toolMsg2["content"])
+	}
+
+	// Verify assistant tool call arguments were also redacted
+	asstMsg1 := messages[1].(map[string]any)
+	asstMsg2 := messages[4].(map[string]any)
+	tcs1 := asstMsg1["tool_calls"].([]any)[0].(map[string]any)
+	tcs2 := asstMsg2["tool_calls"].([]any)[0].(map[string]any)
+
+	if tcs1["function"].(map[string]any)["arguments"] != `{"redacted":true}` {
+		t.Errorf("Expected asstMsg1 tool arguments redacted, got: %v", tcs1["function"])
+	}
+	if tcs2["function"].(map[string]any)["arguments"] != `{"redacted":true}` {
+		t.Errorf("Expected asstMsg2 tool arguments redacted, got: %v", tcs2["function"])
+	}
+}
+
+
