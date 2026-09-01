@@ -153,8 +153,23 @@
     "checking": "检查中...",
     "already_latest": "当前已是最新版本",
     "new_version_available": "发现新版本 {{version}}",
+    "install_update": "安装并重启",
+    "installing_update": "正在安装…",
     "go_to_releases": "前往下载",
     "check_update_failed": "检查更新失败"
+  },
+  "update": {
+    "title": "发现 Lingma Tap 更新",
+    "description": "版本 {{version}} 已准备好从 GitHub 下载。安装时应用会退出并自动重启。",
+    "downloading": "正在下载… {{percent}}%",
+    "verifying": "正在验证更新签名…",
+    "staging": "正在准备替换应用…",
+    "restarting": "正在重启应用…",
+    "failed": "更新失败",
+    "manual_required": "当前安装位置不可写或应用正从只读磁盘映像运行，请前往 GitHub Releases 手动更新。",
+    "later": "稍后",
+    "open_release": "打开 Releases",
+    "install_restart": "安装并重启"
   },
   "sse": {
     "no_events": "无 SSE 事件",

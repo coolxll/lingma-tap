@@ -69,10 +69,13 @@ jobs:
           # 注入版本号（tag push 时使用 tag 名，否则使用 short sha）
           if [ "${{ github.ref_type }}" == "tag" ]; then
             VERSION="${{ github.ref_name }}"
+            PRODUCT_VERSION="${VERSION#v}"
           else
             VERSION="${{ github.sha }}"
+            PRODUCT_VERSION="0.0.0"
           fi
           echo "Building with version: $VERSION"
+          PRODUCT_VERSION="$PRODUCT_VERSION" node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("wails.json","utf8")); p.info.productVersion=process.env.PRODUCT_VERSION; fs.writeFileSync("wails.json",JSON.stringify(p,null,2)+"\n")'
 
           # 执行构建
           wails build -platform ${{ matrix.platform }} -clean -ldflags "-X main.Version=${VERSION}"
@@ -111,6 +114,11 @@ jobs:
           # 查找生成的 .app 目录
           APP_BUNDLE=$(ls -d *.app | head -n 1)
           if [ -n "$APP_BUNDLE" ]; then
+            # 自动更新使用 zip；ditto 会保留 bundle 元数据和代码签名。
+            ditto -c -k --sequesterRsrc --keepParent \
+              "$APP_BUNDLE" \
+              "../../lingma-tap-${{ matrix.name }}.zip"
+
             # 创建 dmg
             create-dmg \
               --volname "Lingma Tap" \
@@ -142,11 +150,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Generate signed update manifest
+        env:
+          UPDATE_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY }}
+        run: go run ./cmd/update-manifest -dir artifacts -version "${{ github.ref_name }}"
 
       - name: Release
         uses: softprops/action-gh-release@v3
@@ -154,6 +176,8 @@ jobs:
           files: |
             artifacts/*.zip
             artifacts/*.dmg
+            artifacts/update-manifest.json
+            artifacts/update-manifest.json.sig
           draft: false
           prerelease: false
         env:

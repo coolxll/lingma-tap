@@ -1,10 +1,7 @@
-import { useState, useEffect, useCallback, useRef, memo } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
 import { RefreshCw, Copy, Check, Shield, ShieldOff, Server, ServerOff, Trash2, FolderOpen, FileKey, ExternalLink, LogIn, CircleCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-
-const GITHUB_OWNER = 'coolxll';
-const GITHUB_REPO = 'lingma-tap';
-const RELEASES_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases`;
+import { UpdateInfo, UpdateProgress } from '@/lib/update';
 
 // Wails window type
 interface WailsWindow extends Window {
@@ -18,7 +15,6 @@ interface WailsWindow extends Window {
         GetAnthropicMapping: () => Promise<any>;
         SaveAnthropicMapping: (mapping: Record<string, string>, defaultModel: string) => Promise<void>;
         OpenExternal: (url: string) => Promise<void>;
-        GetVersion: () => Promise<string>;
         GetGatewayAPIKey: () => Promise<string>;
         RotateGatewayAPIKey: () => Promise<string>;
       };
@@ -72,6 +68,14 @@ interface SettingsPanelProps {
   onClearBefore?: (days: number) => Promise<number>;
   caCertPath?: string;
   onRevealCACert?: () => Promise<void>;
+  currentVersion?: string;
+  updateInfo?: UpdateInfo | null;
+  updateProgress?: UpdateProgress | null;
+  updateChecking?: boolean;
+  updateChecked?: boolean;
+  onCheckForUpdate?: () => void;
+  onInstallUpdate?: () => void;
+  onOpenRelease?: () => void;
 }
 
 export const SettingsPanel = memo(function SettingsPanel({
@@ -106,8 +110,20 @@ export const SettingsPanel = memo(function SettingsPanel({
   onClearBefore,
   caCertPath,
   onRevealCACert,
+  currentVersion = '',
+  updateInfo = null,
+  updateProgress = null,
+  updateChecking = false,
+  updateChecked = false,
+  onCheckForUpdate,
+  onInstallUpdate,
+  onOpenRelease,
 }: SettingsPanelProps) {
   const { t } = useTranslation();
+  const updateBusy = updateProgress?.phase === 'downloading'
+    || updateProgress?.phase === 'verifying'
+    || updateProgress?.phase === 'staging'
+    || updateProgress?.phase === 'restarting';
 
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -122,12 +138,7 @@ export const SettingsPanel = memo(function SettingsPanel({
   const [anthropicMapping, setAnthropicMapping] = useState<Record<string, string>>({});
   const [anthropicDefault, setAnthropicDefault] = useState('dashscope_qmodel');
   const [savingMapping, setSavingMapping] = useState(false);
-  const [currentVersion, setCurrentVersion] = useState('');
-  const currentVersionRef = useRef('');
-  const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'latest' | 'available' | 'error'>('idle');
-  const [latestVersion, setLatestVersion] = useState('');
   const [networkInterfaces, setNetworkInterfaces] = useState<Array<{name: string; addr: string; type: string}>>([]);
-  const [updateError, setUpdateError] = useState('');
   const [gatewayAPIKey, setGatewayAPIKey] = useState('');
   const [apiKeyVisible, setAPIKeyVisible] = useState(false);
   const [apiKeyError, setAPIKeyError] = useState('');
@@ -205,24 +216,6 @@ export const SettingsPanel = memo(function SettingsPanel({
     fetchAnthropicMapping();
     fetchNetworkInterfaces();
   }, [authenticated, fetchModels, fetchAnthropicMapping, fetchNetworkInterfaces]);
-
-  // Fetch current version from Wails backend
-  useEffect(() => {
-    const fetchVersion = async () => {
-      try {
-        const w = (window as unknown as WailsWindow).go;
-        const version = await w?.main?.App?.GetVersion();
-        if (version) {
-          const normalized = version.replace(/^v/, '');
-          currentVersionRef.current = normalized;
-          setCurrentVersion(normalized);
-        }
-      } catch (err) {
-        console.error('Failed to fetch version', err);
-      }
-    };
-    fetchVersion();
-  }, []);
 
   useEffect(() => {
     const w = (window as unknown as WailsWindow).go;
@@ -331,57 +324,6 @@ export const SettingsPanel = memo(function SettingsPanel({
       setClearLoading(false);
     }
   }, [onClearBefore, clearDays]);
-
-  const parseComparableVersion = (version: string): number[] => {
-    const match = version.match(/^v?(\d+)\.(\d+)\.(\d+)/);
-    if (match) {
-      return match.slice(1).map(Number);
-    }
-    return [0, 0, 0];
-  };
-
-  const compareVersions = (a: string, b: string): number => {
-    const aParts = parseComparableVersion(a);
-    const bParts = parseComparableVersion(b);
-    for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
-      const aNum = aParts[i] || 0;
-      const bNum = bParts[i] || 0;
-      if (aNum > bNum) return 1;
-      if (aNum < bNum) return -1;
-    }
-    return 0;
-  };
-
-  const checkForUpdate = useCallback(async () => {
-    setUpdateStatus('checking');
-    setUpdateError('');
-    try {
-      const response = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const data = await response.json();
-      const remoteVersion = data.tag_name as string;
-      setLatestVersion(remoteVersion);
-      if (compareVersions(remoteVersion, currentVersionRef.current) > 0) {
-        setUpdateStatus('available');
-      } else {
-        setUpdateStatus('latest');
-      }
-    } catch (err) {
-      setUpdateStatus('error');
-      setUpdateError(err instanceof Error ? err.message : 'Unknown error');
-    }
-  }, []);
-
-  const openReleasePage = () => {
-    const w = window as unknown as WailsWindow;
-    if (w.go?.main?.App?.OpenExternal) {
-      w.go.main.App.OpenExternal(RELEASES_URL);
-    } else {
-      window.open(RELEASES_URL, '_blank');
-    }
-  };
 
   const handleRevealCACert = useCallback(async () => {
     if (!onRevealCACert) return;
@@ -1066,45 +1008,46 @@ export const SettingsPanel = memo(function SettingsPanel({
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-sm font-mono text-zinc-300 bg-zinc-950/50 px-3 py-1 rounded-lg border border-zinc-800/50">
-                  v{currentVersion || '...'}
+                  {currentVersion || '...'}
                 </span>
                 <button
-                  onClick={checkForUpdate}
-                  disabled={updateStatus === 'checking'}
+                  onClick={onCheckForUpdate}
+                  disabled={updateChecking}
                   className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-[11px] font-bold transition-colors disabled:opacity-50"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${updateStatus === 'checking' ? 'animate-spin' : ''}`} />
-                  {updateStatus === 'checking' ? t('settings.checking') : t('settings.check_update')}
+                  <RefreshCw className={`w-3.5 h-3.5 ${updateChecking ? 'animate-spin' : ''}`} />
+                  {updateChecking ? t('settings.checking') : t('settings.check_update')}
                 </button>
               </div>
             </div>
 
-            {updateStatus === 'latest' && (
+            {updateChecked && updateInfo?.supported && !updateInfo.available && updateProgress?.phase !== 'error' && (
               <div className="mt-3 text-xs text-green-400 bg-green-500/10 rounded-lg px-3 py-2">
                 {t('settings.already_latest')}
               </div>
             )}
 
-            {updateStatus === 'available' && (
+            {updateInfo?.available && (
               <div className="mt-3 flex items-center justify-between bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-amber-400">
-                    {t('settings.new_version_available', { version: latestVersion })}
+                    {t('settings.new_version_available', { version: updateInfo.latest_version })}
                   </span>
                 </div>
                 <button
-                  onClick={openReleasePage}
-                  className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded-lg text-[11px] font-bold transition-colors"
+                  onClick={updateProgress?.phase === 'error' ? onOpenRelease : onInstallUpdate}
+                  disabled={updateBusy}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded-lg text-[11px] font-bold transition-colors disabled:opacity-50"
                 >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  {t('settings.go_to_releases')}
+                  {updateProgress?.phase === 'error' ? <ExternalLink className="w-3.5 h-3.5" /> : <RefreshCw className={`w-3.5 h-3.5 ${updateBusy ? 'animate-spin' : ''}`} />}
+                  {updateProgress?.phase === 'error' ? t('settings.go_to_releases') : updateBusy ? t('settings.installing_update') : t('settings.install_update')}
                 </button>
               </div>
             )}
 
-            {updateStatus === 'error' && (
+            {updateProgress?.phase === 'error' && (
               <div className="mt-3 text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
-                {t('settings.check_update_failed')}: {updateError}
+                {t('settings.check_update_failed')}: {updateProgress.error}
               </div>
             )}
           </div>

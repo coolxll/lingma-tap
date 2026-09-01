@@ -76,7 +76,12 @@ cloudflared tunnel --url http://127.0.0.1:9090
 
 项目配置了自动化的 CI/CD 流程：
 - 每次推送代码会自动触发编译。
-- 推送 `v*` 格式的标签（如 `v0.1.0`）会自动创建 GitHub Release，并附带 Windows (zip) 和 macOS (dmg) 的安装包。
+- 推送 `v*` 格式的标签（如 `v0.1.0`）会自动创建 GitHub Release，并附带 Windows ZIP、macOS DMG、用于自动更新的 macOS APP ZIP，以及 Ed25519 签名的更新清单。
+- 桌面端会在启动后检查正式 Release；用户确认后下载、验签、替换并重启。应用位于只读或无写权限目录时会退回手动安装。
+
+### 自动更新签名密钥
+
+Release 工作流要求仓库 Secret `UPDATE_SIGNING_PRIVATE_KEY`，其值为 Ed25519 PKCS#8 PEM 文件的 Base64。私钥只应保存在 GitHub Actions Secret 和受控的离线备份中，不得提交或打印到日志；应用内只包含对应公钥。签名密钥缺失或与内置公钥不匹配时，Release 会失败关闭。
 
 ## macOS 安装说明
 

@@ -26,6 +26,7 @@ import (
 	"github.com/coolxll/lingma-tap/internal/proto"
 	"github.com/coolxll/lingma-tap/internal/proxy"
 	"github.com/coolxll/lingma-tap/internal/storage"
+	"github.com/coolxll/lingma-tap/internal/updater"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/menu/keys"
@@ -68,6 +69,10 @@ type App struct {
 	gatewayLogging     bool
 	proxyLogging       bool
 	lingmaHTTP2        bool
+	updateMu           sync.Mutex
+	updateCandidate    *updater.Candidate
+	updateInstalling   bool
+	updateAckPath      string
 }
 
 func NewApp() *App {
@@ -357,10 +362,17 @@ func (a *App) startup(ctx context.Context) {
 			log.Printf("[app] Auto-started AI Gateway on port 9090")
 		}
 	}()
+
+	if a.updateAckPath != "" {
+		if err := updater.AcknowledgeStartup(a.updateAckPath, a.dataDir); err != nil {
+			log.Printf("[update] failed to acknowledge startup: %v", err)
+		}
+	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
 	stopTray()
+	a.StopGateway()
 	if a.oauthLogin != nil {
 		a.oauthLogin.Close()
 	}
@@ -1142,12 +1154,22 @@ func buildAppMenu(app *App) *menu.Menu {
 }
 
 func main() {
+	if transactionPath, ok := updater.HelperInvocation(os.Args[1:]); ok {
+		if err := updater.RunHelper(transactionPath); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	ackPath, _ := updater.AckInvocation(os.Args[1:])
+
 	assets, err := fs.Sub(webAssets, "web/dist")
 	if err != nil {
 		panic(err)
 	}
 
 	app := NewApp()
+	app.updateAckPath = ackPath
 	if err := wails.Run(&options.App{
 		Title:             "Lingma Tap",
 		Width:             1400,

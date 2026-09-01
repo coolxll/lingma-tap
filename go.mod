@@ -13,6 +13,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/tmaxmax/go-sse v0.11.0
 	github.com/wailsapp/wails/v2 v2.12.0
+	golang.org/x/mod v0.33.0
 	golang.org/x/sys v0.42.0
 	modernc.org/sqlite v1.50.0
 )

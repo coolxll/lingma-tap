@@ -6,6 +6,10 @@ export function CancelOAuthLogin() {
   return window['go']['main']['App']['CancelOAuthLogin']();
 }
 
+export function CheckForUpdate() {
+  return window['go']['main']['App']['CheckForUpdate']();
+}
+
 export function ClearGatewayLogs() {
   return window['go']['main']['App']['ClearGatewayLogs']();
 }
@@ -84,6 +88,10 @@ export function GetStatus() {
 
 export function GetVersion() {
   return window['go']['main']['App']['GetVersion']();
+}
+
+export function InstallUpdate() {
+  return window['go']['main']['App']['InstallUpdate']();
 }
 
 export function LogError(arg1) {

@@ -152,8 +152,23 @@
     "checking": "Checking...",
     "already_latest": "You're on the latest version",
     "new_version_available": "New version {{version}} available",
+    "install_update": "Install & Restart",
+    "installing_update": "Installing…",
     "go_to_releases": "Go to Releases",
     "check_update_failed": "Failed to check for updates"
+  },
+  "update": {
+    "title": "Lingma Tap Update Available",
+    "description": "Version {{version}} is ready to download from GitHub. The app will quit and restart during installation.",
+    "downloading": "Downloading… {{percent}}%",
+    "verifying": "Verifying update signature…",
+    "staging": "Preparing to replace the app…",
+    "restarting": "Restarting the app…",
+    "failed": "Update failed",
+    "manual_required": "The current installation is not writable or is running from a read-only disk image. Update manually from GitHub Releases.",
+    "later": "Later",
+    "open_release": "Open Releases",
+    "install_restart": "Install & Restart"
   },
   "sse": {
     "no_events": "No SSE events",

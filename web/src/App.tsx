@@ -15,6 +15,9 @@ import { ResizablePanels } from "@/components/ResizablePanels";
 import { BottomDock } from "@/components/BottomDock";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { GatewayMonitor } from "@/components/GatewayMonitor";
+import { UpdateDialog } from "@/components/UpdateDialog";
+import { UpdateInfo, UpdateProgress } from "@/lib/update";
+import { EventsOn } from "../wailsjs/wailsjs/runtime/runtime";
 
 // Wails window type
 interface WailsWindow extends Window {
@@ -44,6 +47,9 @@ interface WailsWindow extends Window {
         GetModels: () => Promise<ModelInfo[]>;
         StartOAuthLogin: () => Promise<string>;
         CancelOAuthLogin: () => Promise<void>;
+        GetVersion: () => Promise<string>;
+        CheckForUpdate: () => Promise<UpdateInfo>;
+        InstallUpdate: () => Promise<void>;
       };
     };
   };
@@ -61,6 +67,7 @@ const PROXY_PORT = 9528;
 const DEFAULT_GATEWAY_PORT = 9090;
 const PROXY_PAGE_SIZE = 500;
 const GATEWAY_PAGE_SIZE = 200;
+const RELEASES_URL = "https://github.com/coolxll/lingma-tap/releases";
 type ProxyTypeFilter = "all" | "chat" | "embedding" | "other";
 
 function matchesProxyTypeFilter(record: TrafficRecord, filter: ProxyTypeFilter): boolean {
@@ -181,6 +188,12 @@ function App() {
   const [canLoadMore, setCanLoadMore] = useState(true);
   const [proxyTypeFilter, setProxyTypeFilter] = useState<ProxyTypeFilter>("chat");
   const [isVisible, setIsVisible] = useState(true);
+  const [currentVersion, setCurrentVersion] = useState("");
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateChecked, setUpdateChecked] = useState(false);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
 
   const liveTail = activeTab === "proxy" ? proxyLiveTail : gatewayLiveTail;
   const liveTailRef = useRef(liveTail);
@@ -287,6 +300,59 @@ function App() {
 
   // Wails bindings
   const wails = (window as unknown as WailsWindow).go?.main?.App;
+
+  const checkForUpdate = useCallback(async (manual: boolean) => {
+    if (!wails?.CheckForUpdate) return;
+    setUpdateChecking(true);
+    if (manual) setUpdateProgress(null);
+    try {
+      const info = await wails.CheckForUpdate();
+      setUpdateInfo(info);
+      setUpdateChecked(true);
+      if (info.current_version) setCurrentVersion(info.current_version);
+      if (info.available) setUpdateDialogOpen(true);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (manual) {
+        setUpdateProgress({ phase: "error", error: message, release_url: RELEASES_URL });
+      } else {
+        console.warn("Automatic update check failed:", message);
+      }
+    } finally {
+      setUpdateChecking(false);
+    }
+  }, [wails]);
+
+  const installUpdate = useCallback(async () => {
+    if (!wails?.InstallUpdate || !updateInfo?.available) return;
+    setUpdateDialogOpen(true);
+    setUpdateProgress({ phase: "downloading", downloaded_bytes: 0, total_bytes: 0, release_url: updateInfo.release_url });
+    try {
+      await wails.InstallUpdate();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setUpdateProgress((current) => current?.phase === "restarting" || current?.phase === "error"
+        ? current
+        : { phase: "error", error: message, release_url: updateInfo.release_url });
+    }
+  }, [wails, updateInfo]);
+
+  const openUpdateRelease = useCallback(() => {
+    const url = updateProgress?.release_url || updateInfo?.release_url || RELEASES_URL;
+    wails?.OpenExternal(url);
+  }, [wails, updateInfo, updateProgress]);
+
+  useEffect(() => {
+    if (!wails) return;
+    wails.GetVersion().then(setCurrentVersion).catch((err) => console.warn("Failed to read app version:", err));
+    const timer = window.setTimeout(() => checkForUpdate(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [wails, checkForUpdate]);
+
+  useEffect(() => EventsOn("update:state", (progress: UpdateProgress) => {
+    setUpdateProgress(progress);
+    if (progress.phase === "error") setUpdateDialogOpen(true);
+  }), []);
 
   const applyStatus = useCallback((s: Record<string, unknown>) => {
     const st = s?.stats as StorageStats | null;
@@ -813,6 +879,14 @@ function App() {
             onClearBefore={handleClearBefore}
             caCertPath={caCertPath}
             onRevealCACert={handleRevealCACert}
+            currentVersion={currentVersion}
+            updateInfo={updateInfo}
+            updateProgress={updateProgress}
+            updateChecking={updateChecking}
+            updateChecked={updateChecked}
+            onCheckForUpdate={() => checkForUpdate(true)}
+            onInstallUpdate={installUpdate}
+            onOpenRelease={openUpdateRelease}
           />
         )}
       </div>
@@ -823,6 +897,16 @@ function App() {
         stats={stats}
         proxyPort={PROXY_PORT}
       />
+
+      {updateDialogOpen && updateInfo?.available && (
+        <UpdateDialog
+          info={updateInfo}
+          progress={updateProgress}
+          onInstall={installUpdate}
+          onDismiss={() => setUpdateDialogOpen(false)}
+          onOpenRelease={openUpdateRelease}
+        />
+      )}
     </div>
   );
 }

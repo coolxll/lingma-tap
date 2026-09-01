@@ -296,3 +296,30 @@ export namespace proto {
 
 }
 
+export namespace updater {
+	
+	export class Info {
+	    supported: boolean;
+	    available: boolean;
+	    current_version: string;
+	    latest_version: string;
+	    release_url: string;
+	    asset_name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Info(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.supported = source["supported"];
+	        this.available = source["available"];
+	        this.current_version = source["current_version"];
+	        this.latest_version = source["latest_version"];
+	        this.release_url = source["release_url"];
+	        this.asset_name = source["asset_name"];
+	    }
+	}
+
+}
+
