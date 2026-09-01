@@ -117,6 +117,7 @@
     "show_api_key": "显示",
     "hide_api_key": "隐藏",
     "rotate_api_key": "轮换 API Key",
+    "rotate_api_key_stop_first": "请先停止 Gateway，再轮换 API Key。",
     "proxy_logging": "代理抓包记录",
     "proxy_logging_hint": "开启后将保存代理拦截的 HTTP 流量记录",
     "ca_section": "根证书",

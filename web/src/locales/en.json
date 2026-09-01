@@ -116,6 +116,7 @@
     "show_api_key": "Show",
     "hide_api_key": "Hide",
     "rotate_api_key": "Rotate API key",
+    "rotate_api_key_stop_first": "Stop the Gateway before rotating its API key.",
     "proxy_logging": "Proxy Packet Capture",
     "proxy_logging_hint": "Save HTTP traffic records intercepted by proxy",
     "ca_section": "Root Certificate",

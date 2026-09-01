@@ -234,6 +234,10 @@ export const SettingsPanel = memo(function SettingsPanel({
   }, []);
 
   const rotateGatewayAPIKey = async () => {
+    if (gatewayRunning) {
+      setAPIKeyError(t('settings.rotate_api_key_stop_first'));
+      return;
+    }
     setRotatingAPIKey(true);
     setAPIKeyError('');
     try {
@@ -628,9 +632,9 @@ export const SettingsPanel = memo(function SettingsPanel({
                     </button>
                     <button
                       onClick={rotateGatewayAPIKey}
-                      disabled={gatewayRunning || rotatingAPIKey}
+                      disabled={rotatingAPIKey}
                       className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 bg-zinc-900 border border-zinc-800 disabled:opacity-40 transition-colors"
-                      title={t('settings.rotate_api_key')}
+                      title={gatewayRunning ? t('settings.rotate_api_key_stop_first') : t('settings.rotate_api_key')}
                     >
                       <RefreshCw className={`w-3 h-3 ${rotatingAPIKey ? 'animate-spin' : ''}`} />
                     </button>
