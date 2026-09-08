@@ -271,6 +271,7 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 		ImageURLs:   imageURLs,
 		ModelInfo:   visionModel,
 		ToolChoice:  toolChoice,
+		SessionID:   h.clientConversationSessionID(r, rawBody),
 	})
 	profile := inspectLingmaRequest(body, modelKey)
 	fallback := h.applyThinkingFallback("openai_responses", modelKey, rawBody, body, profile)

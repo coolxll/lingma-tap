@@ -1020,7 +1020,8 @@ func (s *streamState) splitThoughtTags(content string) []SSEEvent {
 }
 
 // BuildLingmaBody constructs the full Lingma request body from translated fields.
-// rawRequestJSON is used to derive a deterministic session_id; pass nil to use a random UUID.
+// LingmaBodyOptions.SessionID takes precedence. Otherwise rawRequestJSON is
+// used to derive a deterministic session_id; pass nil to use a random UUID.
 // LingmaBodyOptions controls request metadata that is independent from the
 // translated messages and sampling parameters.
 type LingmaBodyOptions struct {
@@ -1029,6 +1030,7 @@ type LingmaBodyOptions struct {
 	ImageURLs   []string
 	ModelInfo   *ModelInfo
 	ToolChoice  any
+	SessionID   string
 }
 
 func BuildLingmaBodyWithOptions(messages []map[string]any, tools []map[string]any, modelKey string, params map[string]any, rawRequestJSON []byte, options LingmaBodyOptions) map[string]any {
@@ -1036,7 +1038,9 @@ func BuildLingmaBodyWithOptions(messages []map[string]any, tools []map[string]an
 	messages = mergeReasoningContentIntoMessages(messages)
 
 	var sessionID string
-	if len(rawRequestJSON) > 0 {
+	if options.SessionID != "" {
+		sessionID = options.SessionID
+	} else if len(rawRequestJSON) > 0 {
 		sessionID = generateSessionID(rawRequestJSON)
 	} else {
 		sessionID = newUUID()

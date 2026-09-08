@@ -74,11 +74,15 @@ reasoning=false -> agent_id=agent_common, model_config.source=""
 
 当前 bridge 的默认文本请求：
 
-- 使用完整下游请求 JSON 的哈希作为 `session_id`；消息历史变化会得到新值。
+- Claude Code 的 `X-Claude-Code-Session-Id`（subagent 额外组合
+  `X-Claude-Code-Agent-Id`）和 Codex 的 `X-Codex-Turn-Metadata.thread_id` 会映射为稳定
+  `session_id`。映射摘要包含客户端命名空间和已认证 Lingma UID，且不会记录原始客户端会话
+  ID。
+- 其他入口仍使用完整下游请求 JSON 的哈希作为 `session_id`；消息历史变化会得到新值。
 - 每次 `chat_record_id` 等于新生成的 `request_id`。
 - `request_set_id` 为空，`business.id` 每次重新生成。
 
-因此默认文本请求不具备原生多轮会话语义。它不阻断单轮调用，但可能影响上游缓存、任务状态和多轮工具调用。Vision profile 已把 `request_set_id` 与当前 `chat_record_id` 关联，但仍未复刻完整的跨 turn 原生任务生命周期。
+因此 Claude Code 和 Codex 已具备稳定的上游 session 关联，但尚未复刻完整的跨 turn 原生任务生命周期；其他默认文本入口仍不具备原生多轮会话语义。该差异不阻断单轮调用，但可能影响上游缓存、任务状态和多轮工具调用。Vision profile 已把 `request_set_id` 与当前 `chat_record_id` 关联。
 
 抓包展示层已增加独立的关联逻辑：先用随机 transport `session` 配对 HTTP 请求/响应，再从已解码聊天请求中提取稳定的 `session_id`，把同一对话的多个 turn 聚合到同一可折叠分组。该逻辑只改变展示，不改写数据库记录或上游请求；没有聊天 `session_id` 的上传、CDN GET 和普通流量仍保持独立。
 
@@ -254,7 +258,20 @@ GatewayLog 同步记录 attempt 数、是否 recovery、上游错误分类、首
 | 平台侧 session 分组 | 先抓包确认 ID 来源、稳定性和租户隔离 | 尚未确认 |
 | 只有完整历史的 Chat Completions / Messages | 默认无状态 | 不伪造原生会话语义 |
 
-对 Claude Code、Hermes 等没有稳定标识的调用，消息前缀或请求哈希只能作为可关闭的 TTL 启发式；它会受并发、截断和历史修改影响，不能当作真实 session。
+已验证的首批客户端映射：
+
+- Claude Code 2.1.251：使用 `X-Claude-Code-Session-Id`，同一 CLI 会话保持稳定；并使用
+  `X-Claude-Code-Agent-Id` 隔离并发 subagent。
+- Codex CLI 0.153.4：优先解析 `X-Codex-Turn-Metadata` JSON 中的 `thread_id`，缺失时才回退
+  `session_id`；明确忽略每轮变化的 `turn_id`。同时支持 HTTP header 和 canonical
+  `client_metadata["x-codex-turn-metadata"]` body 载体。
+- Hermes：内部有稳定 session ID，但默认 API 流量不携带；`--pass-session-id` 只把它写进系统
+  prompt，不作为可靠协议字段解析。
+- DeepSeek harness：尚未确定用户所指的具体实现和传输字段，暂不做推断式适配。
+
+显式 ID 按有界 ASCII opaque value 处理，不依赖客户端长期维持 UUID 格式；重复 header、控制字符、
+歧义的 Claude agent tuple、非法或超长 metadata、无已认证 UID 时回退到原有请求哈希。消息前缀、
+系统 prompt 或工具历史不用于推断 conversation ID。
 
 ## 8. 试点计划
 

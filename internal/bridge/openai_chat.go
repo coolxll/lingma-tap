@@ -198,6 +198,7 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 		ImageURLs:   imageURLs,
 		ModelInfo:   visionModel,
 		ToolChoice:  req.ToolChoice,
+		SessionID:   h.clientConversationSessionID(r, rawBody),
 	})
 	profile := inspectLingmaRequest(body, modelKey)
 	fallback := h.applyThinkingFallback("openai_chat", modelKey, rawBody, body, profile)
@@ -923,4 +924,3 @@ func normalizeOpenAIMessageRole(msg map[string]any) {
 		msg["role"] = "system"
 	}
 }
-

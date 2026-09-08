@@ -141,6 +141,7 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 		ImageURLs:   imageURLs,
 		ModelInfo:   visionModel,
 		ToolChoice:  toolChoice,
+		SessionID:   h.clientConversationSessionID(r, rawReqJSON),
 	})
 	profile := inspectLingmaRequest(body, modelKey)
 	fallback := h.applyThinkingFallback("anthropic_messages", modelKey, rawReqJSON, body, profile)
