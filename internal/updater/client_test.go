@@ -141,3 +141,47 @@ func TestClientRejectsDevelopmentBuildWithoutNetwork(t *testing.T) {
 		t.Fatal("development build must not support automatic updates")
 	}
 }
+
+func TestClientCurrentVersionAlreadyLatestWithoutManifest(t *testing.T) {
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/coolxll/lingma-tap/releases/latest" {
+			_ = json.NewEncoder(w).Encode(githubRelease{
+				TagName: "v1.2.0",
+				HTMLURL: "https://github.com/coolxll/lingma-tap/releases/tag/v1.2.0",
+				Assets:  []githubAsset{},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(publicKey)
+	client.BaseURL = server.URL
+
+	// Same version
+	candidate, err := client.Check(context.Background(), "v1.2.0", "darwin", "arm64")
+	if err != nil {
+		t.Fatalf("unexpected error when up-to-date: %v", err)
+	}
+	if !candidate.Supported {
+		t.Fatal("expected supported = true")
+	}
+	if candidate.Available {
+		t.Fatal("expected available = false when version matches latest")
+	}
+
+	// Newer version than remote
+	candidate, err = client.Check(context.Background(), "v1.3.0", "darwin", "arm64")
+	if err != nil {
+		t.Fatalf("unexpected error when ahead of remote: %v", err)
+	}
+	if candidate.Available {
+		t.Fatal("expected available = false when version is ahead of latest")
+	}
+}
+

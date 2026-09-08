@@ -69,6 +69,17 @@ func (c *Client) Check(ctx context.Context, currentVersion, goos, goarch string)
 		return nil, fmt.Errorf("latest GitHub release is not a stable semantic version")
 	}
 
+	if semver.Compare(release.TagName, currentVersion) <= 0 {
+		info = Info{
+			Supported:      true,
+			Available:      false,
+			CurrentVersion: currentVersion,
+			LatestVersion:  release.TagName,
+			ReleaseURL:     release.HTMLURL,
+		}
+		return &Candidate{Info: info}, nil
+	}
+
 	manifestAsset, okManifest := findGitHubAsset(release.Assets, ManifestName)
 	signatureAsset, okSignature := findGitHubAsset(release.Assets, SignatureName)
 	if !okManifest || !okSignature {
