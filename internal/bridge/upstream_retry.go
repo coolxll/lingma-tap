@@ -391,6 +391,7 @@ func isLingmaTransportError(err error) bool {
 	for _, marker := range []string{
 		"stream error", "internal_error", "rst_stream", "connection reset",
 		"broken pipe", "server closed idle connection",
+		"unexpected end of input", // go-sse library: upstream SSE stream closed prematurely
 	} {
 		if strings.Contains(message, marker) {
 			return true

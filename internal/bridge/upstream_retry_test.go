@@ -348,3 +348,44 @@ func retryTestResponse(status int, body string) *http.Response {
 		Header:     make(http.Header),
 	}
 }
+
+// TestGoSSEUnexpectedEndOfInputIsTransportError verifies that go-sse library's
+// "unexpected end of input" error is recognized as a transport error.
+func TestGoSSEUnexpectedEndOfInputIsTransportError(t *testing.T) {
+	err := fmt.Errorf("go-sse: unexpected end of input")
+	if !isLingmaTransportError(err) {
+		t.Fatal("go-sse 'unexpected end of input' should be recognized as transport error")
+	}
+}
+
+// TestGoSSEErrorReturns502Status verifies that go-sse errors return 502 Bad Gateway
+// instead of 500 Internal Server Error.
+func TestGoSSEErrorReturns502Status(t *testing.T) {
+	err := fmt.Errorf("go-sse: unexpected end of input")
+	status := statusForLingmaUpstreamError(err)
+	if status != http.StatusBadGateway {
+		t.Errorf("status = %d, want %d (Bad Gateway)", status, http.StatusBadGateway)
+	}
+}
+
+// TestGoSSEErrorTriggersRetry verifies that go-sse errors trigger the retry mechanism.
+func TestGoSSEErrorTriggersRetry(t *testing.T) {
+	client := newRetryTestClient()
+	client.maxAttempts = 2
+	var calls atomic.Int32
+	client.client.Transport = &mockTransport{roundTripFunc: func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, fmt.Errorf("go-sse: unexpected end of input")
+	}}
+
+	err := client.ChatStream(context.Background(), retryTestBody(false), func(SSEEvent) error { return nil })
+	if err == nil {
+		t.Fatal("expected ChatStream error")
+	}
+	if calls.Load() != 2 {
+		t.Errorf("upstream calls = %d, want 2 (retry should have been triggered)", calls.Load())
+	}
+	if status := statusForLingmaUpstreamError(err); status != http.StatusBadGateway {
+		t.Errorf("final status = %d, want %d", status, http.StatusBadGateway)
+	}
+}
