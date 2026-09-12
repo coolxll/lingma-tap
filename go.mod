@@ -3,7 +3,7 @@ module github.com/coolxll/lingma-tap
 go 1.25.0
 
 require (
-	github.com/coolxll/lingma-protocol-go v0.0.0
+	github.com/coolxll/lingma-protocol-go v0.1.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
@@ -18,8 +18,6 @@ require (
 	golang.org/x/sys v0.42.0
 	modernc.org/sqlite v1.50.0
 )
-
-replace github.com/coolxll/lingma-protocol-go => ../lingma-protocol-go
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
