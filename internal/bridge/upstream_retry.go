@@ -155,6 +155,7 @@ func (c *LingmaClient) ChatStreamObserved(ctx context.Context, body map[string]a
 
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		attemptStartedAt := time.Now()
 		usingRecovery := recoveryEligible && attempt > 0
 		attemptBody, err := prepareLingmaAttemptBody(body, attempt, usingRecovery)
 		if err != nil {
@@ -176,13 +177,50 @@ func (c *LingmaClient) ChatStreamObserved(ctx context.Context, body map[string]a
 		notifyLingmaUpstreamObserver(observer, stats)
 
 		waitForActionable := recoveryEligible && !usingRecovery && c.firstActionableTimeout > 0
+		if c.Debug {
+			log.Printf(
+				"[bridge-debug] Lingma upstream attempt start model=%s attempt=%d/%d request_bytes=%d profile=%q recovery=%t wait_for_actionable=%t",
+				modelKey,
+				attempt+1,
+				maxAttempts,
+				profile.BodyBytes,
+				stats.EffectiveProfile,
+				usingRecovery,
+				waitForActionable,
+			)
+		}
 		committed, err := c.chatStreamAttempt(ctx, attemptBody, cb, waitForActionable, startedAt, &stats, observer)
 		if err == nil {
+			if c.Debug {
+				log.Printf(
+					"[bridge-debug] Lingma upstream attempt succeeded model=%s attempt=%d/%d committed=%t duration=%s first_actionable_ms=%d",
+					modelKey,
+					attempt+1,
+					maxAttempts,
+					committed,
+					time.Since(attemptStartedAt).Round(time.Millisecond),
+					stats.FirstActionableMS,
+				)
+			}
 			return nil
 		}
 		lastErr = err
 		stats.ErrorClass = lingmaUpstreamErrorClass(err)
 		notifyLingmaUpstreamObserver(observer, stats)
+		if c.Debug {
+			log.Printf(
+				"[bridge-debug] Lingma upstream attempt failed model=%s attempt=%d/%d committed=%t duration=%s class=%s retryable=%t ctx_err=%q err=%q",
+				modelKey,
+				attempt+1,
+				maxAttempts,
+				committed,
+				time.Since(attemptStartedAt).Round(time.Millisecond),
+				stats.ErrorClass,
+				isLingmaRecoveryCandidate(err),
+				ctx.Err(),
+				truncateDebugValue(err.Error(), 512),
+			)
+		}
 		if committed || ctx.Err() != nil || !isLingmaRecoveryCandidate(err) || attempt+1 >= maxAttempts {
 			return err
 		}

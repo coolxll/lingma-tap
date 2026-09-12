@@ -69,8 +69,8 @@ cloudflared tunnel --url http://127.0.0.1:9090
 
 ### 编译打包
 
-- **macOS**: `wails build` (生成 `.app` 文件)
-- **Windows**: `wails build -platform windows/amd64` (生成 `.exe` 文件)
+- **macOS**: `make build` (固定使用 Go 1.25，生成 `.app` 文件)
+- **Windows**: `make build-windows` (固定使用 Go 1.25，生成 `.exe` 文件)
 
 ## GitHub Actions
 

@@ -7,15 +7,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	lingmawire "github.com/coolxll/lingma-protocol-go"
 	"github.com/google/uuid"
 	"github.com/tmaxmax/go-sse"
 
@@ -61,12 +63,59 @@ type LingmaClient struct {
 // streamState holds per-request state for SSE parsing.
 // Created fresh for each ChatStream call to avoid concurrency issues.
 type streamState struct {
-	inThought bool // tracks <thought> tag state across SSE chunks
+	sanitizer *lingmawire.Sanitizer
+}
 
-	inToolXML     bool
-	toolXMLBuffer strings.Builder
-	toolXMLPrefix string
-	nextToolIndex int
+func newStreamState(body map[string]any) *streamState {
+	return &streamState{sanitizer: lingmawire.NewSanitizer(lingmawire.SanitizeOptions{
+		DSMLMode:    lingmawire.DSMLRecover,
+		Role:        lingmawire.RoleAssistant,
+		KnownTools:  declaredLingmaTools(body),
+		ThoughtTags: true,
+	})}
+}
+
+func (s *streamState) contentSanitizer() *lingmawire.Sanitizer {
+	if s.sanitizer == nil {
+		s.sanitizer = lingmawire.NewSanitizer(lingmawire.SanitizeOptions{
+			DSMLMode:    lingmawire.DSMLRecover,
+			Role:        lingmawire.RoleAssistant,
+			ThoughtTags: true,
+		})
+	}
+	return s.sanitizer
+}
+
+func declaredLingmaTools(body map[string]any) map[string]bool {
+	tools, ok := body["tools"].([]map[string]any)
+	if !ok {
+		if generic, genericOK := body["tools"].([]any); genericOK {
+			tools = make([]map[string]any, 0, len(generic))
+			for _, value := range generic {
+				if tool, toolOK := value.(map[string]any); toolOK {
+					tools = append(tools, tool)
+				}
+			}
+		}
+	}
+	if len(tools) == 0 {
+		return nil
+	}
+	known := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		function, _ := tool["function"].(map[string]any)
+		name, _ := function["name"].(string)
+		if name == "" {
+			name, _ = tool["name"].(string)
+		}
+		if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
+			known[name] = true
+		}
+	}
+	if len(known) == 0 {
+		return nil
+	}
+	return known
 }
 
 func NewLingmaClient(session *auth.Session) *LingmaClient {
@@ -167,173 +216,15 @@ func newLingmaStreamingHTTPClient() *http.Client {
 	return &http.Client{Transport: transport}
 }
 
-// SSEEvent represents a parsed SSE event from the Lingma API.
-type SSEEvent struct {
-	// Type is "data", "finish", or "done"
-	Type string
-	// Content is the delta.content text (for text streaming)
-	Content string
-	// ReasoningContent is the delta.reasoning_content text (for thinking/reasoning)
-	ReasoningContent string
-	// ToolCalls contains tool call deltas
-	ToolCalls []ToolCallDelta
-	// FinishReason is set when the model finishes (e.g., "tool_calls", "stop")
-	FinishReason string
-	// Usage contains token usage info (from finish/usage events)
-	Usage *Usage
-	// FirstTokenDuration is time-to-first-token in milliseconds from Lingma finish metadata.
-	FirstTokenDuration int
-	// HasError indicates the event contains an error
-	HasError bool
-	// ErrorMsg is the error message if HasError is true
-	ErrorMsg string
-	// ErrorType is the error type if HasError is true
-	ErrorType string
-	// ErrorCode is the upstream error code if present.
-	ErrorCode string
-	// Raw is the raw inner JSON bytes
-	Raw []byte
-}
-
-type ToolCallDelta struct {
-	Index     int
-	ID        string
-	Name      string
-	Arguments string
-}
-
-type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-	// Aliyun/Lingma aliases
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	// Cached and reasoning tokens
-	CachedTokens    int `json:"cached_tokens,omitempty"`
-	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
-	// Nested details (for extraction from lingma response)
-	PromptTokensDetails     *TokenDetails `json:"prompt_tokens_details,omitempty"`
-	CompletionTokensDetails *TokenDetails `json:"completion_tokens_details,omitempty"`
-	InputTokensDetails      *TokenDetails `json:"input_tokens_details,omitempty"`
-	OutputTokensDetails     *TokenDetails `json:"output_tokens_details,omitempty"`
-}
-
-func (u *Usage) UnmarshalJSON(data []byte) error {
-	type usageAlias Usage
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-
-	var alias usageAlias
-	_ = json.Unmarshal(data, &alias)
-	*u = Usage(alias)
-
-	u.PromptTokens = firstInt(raw, u.PromptTokens, "prompt_tokens", "promptTokens", "input_tokens", "inputTokens", "inputTokenCount")
-	u.CompletionTokens = firstInt(raw, u.CompletionTokens, "completion_tokens", "completionTokens", "output_tokens", "outputTokens", "outputTokenCount")
-	u.TotalTokens = firstInt(raw, u.TotalTokens, "total_tokens", "totalTokens", "totalTokenCount")
-	u.InputTokens = firstInt(raw, u.InputTokens, "input_tokens", "inputTokens", "prompt_tokens", "promptTokens", "inputTokenCount")
-	u.OutputTokens = firstInt(raw, u.OutputTokens, "output_tokens", "outputTokens", "completion_tokens", "completionTokens", "outputTokenCount")
-	u.CachedTokens = firstInt(raw, u.CachedTokens, "cached_tokens", "cachedTokens")
-	if u.CachedTokens == 0 {
-		u.CachedTokens = firstInt(raw, 0, "cache_read_input_tokens", "cacheReadInputTokens")
-	}
-	u.ReasoningTokens = firstInt(raw, u.ReasoningTokens, "reasoning_tokens", "reasoningTokens", "thinking_tokens", "thinkingTokens")
-
-	u.Consolidate()
-	return nil
-}
-
-func rawInt(raw map[string]json.RawMessage, key string) (int, bool) {
-	v, ok := raw[key]
-	if !ok || string(v) == "null" {
-		return 0, false
-	}
-	var n int
-	if err := json.Unmarshal(v, &n); err == nil {
-		return n, true
-	}
-	var f float64
-	if err := json.Unmarshal(v, &f); err == nil {
-		return int(f), true
-	}
-	var s string
-	if err := json.Unmarshal(v, &s); err == nil {
-		var parsed int
-		if _, err := fmt.Sscanf(s, "%d", &parsed); err == nil {
-			return parsed, true
-		}
-	}
-	return 0, false
-}
-
-func firstInt(raw map[string]json.RawMessage, current int, keys ...string) int {
-	if current != 0 {
-		return current
-	}
-	foundZero := false
-	for _, key := range keys {
-		n, ok := rawInt(raw, key)
-		if !ok {
-			continue
-		}
-		if n != 0 {
-			return n
-		}
-		foundZero = true
-	}
-	if foundZero {
-		return 0
-	}
-	return current
-}
-
-// TokenDetails holds nested token detail fields.
-type TokenDetails struct {
-	CachedTokens    int `json:"cached_tokens,omitempty"`
-	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
-}
-
-func (u *Usage) Consolidate() {
-	if u == nil {
-		return
-	}
-	if u.PromptTokens == 0 && u.InputTokens != 0 {
-		u.PromptTokens = u.InputTokens
-	}
-	if u.InputTokens == 0 && u.PromptTokens != 0 {
-		u.InputTokens = u.PromptTokens
-	}
-	if u.CompletionTokens == 0 && u.OutputTokens != 0 {
-		u.CompletionTokens = u.OutputTokens
-	}
-	if u.OutputTokens == 0 && u.CompletionTokens != 0 {
-		u.OutputTokens = u.CompletionTokens
-	}
-	if u.TotalTokens == 0 {
-		u.TotalTokens = u.PromptTokens + u.CompletionTokens
-	}
-	// Extract cached tokens from nested details.
-	if u.CachedTokens == 0 && u.InputTokensDetails != nil && u.InputTokensDetails.CachedTokens > 0 {
-		u.CachedTokens = u.InputTokensDetails.CachedTokens
-	}
-	if u.CachedTokens == 0 && u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
-		u.CachedTokens = u.PromptTokensDetails.CachedTokens
-	}
-	// Extract reasoning tokens from nested details.
-	if u.ReasoningTokens == 0 && u.OutputTokensDetails != nil && u.OutputTokensDetails.ReasoningTokens > 0 {
-		u.ReasoningTokens = u.OutputTokensDetails.ReasoningTokens
-	}
-	if u.ReasoningTokens == 0 && u.CompletionTokensDetails != nil && u.CompletionTokensDetails.ReasoningTokens > 0 {
-		u.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
-	}
-}
+type SSEEvent = lingmawire.SSEEvent
+type ToolCallDelta = lingmawire.ToolCallDelta
+type Usage = lingmawire.Usage
+type TokenDetails = lingmawire.TokenDetails
 
 // chatStreamOnce sends one upstream request. ChatStream wraps this with
 // retry/recovery behavior before exposing events to the downstream client.
 func (c *LingmaClient) chatStreamOnce(ctx context.Context, body map[string]any, cb func(SSEEvent) error) error {
-	state := &streamState{} // per-request state
+	state := newStreamState(body)
 
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
@@ -365,7 +256,14 @@ func (c *LingmaClient) chatStreamOnce(ctx context.Context, body map[string]any, 
 	}
 	defer resp.Body.Close()
 	if c.Debug {
-		fmt.Printf("[debug] Lingma response: status=%d proto=%s\n", resp.StatusCode, resp.Proto)
+		log.Printf(
+			"[bridge-debug] Lingma response status=%d proto=%s content_type=%q content_length=%d trace=%q",
+			resp.StatusCode,
+			resp.Proto,
+			resp.Header.Get("Content-Type"),
+			resp.ContentLength,
+			lingmaResponseTrace(resp.Header),
+		)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -382,18 +280,22 @@ func (c *LingmaClient) chatStreamOnce(ctx context.Context, body map[string]any, 
 
 func (c *LingmaClient) readSSE(body io.Reader, cb func(SSEEvent) error, state *streamState) error {
 	doneReceived := false
+	frames := 0
+	dataBytes := 0
+	parseFailures := 0
 	for ev, err := range sse.Read(body, nil) {
 		if err != nil {
+			if c.Debug {
+				log.Printf("[bridge-debug] Lingma SSE read failed frames=%d bytes=%d parse_failures=%d err=%q", frames, dataBytes, parseFailures, err)
+			}
 			return err
 		}
 
 		if len(ev.Data) == 0 {
 			continue
 		}
-
-		if c.Debug {
-			fmt.Printf("[debug] SSE Event: Type=%s, Data=%s\n", ev.Type, ev.Data)
-		}
+		frames++
+		dataBytes += len(ev.Data)
 
 		if ev.Data == "[DONE]" {
 			doneReceived = true
@@ -402,14 +304,39 @@ func (c *LingmaClient) readSSE(body io.Reader, cb func(SSEEvent) error, state *s
 					return err
 				}
 			}
+			c.logSanitizerDiagnostics(state)
+			if c.Debug {
+				log.Printf("[bridge-debug] Lingma SSE completed frames=%d bytes=%d parse_failures=%d done=explicit", frames, dataBytes, parseFailures)
+			}
 			return cb(SSEEvent{Type: "done"})
 		}
 
 		events, err := c.parseSSEData(ev.Data, state)
 		if err != nil {
+			parseFailures++
+			if c.Debug {
+				log.Printf(
+					"[bridge-debug] Lingma SSE frame ignored frame=%d event=%q bytes=%d shape=%s err=%q",
+					frames,
+					ev.Type,
+					len(ev.Data),
+					lingmaJSONShape(ev.Data),
+					err,
+				)
+			}
 			continue // skip unparseable events
 		}
 		for _, event := range events {
+			if c.Debug && event.HasError {
+				log.Printf(
+					"[bridge-debug] Lingma SSE error frame=%d code=%q type=%q message=%q shape=%s",
+					frames,
+					event.ErrorCode,
+					event.ErrorType,
+					truncateDebugValue(event.ErrorMsg, 512),
+					lingmaJSONShape(ev.Data),
+				)
+			}
 			if event.Type == "done" {
 				doneReceived = true
 			}
@@ -419,6 +346,9 @@ func (c *LingmaClient) readSSE(body io.Reader, cb func(SSEEvent) error, state *s
 		}
 	}
 	if doneReceived {
+		if c.Debug {
+			log.Printf("[bridge-debug] Lingma SSE completed frames=%d bytes=%d parse_failures=%d done=event", frames, dataBytes, parseFailures)
+		}
 		return nil
 	}
 
@@ -427,7 +357,64 @@ func (c *LingmaClient) readSSE(body io.Reader, cb func(SSEEvent) error, state *s
 			return err
 		}
 	}
+	if c.Debug {
+		log.Printf("[bridge-debug] Lingma SSE closed without done frames=%d bytes=%d parse_failures=%d", frames, dataBytes, parseFailures)
+	}
 	return io.ErrUnexpectedEOF
+}
+
+func lingmaResponseTrace(header http.Header) string {
+	for _, name := range []string{"X-Request-Id", "X-Trace-Id", "Trace-Id", "Eagleeye-Traceid", "Request-Id"} {
+		if value := strings.TrimSpace(header.Get(name)); value != "" {
+			return name + "=" + truncateDebugValue(value, 160)
+		}
+	}
+	return ""
+}
+
+// lingmaJSONShape describes an SSE frame without logging conversation content.
+func lingmaJSONShape(data string) string {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(data), &raw); err != nil {
+		return "non-json"
+	}
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := []string{"keys=" + strings.Join(keys, ",")}
+	if errorRaw, ok := raw["error"]; ok {
+		var nested map[string]json.RawMessage
+		if json.Unmarshal(errorRaw, &nested) == nil {
+			nestedKeys := make([]string, 0, len(nested))
+			for key := range nested {
+				nestedKeys = append(nestedKeys, key)
+			}
+			sort.Strings(nestedKeys)
+			parts = append(parts, "error_keys="+strings.Join(nestedKeys, ","))
+		}
+	}
+	if bodyRaw, ok := raw["body"]; ok {
+		var nestedBody string
+		if json.Unmarshal(bodyRaw, &nestedBody) == nil && nestedBody != data {
+			parts = append(parts, "body_"+lingmaJSONShape(nestedBody))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func truncateDebugValue(value string, limit int) string {
+	value = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		return r
+	}, strings.TrimSpace(value))
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "..."
 }
 
 func (c *LingmaClient) parseSSEData(data string, state *streamState) ([]SSEEvent, error) {
@@ -489,19 +476,28 @@ func (c *LingmaClient) parseSSEData(data string, state *streamState) ([]SSEEvent
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Error *struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
+			Message string          `json:"message"`
+			Type    string          `json:"type"`
+			Code    any             `json:"code"`
+			Details json.RawMessage `json:"details"`
 		} `json:"error"`
 		Usage *Usage `json:"usage"`
 	}
 	if err := json.Unmarshal([]byte(data), &direct); err == nil && (len(direct.Choices) > 0 || direct.Usage != nil || direct.Error != nil) {
 		// Check for error
 		if direct.Error != nil {
+			message, errorType, code := resolveLingmaErrorDetails(
+				direct.Error.Message,
+				direct.Error.Type,
+				stringifyLingmaErrorCode(direct.Error.Code),
+				direct.Error.Details,
+			)
 			return []SSEEvent{{
 				Type:      "data",
 				HasError:  true,
-				ErrorMsg:  direct.Error.Message,
-				ErrorType: direct.Error.Type,
+				ErrorMsg:  message,
+				ErrorType: errorType,
+				ErrorCode: code,
 				Raw:       []byte(data),
 			}}, nil
 		}
@@ -535,8 +531,10 @@ func (c *LingmaClient) parseInnerJSON(body string, state *streamState) ([]SSEEve
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Error *struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
+			Message string          `json:"message"`
+			Type    string          `json:"type"`
+			Code    any             `json:"code"`
+			Details json.RawMessage `json:"details"`
 		} `json:"error"`
 		Usage *Usage `json:"usage"`
 	}
@@ -547,11 +545,18 @@ func (c *LingmaClient) parseInnerJSON(body string, state *streamState) ([]SSEEve
 
 	// Check for error
 	if inner.Error != nil {
+		message, errorType, code := resolveLingmaErrorDetails(
+			inner.Error.Message,
+			inner.Error.Type,
+			stringifyLingmaErrorCode(inner.Error.Code),
+			inner.Error.Details,
+		)
 		return []SSEEvent{{
 			Type:      "data",
 			HasError:  true,
-			ErrorMsg:  inner.Error.Message,
-			ErrorType: inner.Error.Type,
+			ErrorMsg:  message,
+			ErrorType: errorType,
+			ErrorCode: code,
 			Raw:       []byte(body),
 		}}, nil
 	}
@@ -559,23 +564,34 @@ func (c *LingmaClient) parseInnerJSON(body string, state *streamState) ([]SSEEve
 	return c.buildEventsFromChoices(inner.Choices, inner.Usage, []byte(body), state)
 }
 
-func parseLingmaErrorEnvelope(raw []byte) (SSEEvent, bool) {
-	var upstream struct {
-		Code    any    `json:"code"`
-		Message string `json:"message"`
-		Type    string `json:"type"`
+func stringifyLingmaErrorCode(code any) string {
+	if code == nil {
+		return ""
 	}
-	if err := json.Unmarshal(raw, &upstream); err != nil || upstream.Message == "" || upstream.Code == nil {
+	return fmt.Sprint(code)
+}
+
+func parseLingmaErrorEnvelope(raw []byte) (SSEEvent, bool) {
+	info, ok := lingmawire.ParseError(raw)
+	if !ok {
 		return SSEEvent{}, false
 	}
 	return SSEEvent{
 		Type:      "data",
 		HasError:  true,
-		ErrorMsg:  upstream.Message,
-		ErrorType: upstream.Type,
-		ErrorCode: fmt.Sprint(upstream.Code),
+		ErrorMsg:  info.Message,
+		ErrorType: info.Type,
+		ErrorCode: info.Code,
 		Raw:       raw,
 	}, true
+}
+
+// resolveLingmaErrorDetails unwraps the provider error nested in Lingma's
+// details field. Lingma may encode details as either an object or a JSON
+// string containing an object. Non-JSON detail text is still more actionable
+// than the generic outer "Error in upstream response" message.
+func resolveLingmaErrorDetails(message, errorType, code string, details json.RawMessage) (string, string, string) {
+	return lingmawire.ResolveErrorDetails(message, errorType, code, details)
 }
 
 // buildEventsFromChoices processes choices array and produces SSEEvents with thought tag extraction.
@@ -607,28 +623,33 @@ func (c *LingmaClient) buildEventsFromChoices(choices []struct {
 			})
 		}
 
-		content := choice.Delta.Content
-		if content != "" {
-			events = append(events, state.splitContentEvents(content, len(choice.Delta.ToolCalls) == 0)...)
-		}
-
-		// Tool calls
+		// Register native calls before feeding text so the shared sanitizer can
+		// suppress a DSML copy of the same call instead of executing it twice.
+		var nativeCalls []ToolCallDelta
 		if len(choice.Delta.ToolCalls) > 0 {
-			ev := SSEEvent{Type: "data", Raw: raw}
 			for _, tc := range choice.Delta.ToolCalls {
-				ev.ToolCalls = append(ev.ToolCalls, ToolCallDelta{
+				nativeCalls = append(nativeCalls, ToolCallDelta{
 					Index:     tc.Index,
 					ID:        tc.ID,
 					Name:      tc.Function.Name,
 					Arguments: tc.Function.Arguments,
 				})
 			}
-			events = append(events, ev)
+			state.contentSanitizer().NoteNativeToolCalls(nativeCalls)
+		}
+
+		if choice.Delta.Content != "" {
+			events = append(events, state.splitContentEvents(choice.Delta.Content, len(nativeCalls) == 0)...)
+		}
+
+		if len(nativeCalls) > 0 {
+			events = append(events, SSEEvent{Type: "data", ToolCalls: nativeCalls, Raw: raw})
 		}
 
 		// Finish reason
 		if choice.FinishReason != "" {
 			events = append(events, state.flushPendingContentEvents()...)
+			c.logSanitizerDiagnostics(state)
 			events = append(events, SSEEvent{
 				Type:         "data",
 				FinishReason: choice.FinishReason,
@@ -654,369 +675,43 @@ func (c *LingmaClient) buildEventsFromChoices(choices []struct {
 	return events, nil
 }
 
-func (s *streamState) splitContentEvents(content string, parseToolXML bool) []SSEEvent {
-	if !parseToolXML {
-		s.discardPendingToolXML()
-		return s.splitThoughtTags(stripCompleteToolXML(content))
+func (s *streamState) splitContentEvents(content string, recoverMarkup ...bool) []SSEEvent {
+	if len(recoverMarkup) > 0 && !recoverMarkup[0] {
+		// Compatibility path for callers that already have an authoritative
+		// native tool call: strip a textual duplicate without recovering it.
+		s.sanitizer = nil
+		stripper := lingmawire.NewSanitizer(lingmawire.SanitizeOptions{
+			DSMLMode:    lingmawire.DSMLStrip,
+			Role:        lingmawire.RoleAssistant,
+			ThoughtTags: true,
+		})
+		return append(stripper.Feed(content), stripper.Flush()...)
 	}
-
-	if s.toolXMLPrefix != "" {
-		content = s.toolXMLPrefix + content
-		s.toolXMLPrefix = ""
-	}
-
-	var events []SSEEvent
-	remaining := content
-	appendText := func(text string) {
-		if text != "" {
-			events = append(events, s.splitThoughtTags(text)...)
-		}
-	}
-
-	for len(remaining) > 0 {
-		if s.inToolXML {
-			// Search the buffered content plus the new chunk together so that a
-			// closing tag split across the buffer/chunk boundary is detected.
-			combined := s.toolXMLBuffer.String() + remaining
-			closeIdx, closeLen := findToolXMLClose(combined)
-			if closeIdx == -1 {
-				s.toolXMLBuffer.WriteString(remaining)
-				return events
-			}
-			fullBlock := combined[:closeIdx+closeLen]
-			if tc, ok := parseToolCallXML(fullBlock, s.nextToolIndex); ok {
-				s.nextToolIndex++
-				events = append(events, SSEEvent{Type: "data", ToolCalls: []ToolCallDelta{tc}})
-			}
-			s.toolXMLBuffer.Reset()
-			s.inToolXML = false
-			remaining = combined[closeIdx+closeLen:]
-			continue
-		}
-
-		startIdx := findToolXMLStart(remaining)
-		if startIdx == -1 {
-			keep := trailingToolXMLStartPrefixLen(remaining)
-			if keep > 0 {
-				appendText(remaining[:len(remaining)-keep])
-				s.toolXMLPrefix = remaining[len(remaining)-keep:]
-			} else {
-				appendText(remaining)
-			}
-			return events
-		}
-		appendText(remaining[:startIdx])
-		remaining = remaining[startIdx:]
-		closeIdx, closeLen := findToolXMLClose(remaining)
-		if closeIdx == -1 {
-			s.inToolXML = true
-			s.toolXMLBuffer.WriteString(remaining)
-			return events
-		}
-		xmlBlock := remaining[:closeIdx+closeLen]
-		if tc, ok := parseToolCallXML(xmlBlock, s.nextToolIndex); ok {
-			s.nextToolIndex++
-			events = append(events, SSEEvent{Type: "data", ToolCalls: []ToolCallDelta{tc}})
-		}
-		remaining = remaining[closeIdx+closeLen:]
-	}
-
-	return events
-}
-
-func (s *streamState) discardPendingToolXML() {
-	s.inToolXML = false
-	s.toolXMLBuffer.Reset()
-	s.toolXMLPrefix = ""
+	return s.contentSanitizer().Feed(content)
 }
 
 func (s *streamState) flushPendingContentEvents() []SSEEvent {
-	var events []SSEEvent
-	// Flush any buffered incomplete tool-call XML as normal text, since no
-	// complete tool call was ever parsed.
-	if s.inToolXML && s.toolXMLBuffer.Len() > 0 {
-		events = append(events, s.splitThoughtTags(s.toolXMLBuffer.String())...)
-		s.toolXMLBuffer.Reset()
-		s.inToolXML = false
-	}
-	if s.toolXMLPrefix != "" {
-		events = append(events, s.splitThoughtTags(s.toolXMLPrefix)...)
-		s.toolXMLPrefix = ""
-	}
-	return events
+	return s.contentSanitizer().Flush()
 }
 
-func findToolXMLStart(s string) int {
-	idx := -1
-	for _, marker := range []string{"<tool_call", "<function_call"} {
-		if i := strings.Index(s, marker); i >= 0 && (idx == -1 || i < idx) {
-			idx = i
-		}
+func (c *LingmaClient) logSanitizerDiagnostics(state *streamState) {
+	if state == nil || state.sanitizer == nil {
+		return
 	}
-	return idx
-}
-
-func findToolXMLClose(s string) (int, int) {
-	idx := -1
-	markerLen := 0
-	for _, marker := range []string{"</tool_call>", "</function_call>"} {
-		if i := strings.Index(s, marker); i >= 0 && (idx == -1 || i < idx) {
-			idx = i
-			markerLen = len(marker)
-		}
+	diagnostics := state.sanitizer.Diagnostics()
+	if len(diagnostics) == 0 {
+		return
 	}
-	return idx, markerLen
-}
-
-func stripCompleteToolXML(content string) string {
-	var out strings.Builder
-	remaining := content
-	for len(remaining) > 0 {
-		startIdx := findToolXMLStart(remaining)
-		if startIdx == -1 {
-			out.WriteString(remaining)
-			break
-		}
-		out.WriteString(remaining[:startIdx])
-		afterStart := remaining[startIdx:]
-		closeIdx, closeLen := findToolXMLClose(afterStart)
-		if closeIdx == -1 {
-			out.WriteString(afterStart)
-			break
-		}
-		remaining = afterStart[closeIdx+closeLen:]
+	counts := make(map[string]int)
+	for _, diagnostic := range diagnostics {
+		counts[diagnostic.Kind.String()]++
 	}
-	return out.String()
-}
-
-func trailingToolXMLStartPrefixLen(s string) int {
-	maxLen := 0
-	for _, marker := range []string{"<tool_call", "<function_call"} {
-		limit := len(marker) - 1
-		if len(s) < limit {
-			limit = len(s)
-		}
-		for n := limit; n >= 1; n-- {
-			if strings.HasSuffix(s, marker[:n]) && n > maxLen {
-				maxLen = n
-				break
-			}
-		}
+	kinds := make([]string, 0, len(counts))
+	for kind, count := range counts {
+		kinds = append(kinds, fmt.Sprintf("%s=%d", kind, count))
 	}
-	return maxLen
-}
-
-func parseToolCallXML(xmlBlock string, index int) (ToolCallDelta, bool) {
-	inner := stripOuterToolTag(xmlBlock)
-	attrName := extractXMLAttr(xmlBlock, "name")
-	attrID := extractXMLAttr(xmlBlock, "id")
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(inner), &payload); err != nil {
-		payload = map[string]any{
-			"name":      firstNonEmpty(attrName, extractXMLField(inner, "name")),
-			"arguments": firstNonEmpty(extractXMLField(inner, "arguments"), extractXMLField(inner, "input"), extractXMLField(inner, "parameters")),
-		}
-	}
-
-	name, _ := payload["name"].(string)
-	args := payload["arguments"]
-	if name == "" {
-		name, _ = payload["tool_name"].(string)
-	}
-	if name == "" {
-		name, _ = payload["tool"].(string)
-	}
-	if name == "" {
-		name, _ = payload["toolName"].(string)
-	}
-	if name == "" {
-		name = attrName
-	}
-	if name == "" {
-		if fn, ok := payload["function"].(map[string]any); ok {
-			name, _ = fn["name"].(string)
-			args = fn["arguments"]
-		}
-	}
-	if args == nil {
-		args = firstPresent(payload, "input", "parameters", "args")
-	}
-	if args == nil && attrName != "" && len(payload) > 0 {
-		args = payload
-	}
-	if args == nil && len(payload) > 0 {
-		if extra := toolArgumentFields(payload); len(extra) > 0 {
-			args = extra
-		}
-	}
-	if name == "" {
-		return ToolCallDelta{}, false
-	}
-
-	return ToolCallDelta{
-		Index:     index,
-		ID:        firstNonEmpty(stringValue(payload["id"]), attrID),
-		Name:      name,
-		Arguments: normalizeToolArguments(args),
-	}, true
-}
-
-func stripOuterToolTag(xmlBlock string) string {
-	start := indexXMLTagEnd(xmlBlock)
-	end, _ := findToolXMLClose(xmlBlock)
-	if start == -1 || end == -1 || end <= start {
-		return strings.TrimSpace(xmlBlock)
-	}
-	return strings.TrimSpace(html.UnescapeString(xmlBlock[start+1 : end]))
-}
-
-func extractXMLField(s, name string) string {
-	startTag := "<" + name + ">"
-	endTag := "</" + name + ">"
-	start := strings.Index(s, startTag)
-	end := strings.Index(s, endTag)
-	if start == -1 || end == -1 || end <= start {
-		return ""
-	}
-	return strings.TrimSpace(html.UnescapeString(s[start+len(startTag) : end]))
-}
-
-func extractXMLAttr(s, name string) string {
-	tagEnd := indexXMLTagEnd(s)
-	if tagEnd == -1 {
-		return ""
-	}
-	openTag := s[:tagEnd]
-	for _, quote := range []byte{'"', '\''} {
-		prefix := name + "=" + string(quote)
-		start := strings.Index(openTag, prefix)
-		if start == -1 {
-			continue
-		}
-		start += len(prefix)
-		end := strings.IndexByte(openTag[start:], quote)
-		if end == -1 {
-			return ""
-		}
-		return strings.TrimSpace(html.UnescapeString(openTag[start : start+end]))
-	}
-	return ""
-}
-
-// indexXMLTagEnd finds the position of '>' that closes an XML open tag,
-// skipping '>' characters inside quoted attribute values.
-func indexXMLTagEnd(s string) int {
-	inQuote := byte(0)
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if inQuote != 0 {
-			if c == inQuote {
-				inQuote = 0
-			}
-		} else {
-			if c == '"' || c == '\'' {
-				inQuote = c
-			} else if c == '>' {
-				return i
-			}
-		}
-	}
-	return -1
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func firstPresent(payload map[string]any, keys ...string) any {
-	for _, key := range keys {
-		if v, ok := payload[key]; ok {
-			return v
-		}
-	}
-	return nil
-}
-
-func toolArgumentFields(payload map[string]any) map[string]any {
-	args := make(map[string]any)
-	for key, value := range payload {
-		switch key {
-		case "id", "name", "tool", "tool_name", "toolName", "function", "arguments", "input", "parameters", "args":
-			continue
-		default:
-			args[key] = value
-		}
-	}
-	return args
-}
-
-func stringValue(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return ""
-}
-
-func normalizeToolArguments(v any) string {
-	switch t := v.(type) {
-	case nil:
-		return "{}"
-	case string:
-		if strings.TrimSpace(t) == "" {
-			return "{}"
-		}
-		return t
-	default:
-		b, err := json.Marshal(t)
-		if err != nil {
-			return "{}"
-		}
-		return string(b)
-	}
-}
-
-// splitThoughtTags splits content by <thought>...</thought> tags.
-// Uses per-stream state to handle tags spanning chunk boundaries.
-func (s *streamState) splitThoughtTags(content string) []SSEEvent {
-	var events []SSEEvent
-	remaining := content
-
-	for len(remaining) > 0 {
-		if !s.inThought {
-			startIdx := strings.Index(remaining, "<thought>")
-			if startIdx == -1 {
-				// No start tag — emit as content
-				events = append(events, SSEEvent{Type: "data", Content: remaining})
-				return events
-			}
-			// Emit content before the tag
-			if startIdx > 0 {
-				events = append(events, SSEEvent{Type: "data", Content: remaining[:startIdx]})
-			}
-			s.inThought = true
-			remaining = remaining[startIdx+len("<thought>"):]
-		} else {
-			endIdx := strings.Index(remaining, "</thought>")
-			if endIdx == -1 {
-				// No end tag — emit as reasoning (may span to next chunk)
-				events = append(events, SSEEvent{Type: "data", ReasoningContent: remaining})
-				return events
-			}
-			// Emit reasoning content
-			if endIdx > 0 {
-				events = append(events, SSEEvent{Type: "data", ReasoningContent: remaining[:endIdx]})
-			}
-			s.inThought = false
-			remaining = remaining[endIdx+len("</thought>"):]
-		}
-	}
-
-	return events
+	sort.Strings(kinds)
+	log.Printf("[bridge] sanitized Lingma tool markup %s", strings.Join(kinds, " "))
 }
 
 // BuildLingmaBody constructs the full Lingma request body from translated fields.
@@ -1036,6 +731,7 @@ type LingmaBodyOptions struct {
 func BuildLingmaBodyWithOptions(messages []map[string]any, tools []map[string]any, modelKey string, params map[string]any, rawRequestJSON []byte, options LingmaBodyOptions) map[string]any {
 	requestID := newUUID()
 	messages = mergeReasoningContentIntoMessages(messages)
+	messages = lingmawire.NormalizeAssistantToolCallContent(messages)
 
 	var sessionID string
 	if options.SessionID != "" {
@@ -1156,6 +852,23 @@ func BuildLingmaBodyWithOptions(messages []map[string]any, tools []map[string]an
 	}
 
 	return body
+}
+
+// normalizeLingmaToolCallContent adapts OpenAI-compatible assistant tool-call
+// history to the stricter provider behind Lingma. OpenAI permits content=null
+// when tool_calls is present, but that provider fails to recognize the
+// tool_calls and then rejects the following tool result as orphaned. The empty
+// string preserves the message semantics while satisfying both schemas.
+//
+// BuildLingmaBody calls this after mergeReasoningContentIntoMessages, which
+// already clones every message, so callers' request maps are not mutated.
+func normalizeLingmaToolCallContent(messages []map[string]any) []map[string]any {
+	return lingmawire.NormalizeAssistantToolCallContent(messages)
+}
+
+func stringValue(v any) string {
+	value, _ := v.(string)
+	return value
 }
 
 // BuildLingmaBody is kept as a compatibility wrapper for internal replay and

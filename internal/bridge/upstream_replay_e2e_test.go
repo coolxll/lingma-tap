@@ -61,6 +61,12 @@ func TestIntegration_ReplayCapturedRequestMatrix(t *testing.T) {
 		{name: "original_http1"},
 		{name: "original_http2", http2: true},
 		{
+			name: "null_tool_call_content_empty",
+			transform: func(body map[string]any) string {
+				return fmt.Sprintf("changed=%d", normalizeReplayE2ENullToolCallContent(body))
+			},
+		},
+		{
 			name: "reasoning_off_keep_agent",
 			transform: func(body map[string]any) string {
 				setReplayE2EReasoning(body, false)
@@ -183,6 +189,22 @@ func TestIntegration_ReplayCapturedRequestMatrix(t *testing.T) {
 			t.Logf("LINGMA_E2E_RESULT %s", raw)
 		})
 	}
+}
+
+func normalizeReplayE2ENullToolCallContent(body map[string]any) int {
+	changed := 0
+	for _, message := range lingmaMessages(body) {
+		if roleString(message["role"]) != "assistant" || message["content"] != nil {
+			continue
+		}
+		calls, ok := message["tool_calls"].([]any)
+		if !ok || len(calls) == 0 {
+			continue
+		}
+		message["content"] = ""
+		changed++
+	}
+	return changed
 }
 
 func runReplayE2E(ctx context.Context, client *LingmaClient, body map[string]any) replayE2EOutcome {

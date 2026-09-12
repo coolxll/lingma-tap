@@ -464,9 +464,6 @@ func TestSplitContentEventsNativeModeClearsPendingXMLFallback(t *testing.T) {
 	if len(native) != 1 || native[0].Content != "native text" {
 		t.Fatalf("unexpected native chunk events: %+v", native)
 	}
-	if state.toolXMLPrefix != "" || state.inToolXML || state.toolXMLBuffer.Len() != 0 {
-		t.Fatalf("pending XML fallback state was not cleared")
-	}
 	if flushed := state.flushPendingContentEvents(); len(flushed) != 0 {
 		t.Fatalf("pending XML fallback leaked after native tool call mode: %+v", flushed)
 	}
@@ -481,9 +478,6 @@ func TestSplitContentEventsSplitCloseTagAcrossChunks(t *testing.T) {
 	first := state.splitContentEvents("before "+open+">"+`{"name":"read_file","arguments":{"path":"README.md"}}`+closePartial, true)
 	if len(first) != 1 || first[0].Content != "before " {
 		t.Fatalf("unexpected first chunk events: %+v", first)
-	}
-	if !state.inToolXML {
-		t.Fatal("expected inToolXML to be true after partial close tag")
 	}
 
 	// Second chunk: completes the closing tag "call>" plus trailing text
@@ -515,9 +509,6 @@ func TestSplitContentEventsLoneAngleBracketStartsMarker(t *testing.T) {
 	if len(first) != 1 || first[0].Content != "before " {
 		t.Fatalf("unexpected first chunk events: %+v", first)
 	}
-	if state.toolXMLPrefix != lt {
-		t.Fatalf("expected pending prefix %q, got %q", lt, state.toolXMLPrefix)
-	}
 
 	// Second chunk completes the marker and payload
 	second := state.splitContentEvents("tool_call>"+`{"name":"read_file","arguments":{"path":"README.md"}}`+closeTag+" after", true)
@@ -547,17 +538,11 @@ func TestSplitContentEventsLoneAngleBracketNotMarker(t *testing.T) {
 	if len(first) != 1 || first[0].Content != "hello " {
 		t.Fatalf("unexpected first chunk events: %+v", first)
 	}
-	if state.toolXMLPrefix != lt {
-		t.Fatalf("expected pending prefix %q, got %q", lt, state.toolXMLPrefix)
-	}
 
 	// Second chunk does not continue the marker - bracket should be emitted as text
 	second := state.splitContentEvents(" world", true)
 	if len(second) != 1 || second[0].Content != lt+" world" {
 		t.Fatalf("expected bracket+space+world as text, got %+v", second)
-	}
-	if state.toolXMLPrefix != "" {
-		t.Fatalf("expected no pending prefix, got %q", state.toolXMLPrefix)
 	}
 }
 
@@ -587,9 +572,6 @@ func TestFlushPendingContentEventsBufferedToolXML(t *testing.T) {
 	if len(events) != 1 || events[0].Content != "before " {
 		t.Fatalf("unexpected events: %+v", events)
 	}
-	if !state.inToolXML || state.toolXMLBuffer.Len() == 0 {
-		t.Fatalf("expected buffered tool XML state, got inToolXML=%v buffer=%q", state.inToolXML, state.toolXMLBuffer.String())
-	}
 
 	// At stream end the buffered XML must be flushed as normal text.
 	flushed := state.flushPendingContentEvents()
@@ -598,9 +580,6 @@ func TestFlushPendingContentEventsBufferedToolXML(t *testing.T) {
 	}
 	if flushed[0].Content != open+"> some malformed payload" {
 		t.Fatalf("flushed content = %q, want %q", flushed[0].Content, open+"> some malformed payload")
-	}
-	if state.inToolXML || state.toolXMLBuffer.Len() != 0 {
-		t.Fatalf("expected cleared state after flush, got inToolXML=%v buffer=%q", state.inToolXML, state.toolXMLBuffer.String())
 	}
 }
 
@@ -613,17 +592,11 @@ func TestFlushPendingContentEventsBufferedToolXMLMultiChunk(t *testing.T) {
 	if len(events) != 1 || events[0].Content != "prefix " {
 		t.Fatalf("unexpected first events: %+v", events)
 	}
-	if !state.inToolXML {
-		t.Fatal("expected inToolXML after first chunk")
-	}
 
 	// Second chunk: more payload, still no closing tag — accumulates in buffer.
 	events = state.splitContentEvents(" part2", true)
 	if len(events) != 0 {
 		t.Fatalf("expected no events while buffering, got %+v", events)
-	}
-	if !state.inToolXML {
-		t.Fatal("expected inToolXML after second chunk")
 	}
 
 	// At stream end the full buffered content should be flushed as text.
@@ -642,13 +615,10 @@ func TestFlushPendingContentEventsBothBufferAndPrefix(t *testing.T) {
 	lt := string([]byte{60})
 	state := &streamState{}
 
-	// Chunk with opening tag but no close — buffers in toolXMLBuffer.
+	// Chunk with opening tag but no close — sanitizer holds it.
 	events := state.splitContentEvents("text "+open+"> payload", true)
 	if len(events) != 1 || events[0].Content != "text " {
 		t.Fatalf("unexpected events: %+v", events)
-	}
-	if !state.inToolXML {
-		t.Fatal("expected inToolXML")
 	}
 
 	// Flush — buffered XML should come out as text.
@@ -658,10 +628,6 @@ func TestFlushPendingContentEventsBothBufferAndPrefix(t *testing.T) {
 	}
 	if flushed[0].Content != open+"> payload" {
 		t.Fatalf("flushed content = %q, want %q", flushed[0].Content, open+"> payload")
-	}
-	// State should be fully cleared.
-	if state.inToolXML || state.toolXMLBuffer.Len() != 0 || state.toolXMLPrefix != "" {
-		t.Fatalf("state not cleared: inToolXML=%v buffer=%q prefix=%q", state.inToolXML, state.toolXMLBuffer.String(), state.toolXMLPrefix)
 	}
 
 	// Now test the lone angle bracket prefix path still works after the fix.
@@ -676,67 +642,63 @@ func TestFlushPendingContentEventsBothBufferAndPrefix(t *testing.T) {
 }
 
 func TestSplitThoughtTags(t *testing.T) {
+	// Thought tag splitting is now handled by the lingmawire.Sanitizer;
+	// we test it through splitContentEvents + flushPendingContentEvents.
 	tests := []struct {
 		name          string
-		content       string
-		inThought     bool
+		chunks        []string // one or more chunks to feed sequentially
 		wantContent   []string
 		wantReasoning []string
-		wantInThought bool
 	}{
 		{
 			name:          "no tags",
-			content:       "Hello world",
+			chunks:        []string{"Hello world"},
 			wantContent:   []string{"Hello world"},
 			wantReasoning: nil,
 		},
 		{
 			name:          "complete thought block",
-			content:       "before<thought>reasoning</thought>after",
+			chunks:        []string{"before<thought>reasoning</thought>after"},
 			wantContent:   []string{"before", "after"},
 			wantReasoning: []string{"reasoning"},
 		},
 		{
 			name:          "thought at start",
-			content:       "<thought>thinking</thought>answer",
+			chunks:        []string{"<thought>thinking</thought>answer"},
 			wantContent:   []string{"answer"},
 			wantReasoning: []string{"thinking"},
 		},
 		{
 			name:          "thought at end",
-			content:       "text<thought>reason</thought>",
+			chunks:        []string{"text<thought>reason</thought>"},
 			wantContent:   []string{"text"},
 			wantReasoning: []string{"reason"},
 		},
 		{
 			name:          "only thought",
-			content:       "<thought>deep thinking</thought>",
+			chunks:        []string{"<thought>deep thinking</thought>"},
 			wantContent:   nil,
 			wantReasoning: []string{"deep thinking"},
 		},
 		{
-			name:          "open thought tag spans chunk",
-			content:       "before<thought>partial",
-			wantContent:   []string{"before"},
-			wantReasoning: []string{"partial"},
-			wantInThought: true,
-		},
-		{
-			name:          "close thought tag from previous chunk",
-			content:       "continued</thought>after",
-			inThought:     true,
-			wantContent:   []string{"after"},
-			wantReasoning: []string{"continued"},
+			name:          "thought spans two chunks",
+			chunks:        []string{"before<thought>partial", "continued</thought>after"},
+			wantContent:   []string{"before", "after"},
+			wantReasoning: []string{"partial", "continued"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := &streamState{inThought: tt.inThought}
-			events := s.splitThoughtTags(tt.content)
+			state := &streamState{}
+			var allEvents []SSEEvent
+			for _, chunk := range tt.chunks {
+				allEvents = append(allEvents, state.splitContentEvents(chunk)...)
+			}
+			allEvents = append(allEvents, state.flushPendingContentEvents()...)
 
 			var gotContent, gotReasoning []string
-			for _, ev := range events {
+			for _, ev := range allEvents {
 				if ev.Content != "" {
 					gotContent = append(gotContent, ev.Content)
 				}
@@ -763,10 +725,6 @@ func TestSplitThoughtTags(t *testing.T) {
 						t.Errorf("reasoning[%d]: got %q, want %q", i, gotReasoning[i], tt.wantReasoning[i])
 					}
 				}
-			}
-
-			if s.inThought != tt.wantInThought {
-				t.Errorf("inThought: got %v, want %v", s.inThought, tt.wantInThought)
 			}
 		})
 	}
@@ -797,7 +755,7 @@ func TestParseSSEData_ReasoningContent(t *testing.T) {
 func TestParseSSEData_ErrorDetection(t *testing.T) {
 	client := &LingmaClient{}
 
-	data := `{"error":{"message":"rate limit exceeded","type":"rate_limit_error"}}`
+	data := `{"error":{"message":"rate limit exceeded","type":"rate_limit_error","code":"42901"}}`
 	state := &streamState{}
 	events, err := client.parseSSEData(data, state)
 	if err != nil {
@@ -814,6 +772,21 @@ func TestParseSSEData_ErrorDetection(t *testing.T) {
 	}
 	if events[0].ErrorType != "rate_limit_error" {
 		t.Errorf("expected error type 'rate_limit_error', got %q", events[0].ErrorType)
+	}
+	if events[0].ErrorCode != "42901" {
+		t.Errorf("expected error code '42901', got %q", events[0].ErrorCode)
+	}
+}
+
+func TestLingmaJSONShapeRedactsValues(t *testing.T) {
+	shape := lingmaJSONShape(`{"error":{"message":"sensitive prompt text","type":"provider_error","code":500},"request_id":"secret-id"}`)
+	if strings.Contains(shape, "sensitive") || strings.Contains(shape, "secret-id") {
+		t.Fatalf("shape leaked values: %q", shape)
+	}
+	for _, want := range []string{"keys=error,request_id", "error_keys=code,message,type"} {
+		if !strings.Contains(shape, want) {
+			t.Fatalf("shape %q does not contain %q", shape, want)
+		}
 	}
 }
 
@@ -837,6 +810,99 @@ func TestParseSSEData_LingmaErrorEnvelope(t *testing.T) {
 	}
 	if events[0].ErrorMsg != "Unknown sse issue" {
 		t.Fatalf("ErrorMsg = %q", events[0].ErrorMsg)
+	}
+}
+
+func TestParseSSEData_LingmaErrorEnvelopeUnwrapsProviderDetails(t *testing.T) {
+	client := &LingmaClient{}
+	providerError := `{"error":{"message":"Messages with role 'tool' must follow tool_calls","type":"invalid_request_error","param":null,"code":"invalid_request_error"}}`
+	body, err := json.Marshal(map[string]any{
+		"code":       "provider_error",
+		"message":    "Error in upstream response",
+		"request_id": "request-123",
+		"type":       "provider_error",
+		"details":    providerError,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := json.Marshal(map[string]any{
+		"body":            string(body),
+		"statusCodeValue": 400,
+		"statusCode":      "BAD_REQUEST",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := client.parseSSEData(string(envelope), &streamState{})
+	if err != nil {
+		t.Fatalf("parseSSEData error: %v", err)
+	}
+	if len(events) != 1 || !events[0].HasError {
+		t.Fatalf("events = %#v, want one error", events)
+	}
+	if events[0].ErrorMsg != "Messages with role 'tool' must follow tool_calls" {
+		t.Fatalf("ErrorMsg = %q", events[0].ErrorMsg)
+	}
+	if events[0].ErrorType != "invalid_request_error" {
+		t.Fatalf("ErrorType = %q", events[0].ErrorType)
+	}
+	if events[0].ErrorCode != "invalid_request_error" {
+		t.Fatalf("ErrorCode = %q", events[0].ErrorCode)
+	}
+}
+
+func TestResolveLingmaErrorDetails(t *testing.T) {
+	tests := []struct {
+		name        string
+		details     string
+		wantMessage string
+		wantType    string
+		wantCode    string
+	}{
+		{
+			name:        "object",
+			details:     `{"error":{"message":"bad tool history","type":"invalid_request_error","code":40001}}`,
+			wantMessage: "bad tool history",
+			wantType:    "invalid_request_error",
+			wantCode:    "40001",
+		},
+		{
+			name:        "plain text",
+			details:     `"provider unavailable"`,
+			wantMessage: "provider unavailable",
+			wantType:    "provider_error",
+			wantCode:    "provider_error",
+		},
+		{
+			name:        "malformed object",
+			details:     `{not-json}`,
+			wantMessage: "outer message",
+			wantType:    "provider_error",
+			wantCode:    "provider_error",
+		},
+		{
+			name:        "missing",
+			details:     `null`,
+			wantMessage: "outer message",
+			wantType:    "provider_error",
+			wantCode:    "provider_error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			message, errorType, code := resolveLingmaErrorDetails(
+				"outer message",
+				"provider_error",
+				"provider_error",
+				json.RawMessage(tt.details),
+			)
+			if message != tt.wantMessage || errorType != tt.wantType || code != tt.wantCode {
+				t.Fatalf("got (%q, %q, %q), want (%q, %q, %q)", message, errorType, code, tt.wantMessage, tt.wantType, tt.wantCode)
+			}
+		})
 	}
 }
 
@@ -1227,6 +1293,52 @@ func TestBuildLingmaBody_MergesReasoningContentBeforeMultimodalParts(t *testing.
 	}
 }
 
+func TestBuildLingmaBody_NormalizesNullAssistantToolCallContent(t *testing.T) {
+	messages := []map[string]any{
+		{"role": "user", "content": "run tool"},
+		{
+			"role":    "assistant",
+			"content": nil,
+			"tool_calls": []any{map[string]any{
+				"id":   "call_1",
+				"type": "function",
+				"function": map[string]any{
+					"name":      "bash",
+					"arguments": `{"command":"pwd"}`,
+				},
+			}},
+		},
+		{"role": "tool", "tool_call_id": "call_1", "content": "/workspace"},
+	}
+
+	body := BuildLingmaBody(messages, nil, "dfmodel", nil, nil, true, nil)
+	gotMessages, ok := body["messages"].([]map[string]any)
+	if !ok || len(gotMessages) != len(messages) {
+		t.Fatalf("messages = %#v", body["messages"])
+	}
+	if got := gotMessages[1]["content"]; got != "" {
+		t.Fatalf("assistant tool-call content = %#v, want empty string", got)
+	}
+	if messages[1]["content"] != nil {
+		t.Fatalf("input message was mutated: %#v", messages[1])
+	}
+}
+
+func TestNormalizeLingmaToolCallContentLeavesOtherNullContentUnchanged(t *testing.T) {
+	messages := []map[string]any{
+		{"role": "assistant", "content": nil},
+		{"role": "user", "content": nil, "tool_calls": []any{map[string]any{"id": "call_1"}}},
+		{"role": "assistant", "content": nil, "tool_calls": []any{}},
+	}
+
+	normalizeLingmaToolCallContent(messages)
+	for i, message := range messages {
+		if message["content"] != nil {
+			t.Fatalf("message %d content = %#v, want nil", i, message["content"])
+		}
+	}
+}
+
 func TestBuildLingmaBody_AgentID(t *testing.T) {
 	messages := []map[string]any{{"role": "user", "content": "hello"}}
 
@@ -1312,29 +1424,35 @@ func TestReadSSE_MissingDoneReturnsUnexpectedEOF(t *testing.T) {
 }
 
 func TestStreamState_Independence(t *testing.T) {
-	// Verify that two streamStates are independent
+	// Verify that two streamStates are independent.
 	s1 := &streamState{}
 	s2 := &streamState{}
 
-	// s1 processes a thought tag that spans chunks
-	s1.splitThoughtTags("before<thought>partial")
-	if !s1.inThought {
-		t.Error("s1 should be inThought after open tag")
+	// s1 processes a thought tag that spans chunks.
+	ev1 := s1.splitContentEvents("before<thought>partial")
+	// s1 should emit "before" as content and hold the thought.
+	var s1Content []string
+	for _, ev := range ev1 {
+		if ev.Content != "" {
+			s1Content = append(s1Content, ev.Content)
+		}
+	}
+	if len(s1Content) != 1 || s1Content[0] != "before" {
+		t.Errorf("s1 first chunk: expected content [before], got %v", s1Content)
 	}
 
-	// s2 should be unaffected
-	if s2.inThought {
-		t.Error("s2 should not be affected by s1")
+	// s2 should be unaffected — plain content should pass through.
+	ev2 := s2.splitContentEvents("hello")
+	if len(ev2) != 1 || ev2[0].Content != "hello" {
+		t.Errorf("s2 should not be affected by s1, got %+v", ev2)
 	}
 
-	// s1 continues with the next chunk
-	events := s1.splitThoughtTags("end</thought>after")
-	if s1.inThought {
-		t.Error("s1 should no longer be inThought after close tag")
-	}
+	// s1 continues with the next chunk.
+	ev1b := s1.splitContentEvents("end</thought>after")
+	ev1b = append(ev1b, s1.flushPendingContentEvents()...)
 
 	var contents, reasonings []string
-	for _, ev := range events {
+	for _, ev := range ev1b {
 		if ev.Content != "" {
 			contents = append(contents, ev.Content)
 		}
@@ -1388,165 +1506,7 @@ func TestBuildLingmaChatURL(t *testing.T) {
 	}
 }
 
-func TestParseToolCallXML_FallbackChains(t *testing.T) {
-	open := string([]byte{60}) + "tool_call"
-	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
+// Tool call XML parsing (parseToolCallXML, extractXMLAttr, stripOuterToolTag,
+// stripCompleteToolXML) has been moved to the lingma-protocol-go shared package
+// and is tested in sanitizer_test.go there.
 
-	tests := []struct {
-		name     string
-		xmlBlock string
-		wantName string
-		wantArgs string
-	}{
-		{
-			name:     "JSON with name and arguments",
-			xmlBlock: open + ">" + `{"name":"read_file","arguments":{"path":"README.md"}}` + closeTag,
-			wantName: "read_file",
-			wantArgs: `{"path":"README.md"}`,
-		},
-		{
-			name:     "JSON with tool_name fallback",
-			xmlBlock: open + ">" + `{"tool_name":"write_file","arguments":{"path":"out.txt"}}` + closeTag,
-			wantName: "write_file",
-			wantArgs: `{"path":"out.txt"}`,
-		},
-		{
-			name:     "JSON with tool fallback",
-			xmlBlock: open + ">" + `{"tool":"list_dir","arguments":{"dir":"/tmp"}}` + closeTag,
-			wantName: "list_dir",
-			wantArgs: `{"dir":"/tmp"}`,
-		},
-		{
-			name:     "JSON with toolName fallback",
-			xmlBlock: open + ">" + `{"toolName":"run_cmd","arguments":{"cmd":"ls"}}` + closeTag,
-			wantName: "run_cmd",
-			wantArgs: `{"cmd":"ls"}`,
-		},
-		{
-			name:     "name from XML attribute",
-			xmlBlock: open + ` name="attr_tool">` + `{"arguments":{"key":"val"}}` + closeTag,
-			wantName: "attr_tool",
-			wantArgs: `{"key":"val"}`,
-		},
-		{
-			name:     "XML field name and arguments fallback",
-			xmlBlock: open + ">" + string([]byte{60}) + "name>xml_field_tool" + string([]byte{60, 47}) + "name>" + string([]byte{60}) + "arguments>" + `{"x":1}` + string([]byte{60, 47}) + "arguments>" + closeTag,
-			wantName: "xml_field_tool",
-			wantArgs: `{"x":1}`,
-		},
-		{
-			name:     "function sub-object fallback",
-			xmlBlock: open + ">" + `{"function":{"name":"fn_tool","arguments":{"a":"b"}}}` + closeTag,
-			wantName: "fn_tool",
-			wantArgs: `{"a":"b"}`,
-		},
-		{
-			name:     "input/parameters/args fallback",
-			xmlBlock: open + ">" + `{"name":"p_tool","input":{"p":1}}` + closeTag,
-			wantName: "p_tool",
-			wantArgs: `{"p":1}`,
-		},
-		{
-			name:     "direct argument fields fallback",
-			xmlBlock: open + ">" + `{"name":"direct_tool","path":"README.md","limit":20}` + closeTag,
-			wantName: "direct_tool",
-			wantArgs: `{"limit":20,"path":"README.md"}`,
-		},
-		{
-			name:     "name from XML attribute with id",
-			xmlBlock: open + ` name="id_tool" id="call_123">` + `{"key":"val"}` + closeTag,
-			wantName: "id_tool",
-			wantArgs: `{"key":"val"}`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tc, ok := parseToolCallXML(tt.xmlBlock, 0)
-			if !ok {
-				t.Fatalf("parseToolCallXML returned false for %q", tt.xmlBlock)
-			}
-			if tc.Name != tt.wantName {
-				t.Errorf("name = %q, want %q", tc.Name, tt.wantName)
-			}
-			if tc.Arguments != tt.wantArgs {
-				t.Errorf("args = %q, want %q", tc.Arguments, tt.wantArgs)
-			}
-		})
-	}
-}
-
-func TestParseToolCallXML_NoName(t *testing.T) {
-	open := string([]byte{60}) + "tool_call"
-	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
-	xmlBlock := open + ">" + `{"arguments":{"x":1}}` + closeTag
-	_, ok := parseToolCallXML(xmlBlock, 0)
-	if ok {
-		t.Error("expected false when no name can be resolved")
-	}
-}
-
-func TestExtractXMLAttr_GTInValue(t *testing.T) {
-	open := string([]byte{60}) + "tool_call"
-	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
-	s := open + ` name="a>b" id="call_1">` + `{"x":1}` + closeTag
-	name := extractXMLAttr(s, "name")
-	if name != "a>b" {
-		t.Errorf("name = %q, want %q", name, "a>b")
-	}
-	id := extractXMLAttr(s, "id")
-	if id != "call_1" {
-		t.Errorf("id = %q, want %q", id, "call_1")
-	}
-}
-
-func TestExtractXMLAttr_SingleQuotes(t *testing.T) {
-	open := string([]byte{60}) + "tool_call"
-	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
-	s := open + ` name='single_quote'>` + `{"x":1}` + closeTag
-	name := extractXMLAttr(s, "name")
-	if name != "single_quote" {
-		t.Errorf("name = %q, want %q", name, "single_quote")
-	}
-}
-
-func TestStripOuterToolTag_GTInAttr(t *testing.T) {
-	open := string([]byte{60}) + "tool_call"
-	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
-	xmlBlock := open + ` name="a>b">` + `{"path":"README.md"}` + closeTag
-	inner := stripOuterToolTag(xmlBlock)
-	if inner != `{"path":"README.md"}` {
-		t.Errorf("inner = %q, want %q", inner, `{"path":"README.md"}`)
-	}
-}
-
-func TestStripCompleteToolXML_UnclosedTag(t *testing.T) {
-	open := string([]byte{60}) + "tool_call"
-	content := "before text " + open + ` name="test">` + `{"x":1}` + " trailing content"
-	result := stripCompleteToolXML(content)
-	// Unclosed tags should be preserved as-is, not stripped or dropped
-	if result != content {
-		t.Errorf("result = %q, want %q (unclosed tag should be preserved)", result, content)
-	}
-}
-
-func TestStripCompleteToolXML_NoTags(t *testing.T) {
-	content := "just regular text"
-	result := stripCompleteToolXML(content)
-	if result != content {
-		t.Errorf("result = %q, want %q", result, content)
-	}
-}
-
-func TestStripCompleteToolXML_MixedClosedAndUnclosed(t *testing.T) {
-	open := string([]byte{60}) + "tool_call"
-	closeTag := string([]byte{60, 47}) + "tool_call" + string([]byte{62})
-	unclosed := open + ` name="y">` + `{"q":2}`
-	content := "a " + open + ` name="x">` + `{"p":1}` + closeTag + " b " + unclosed
-	result := stripCompleteToolXML(content)
-	// Closed tag stripped, unclosed tag preserved
-	want := "a  b " + unclosed
-	if result != want {
-		t.Errorf("result = %q, want %q", result, want)
-	}
-}

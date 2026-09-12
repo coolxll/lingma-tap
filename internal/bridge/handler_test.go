@@ -520,6 +520,63 @@ func TestBridgeHandler_StreamWithoutDoneReturnsErrorEvent(t *testing.T) {
 	}
 }
 
+func TestBridgeHandlerReturnsNestedProviderErrorDetails(t *testing.T) {
+	primeModelCacheForTests()
+	var logs []proto.GatewayLog
+	handler := NewBridgeHandler(&auth.Session{CosyKey: "test-key", UID: "test-uid"}, func(log *proto.GatewayLog) {
+		logs = append(logs, *log)
+	})
+
+	providerDetails := `{"error":{"message":"Messages with role 'tool' must follow tool_calls","type":"invalid_request_error","param":null,"code":"invalid_request_error"}}`
+	inner, err := json.Marshal(map[string]any{
+		"code":       "provider_error",
+		"message":    "Error in upstream response",
+		"request_id": "request-123",
+		"type":       "provider_error",
+		"details":    providerDetails,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer, err := json.Marshal(map[string]any{
+		"body":            string(inner),
+		"statusCodeValue": 400,
+		"statusCode":      "BAD_REQUEST",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.client.client.Transport = captureLingmaTransportRaw(t, "data: "+string(outer)+"\n\n")
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"dfmodel","messages":[{"role":"user","content":"run tool"}],"stream":true}`),
+	)
+	w := httptest.NewRecorder()
+	handler.HandleOpenAIChat(w, req)
+
+	// Streaming responses have already committed HTTP 200 before an upstream
+	// SSE error arrives; the error is returned as a data event and recorded as
+	// 502 in the gateway log.
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	const providerMessage = "Messages with role 'tool' must follow tool_calls"
+	if !strings.Contains(w.Body.String(), providerMessage) {
+		t.Fatalf("response did not contain nested provider error: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "Error in upstream response") {
+		t.Fatalf("response used generic outer error: %s", w.Body.String())
+	}
+	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1].Error, providerMessage) {
+		t.Fatalf("gateway log did not preserve provider error: %+v", logs)
+	}
+	if logs[len(logs)-1].Status != http.StatusBadGateway {
+		t.Fatalf("gateway log status = %d, want %d", logs[len(logs)-1].Status, http.StatusBadGateway)
+	}
+}
+
 func TestBridgeHandlerRecoversTransientFailureAcrossAgentProtocols(t *testing.T) {
 	primeModelCacheForTests()
 
@@ -1067,6 +1124,9 @@ func TestBridgeHandler_HandleOpenAIChat_WithTools(t *testing.T) {
 	m2 := messages[1].(map[string]any)
 	if m2["role"] != "assistant" || m2["tool_calls"] == nil {
 		t.Errorf("Message 2 should be assistant with tool_calls, got %v", m2)
+	}
+	if m2["content"] != "" {
+		t.Errorf("Message 2 content should be normalized to an empty string, got %#v", m2["content"])
 	}
 
 	m3 := messages[2].(map[string]any)
@@ -1745,5 +1805,3 @@ func TestBridgeHandler_MultiTurn418RedactionRetry(t *testing.T) {
 		t.Errorf("Expected asstMsg2 tool arguments redacted, got: %v", tcs2["function"])
 	}
 }
-
-
