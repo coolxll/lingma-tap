@@ -138,6 +138,7 @@ func (h *BridgeHandler) HandleAnthropicMessages(w http.ResponseWriter, r *http.R
 	body := BuildLingmaBodyWithOptions(preparedMessages, openAITools, modelKey, params, rawReqJSON, LingmaBodyOptions{
 		IsReasoning: isReasoning,
 		IsVL:        len(imageURLs) > 0,
+		IsQoder:     h.isQoder(),
 		ImageURLs:   imageURLs,
 		ModelInfo:   visionModel,
 		ToolChoice:  toolChoice,

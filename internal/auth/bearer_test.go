@@ -260,3 +260,15 @@ func TestNewSessionWithFreshKeyShape(t *testing.T) {
 		t.Fatalf("test precondition: serverPubKey.Size() = %d, want %d", got, expectedLen)
 	}
 }
+
+func TestSessionBuildHeaders_Qoder(t *testing.T) {
+	s := fixtureSession()
+	s.IsQoder = true
+	headers, err := s.BuildHeaders("body", "https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation")
+	if err != nil {
+		t.Fatalf("BuildHeaders error: %v", err)
+	}
+	if headers["User-Agent"] != "Bun/1.3.14" {
+		t.Errorf("User-Agent = %q, want Bun/1.3.14", headers["User-Agent"])
+	}
+}

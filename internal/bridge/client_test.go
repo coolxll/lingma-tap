@@ -1510,3 +1510,86 @@ func TestBuildLingmaChatURL(t *testing.T) {
 // stripCompleteToolXML) has been moved to the lingma-protocol-go shared package
 // and is tested in sanitizer_test.go there.
 
+func TestBuildLingmaBody_QoderCN(t *testing.T) {
+	messages := []map[string]any{
+		{"role": "user", "content": "hello"},
+	}
+
+	// Test Qoder reasoning mode
+	bodyReasoning := BuildLingmaBodyWithOptions(messages, nil, "kmodel", nil, nil, LingmaBodyOptions{
+		IsReasoning: true,
+		IsQoder:     true,
+	})
+
+	if got := bodyReasoning["agent_id"]; got != "agent_common" {
+		t.Errorf("agent_id = %v, want agent_common", got)
+	}
+	if got := bodyReasoning["task_id"]; got != "common" {
+		t.Errorf("task_id = %v, want common", got)
+	}
+	if got := bodyReasoning["session_type"]; got != "qoderclicn" {
+		t.Errorf("session_type = %v, want qoderclicn", got)
+	}
+	if got := bodyReasoning["source"]; got != 1 {
+		t.Errorf("source = %v, want 1", got)
+	}
+	biz, ok := bodyReasoning["business"].(map[string]any)
+	if !ok || biz["product"] != "qoderclicn" {
+		t.Errorf("business.product = %v, want qoderclicn", biz["product"])
+	}
+	cfg, ok := bodyReasoning["model_config"].(map[string]any)
+	if !ok || cfg["is_reasoning"] != true || cfg["source"] != "system" {
+		t.Errorf("model_config = %+v, want is_reasoning=true, source=system", cfg)
+	}
+	params, ok := bodyReasoning["parameters"].(map[string]any)
+	if !ok || params["enable_thinking"] != true || params["reasoning_effort"] != "high" {
+		t.Errorf("parameters = %+v, want enable_thinking=true, reasoning_effort=high", params)
+	}
+
+	// Test Qoder non-reasoning mode
+	bodyNonReasoning := BuildLingmaBodyWithOptions(messages, nil, "kmodel", nil, nil, LingmaBodyOptions{
+		IsReasoning: false,
+		IsQoder:     true,
+	})
+
+	cfgNon, _ := bodyNonReasoning["model_config"].(map[string]any)
+	if cfgNon["is_reasoning"] != false || cfgNon["source"] != "" {
+		t.Errorf("non-reasoning model_config = %+v, want is_reasoning=false, source=''", cfgNon)
+	}
+	paramsNon, _ := bodyNonReasoning["parameters"].(map[string]any)
+	if paramsNon["enable_thinking"] != false {
+		t.Errorf("non-reasoning enable_thinking = %v, want false", paramsNon["enable_thinking"])
+	}
+}
+
+func TestLingmaClient_QoderCN(t *testing.T) {
+	session := &auth.Session{
+		CosyKey: "test-key",
+		UID:     "test-uid",
+		IsQoder: true,
+	}
+
+	client := NewLingmaClient(session)
+	if !client.IsQoder() {
+		t.Error("client.IsQoder() = false, want true")
+	}
+	if client.BaseURL() != "https://gateway.qoder.com.cn" {
+		t.Errorf("client.BaseURL() = %q, want https://gateway.qoder.com.cn", client.BaseURL())
+	}
+
+	chatURL := client.buildChatURL("any_agent")
+	wantChatURL := "https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation?AgentId=agent_common&Encode=1&FetchKeys=llm_model_result"
+	if chatURL != wantChatURL {
+		t.Errorf("chatURL = %q, want %q", chatURL, wantChatURL)
+	}
+
+	wantModelListURL := "https://gateway.qoder.com.cn/algo/api/v2/model/list"
+	if got := client.modelListURL(); got != wantModelListURL {
+		t.Errorf("modelListURL = %q, want %q", got, wantModelListURL)
+	}
+
+	wantVisionURL := "https://gateway.qoder.com.cn/algo/api/v2/image/upload"
+	if client.visionUploadURL != wantVisionURL {
+		t.Errorf("visionUploadURL = %q, want %q", client.visionUploadURL, wantVisionURL)
+	}
+}

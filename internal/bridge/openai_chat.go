@@ -195,6 +195,7 @@ func (h *BridgeHandler) HandleOpenAIChat(w http.ResponseWriter, r *http.Request)
 	body := BuildLingmaBodyWithOptions(preparedMessages, req.Tools, modelKey, params, rawBody, LingmaBodyOptions{
 		IsReasoning: isReasoning,
 		IsVL:        len(imageURLs) > 0,
+		IsQoder:     h.isQoder(),
 		ImageURLs:   imageURLs,
 		ModelInfo:   visionModel,
 		ToolChoice:  req.ToolChoice,

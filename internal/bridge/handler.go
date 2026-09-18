@@ -43,6 +43,13 @@ func (h *BridgeHandler) chatStream(ctx context.Context, body map[string]any, gLo
 	})
 }
 
+func (h *BridgeHandler) isQoder() bool {
+	if h == nil || h.client == nil {
+		return false
+	}
+	return h.client.IsQoder()
+}
+
 func NewBridgeHandler(session *auth.Session, recorder func(*proto.GatewayLog)) *BridgeHandler {
 	fallbackEnabled, fallbackTTL := loadLingmaThinkingFallbackConfig()
 	h := &BridgeHandler{

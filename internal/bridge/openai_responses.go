@@ -268,6 +268,7 @@ func (h *BridgeHandler) HandleOpenAIResponses(w http.ResponseWriter, r *http.Req
 	body := BuildLingmaBodyWithOptions(messages, tools, modelKey, params, rawBody, LingmaBodyOptions{
 		IsReasoning: isReasoning,
 		IsVL:        len(imageURLs) > 0,
+		IsQoder:     h.isQoder(),
 		ImageURLs:   imageURLs,
 		ModelInfo:   visionModel,
 		ToolChoice:  toolChoice,

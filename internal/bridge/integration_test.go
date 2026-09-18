@@ -639,6 +639,90 @@ func TestIntegration_ListModels(t *testing.T) {
 	}
 }
 
+func TestIntegration_QoderChatStream(t *testing.T) {
+	creds, err := auth.LoadCredentials()
+	if err != nil {
+		t.Skip("No credentials")
+	}
+
+	session := auth.NewSession(creds)
+	client := NewLingmaClient(session)
+	if !client.IsQoder() {
+		t.Skip("Current credentials are not QoderCN")
+	}
+
+	messages := []map[string]any{
+		{"role": "user", "content": "你好，请用简短一句话介绍你自己。"},
+	}
+	body := BuildLingmaBodyWithOptions(messages, nil, "qfmodel", nil, nil, LingmaBodyOptions{
+		IsReasoning: false,
+		IsQoder:     true,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	var contentBuilder strings.Builder
+	err = client.ChatStream(ctx, body, func(ev SSEEvent) error {
+		if ev.Content != "" {
+			contentBuilder.WriteString(ev.Content)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ChatStream failed: %v", err)
+	}
+
+	t.Logf("Qoder chat response: %s", contentBuilder.String())
+	if contentBuilder.Len() == 0 {
+		t.Errorf("expected non-empty response")
+	}
+}
+
+func TestIntegration_QoderReasoningChatStream(t *testing.T) {
+	creds, err := auth.LoadCredentials()
+	if err != nil {
+		t.Skip("No credentials")
+	}
+
+	session := auth.NewSession(creds)
+	client := NewLingmaClient(session)
+	if !client.IsQoder() {
+		t.Skip("Current credentials are not QoderCN")
+	}
+
+	messages := []map[string]any{
+		{"role": "user", "content": "桌上有3个苹果，吃掉了1个，还剩几个？请逐步思考并回答。"},
+	}
+	body := BuildLingmaBodyWithOptions(messages, nil, "qmodel_38max", nil, nil, LingmaBodyOptions{
+		IsReasoning: true,
+		IsQoder:     true,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var reasoningBuilder, contentBuilder strings.Builder
+	err = client.ChatStream(ctx, body, func(ev SSEEvent) error {
+		if ev.ReasoningContent != "" {
+			reasoningBuilder.WriteString(ev.ReasoningContent)
+		}
+		if ev.Content != "" {
+			contentBuilder.WriteString(ev.Content)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ChatStream failed: %v", err)
+	}
+
+	t.Logf("Reasoning length: %d chars", reasoningBuilder.Len())
+	t.Logf("Answer: %s", contentBuilder.String())
+	if contentBuilder.Len() == 0 {
+		t.Errorf("expected non-empty content")
+	}
+}
+
 func TestIntegration_ReasoningMathProblem(t *testing.T) {
 	creds, err := auth.LoadCredentials()
 	if err != nil {

@@ -25,8 +25,36 @@ import (
 	"github.com/coolxll/lingma-tap/internal/encoding"
 )
 
-const lingmaChatURL = "https://lingma-api.tongyi.aliyun.com/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
-const lingmaModelListURL = "https://lingma-api.tongyi.aliyun.com/algo/api/v2/model/list"
+const (
+	defaultLingmaBaseURL  = "https://lingma-api.tongyi.aliyun.com"
+	defaultQoderCNBaseURL = "https://gateway.qoder.com.cn"
+	lingmaChatURL         = "https://lingma-api.tongyi.aliyun.com/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
+	lingmaModelListURL    = "https://lingma-api.tongyi.aliyun.com/algo/api/v2/model/list"
+)
+
+func resolveBaseURL(session *auth.Session) (string, bool) {
+	if envURL := strings.TrimRight(strings.TrimSpace(os.Getenv("UPSTREAM_BASE_URL")), "/"); envURL != "" {
+		isQoder := strings.Contains(envURL, "qoder.com.cn") || (session != nil && session.IsQoder)
+		return envURL, isQoder
+	}
+	if envURL := strings.TrimRight(strings.TrimSpace(os.Getenv("QODERCN_REMOTE_BASE_URL")), "/"); envURL != "" {
+		return envURL, true
+	}
+	if envURL := strings.TrimRight(strings.TrimSpace(os.Getenv("QODERCN_BASE_URL")), "/"); envURL != "" {
+		return envURL, true
+	}
+	if envURL := strings.TrimRight(strings.TrimSpace(os.Getenv("LINGMA_API_BASE_URL")), "/"); envURL != "" {
+		isQoder := strings.Contains(envURL, "qoder.com.cn") || (session != nil && session.IsQoder)
+		return envURL, isQoder
+	}
+	if session != nil && session.IsQoder {
+		return defaultQoderCNBaseURL, true
+	}
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("QODERCN_MODE"))); v == "1" || v == "true" || v == "yes" || v == "on" {
+		return defaultQoderCNBaseURL, true
+	}
+	return defaultLingmaBaseURL, false
+}
 
 // buildLingmaChatURL constructs the Lingma chat endpoint URL with the given agentID.
 // It defaults to "agent_common" if agentID is empty and properly URL-encodes all query parameters.
@@ -50,6 +78,8 @@ func buildLingmaChatURL(agentID string) string {
 type LingmaClient struct {
 	mu                      sync.RWMutex
 	session                 *auth.Session
+	baseURL                 string
+	isQoder                 bool
 	client                  *http.Client
 	visionUploadURL         string
 	visionFetcher           func(context.Context, string) ([]byte, string, error)
@@ -121,12 +151,15 @@ func declaredLingmaTools(body map[string]any) map[string]bool {
 func NewLingmaClient(session *auth.Session) *LingmaClient {
 	maxAttempts, retryBaseDelay, firstActionableTimeout := loadLingmaUpstreamRetryConfig()
 	thinkingRecoveryEnabled, _ := loadLingmaThinkingFallbackConfig()
+	baseURL, isQoder := resolveBaseURL(session)
 	visionUploadURL := strings.TrimSpace(os.Getenv("LINGMA_IMAGE_UPLOAD_URL"))
 	if visionUploadURL == "" {
-		visionUploadURL = lingmaImageUploadURL
+		visionUploadURL = baseURL + "/algo/api/v2/image/upload"
 	}
 	return &LingmaClient{
 		session:                 session,
+		baseURL:                 baseURL,
+		isQoder:                 isQoder,
 		visionUploadURL:         visionUploadURL,
 		visionFetcher:           fetchRemoteVisionImage,
 		maxAttempts:             maxAttempts,
@@ -135,6 +168,54 @@ func NewLingmaClient(session *auth.Session) *LingmaClient {
 		thinkingRecoveryEnabled: thinkingRecoveryEnabled,
 		client:                  newLingmaStreamingHTTPClient(),
 	}
+}
+
+func (c *LingmaClient) IsQoder() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isQoder
+}
+
+func (c *LingmaClient) BaseURL() string {
+	if c == nil {
+		return defaultLingmaBaseURL
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.baseURL != "" {
+		return c.baseURL
+	}
+	return defaultLingmaBaseURL
+}
+
+func (c *LingmaClient) buildChatURL(agentID string) string {
+	baseURL := c.BaseURL()
+	if c.IsQoder() {
+		agentID = "agent_common"
+	} else if agentID == "" {
+		agentID = "agent_common"
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		u = &url.URL{
+			Scheme: "https",
+			Host:   "lingma-api.tongyi.aliyun.com",
+		}
+	}
+	u.Path = "/algo/api/v2/service/pro/sse/agent_chat_generation"
+	q := u.Query()
+	q.Set("FetchKeys", "llm_model_result")
+	q.Set("AgentId", agentID)
+	q.Set("Encode", "1")
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func (c *LingmaClient) modelListURL() string {
+	return c.BaseURL() + "/algo/api/v2/model/list"
 }
 
 func newLingmaHTTPClient() *http.Client {
@@ -235,7 +316,7 @@ func (c *LingmaClient) chatStreamOnce(ctx context.Context, body map[string]any, 
 
 	// Determine the correct URL based on the agent_id in the body
 	agentID, _ := body["agent_id"].(string)
-	chatURL := buildLingmaChatURL(agentID)
+	chatURL := c.buildChatURL(agentID)
 
 	headers, err := c.session.BuildHeaders(encodedBody, chatURL)
 	if err != nil {
@@ -722,6 +803,7 @@ func (c *LingmaClient) logSanitizerDiagnostics(state *streamState) {
 type LingmaBodyOptions struct {
 	IsReasoning bool
 	IsVL        bool
+	IsQoder     bool
 	ImageURLs   []string
 	ModelInfo   *ModelInfo
 	ToolChoice  any
@@ -742,21 +824,49 @@ func BuildLingmaBodyWithOptions(messages []map[string]any, tools []map[string]an
 		sessionID = newUUID()
 	}
 
-	// Determine agent_id and source based on model and reasoning status.
-	// kmodel and mmodel always use agent_common with empty source.
-	// All other models default to agent_chat when reasoning, agent_common otherwise.
-	var agentID, modelConfigSource string
-	switch modelKey {
-	case "kmodel", "mmodel":
+	var agentID, modelConfigSource, taskID string
+	var source int
+	requestSetID := ""
+
+	if options.IsQoder {
+		// QoderCN protocol:
+		// Official qoderclicn and community gateways use agent_common for all models.
 		agentID = "agent_common"
-		modelConfigSource = ""
-	default:
+		taskID = "common"
+		source = 1
+		requestSetID = requestID
 		if options.IsReasoning {
-			agentID = "agent_chat"
 			modelConfigSource = "system"
 		} else {
+			modelConfigSource = ""
+		}
+	} else {
+		// Determine agent_id and source based on model and reasoning status.
+		// kmodel and mmodel always use agent_common with empty source.
+		// All other models default to agent_chat when reasoning, agent_common otherwise.
+		switch modelKey {
+		case "kmodel", "mmodel":
 			agentID = "agent_common"
 			modelConfigSource = ""
+		default:
+			if options.IsReasoning {
+				agentID = "agent_chat"
+				modelConfigSource = "system"
+			} else {
+				agentID = "agent_common"
+				modelConfigSource = ""
+			}
+		}
+
+		taskID = "question_refine"
+		source = 0
+		if options.IsVL {
+			// Native VL requests use the common task route and a fully populated
+			// model configuration. The upstream silently treats the request as
+			// text-only when only is_vl/image_urls are present.
+			requestSetID = requestID
+			taskID = "common"
+			source = 1
 		}
 	}
 
@@ -764,9 +874,6 @@ func BuildLingmaBodyWithOptions(messages []map[string]any, tools []map[string]an
 	if len(options.ImageURLs) > 0 {
 		imageURLs = append([]string(nil), options.ImageURLs...)
 	}
-	requestSetID := ""
-	taskID := "question_refine"
-	source := 0
 	modelConfig := map[string]any{
 		"key":                   modelKey,
 		"display_name":          "",
@@ -788,21 +895,19 @@ func BuildLingmaBodyWithOptions(messages []map[string]any, tools []map[string]an
 		"icon":                  nil,
 		"strategies":            nil,
 	}
-	if options.IsVL {
-		// Native VL requests use the common task route and a fully populated
-		// model configuration. The upstream silently treats the request as
-		// text-only when only is_vl/image_urls are present.
-		requestSetID = requestID
-		taskID = "common"
-		source = 1
-		if options.ModelInfo != nil {
-			modelConfig["display_name"] = options.ModelInfo.DisplayName
-			modelConfig["format"] = options.ModelInfo.Format
-			modelConfig["source"] = options.ModelInfo.Source
-			modelConfig["max_input_tokens"] = options.ModelInfo.MaxInputTokens
-			modelConfig["enable"] = true
-		}
+	if options.IsVL && options.ModelInfo != nil {
+		modelConfig["display_name"] = options.ModelInfo.DisplayName
+		modelConfig["format"] = options.ModelInfo.Format
+		modelConfig["source"] = options.ModelInfo.Source
+		modelConfig["max_input_tokens"] = options.ModelInfo.MaxInputTokens
+		modelConfig["enable"] = true
 	}
+
+	businessProduct := "ide"
+	if options.IsQoder {
+		businessProduct = "qoderclicn"
+	}
+
 	body := map[string]any{
 		"request_id":       requestID,
 		"request_set_id":   requestSetID,
@@ -822,7 +927,7 @@ func BuildLingmaBodyWithOptions(messages []map[string]any, tools []map[string]an
 		"model_config":     modelConfig,
 		"messages":         messages,
 		"business": map[string]any{
-			"product":  "ide",
+			"product":  businessProduct,
 			"version":  "0.11.0",
 			"type":     "chat",
 			"id":       newUUID(),
@@ -832,16 +937,33 @@ func BuildLingmaBodyWithOptions(messages []map[string]any, tools []map[string]an
 			"relation": map[string]any{},
 		},
 	}
-	if options.IsVL {
+	if options.IsQoder {
+		body["session_type"] = "qoderclicn"
+	} else if options.IsVL {
 		body["chat_task"] = "common"
 		body["session_type"] = "assistant"
 	}
 
+	mergedParams := make(map[string]any)
 	if len(params) > 0 {
-		body["parameters"] = params
+		for k, v := range params {
+			mergedParams[k] = v
+		}
 	} else {
-		body["parameters"] = map[string]any{"temperature": 0.1}
+		mergedParams["temperature"] = 0.1
 	}
+
+	if options.IsQoder {
+		if options.IsReasoning {
+			mergedParams["enable_thinking"] = true
+			if _, ok := mergedParams["reasoning_effort"]; !ok {
+				mergedParams["reasoning_effort"] = "high"
+			}
+		} else {
+			mergedParams["enable_thinking"] = false
+		}
+	}
+	body["parameters"] = mergedParams
 
 	if len(tools) > 0 {
 		body["tools"] = tools
@@ -954,13 +1076,14 @@ type ModelInfo struct {
 // FetchModels queries the Lingma model list API and returns models for the "chat" category.
 func (c *LingmaClient) FetchModels(ctx context.Context) ([]ModelInfo, error) {
 	encodedBody := ""
+	endpointURL := c.BaseURL() + "/algo/api/v2/model/list"
 
-	headers, err := c.session.BuildHeaders(encodedBody, lingmaModelListURL)
+	headers, err := c.session.BuildHeaders(encodedBody, endpointURL)
 	if err != nil {
 		return nil, fmt.Errorf("build headers: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", lingmaModelListURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", endpointURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

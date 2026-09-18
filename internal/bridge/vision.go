@@ -443,7 +443,7 @@ func (c *LingmaClient) uploadVisionImage(ctx context.Context, data []byte, mimeT
 	requestID := strings.ReplaceAll(newUUID(), "-", "")
 	baseURL := c.visionUploadURL
 	if baseURL == "" {
-		baseURL = lingmaImageUploadURL
+		baseURL = c.BaseURL() + "/algo/api/v2/image/upload"
 	}
 	u, err := url.Parse(baseURL)
 	if err != nil {

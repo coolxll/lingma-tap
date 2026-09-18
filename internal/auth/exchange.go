@@ -64,7 +64,7 @@ func ExchangeCallback(userId, securityOauthToken, machineID string) (*Credential
 func activateCosyKey(creds *Credentials) error {
 	session := NewSession(creds)
 	url := apiBaseURL + "/algo/api/v2/model/list"
-	
+
 	// GET request with Bearer/Cosy headers
 	headers, err := session.BuildHeaders("", url)
 	if err != nil {
@@ -166,7 +166,7 @@ func fetchUserStatus(creds *Credentials) (*Credentials, error) {
 
 func callV3API(method, path string, payload map[string]interface{}, creds *Credentials) ([]byte, error) {
 	innerJSON, _ := json.Marshal(payload)
-	
+
 	// Match the working logic in cmd/test_sig/main.go
 	// wrapper: {"payload":"<inner_json_as_string>","encodeVersion":"1"}
 	// then QoderEncode the entire wrapper
@@ -179,7 +179,7 @@ func callV3API(method, path string, payload map[string]interface{}, creds *Crede
 
 	url := apiBaseURL + path + "?Encode=1"
 	date := time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT")
-	
+
 	// MD5("cosy&" + secret + "&" + date)
 	sigInput := "cosy&" + signatureSecret + "&" + date
 	h := md5.Sum([]byte(sigInput))

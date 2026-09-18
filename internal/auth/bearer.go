@@ -42,9 +42,13 @@ type Session struct {
 	OrgID    string
 	Mid      string
 	UserType string
+	IsQoder  bool
 }
 
 func NewSession(creds *Credentials) *Session {
+	if creds == nil {
+		return &Session{}
+	}
 	return &Session{
 		CosyKey:  creds.CosyKey,
 		Info:     creds.EncryptUserInfo,
@@ -52,6 +56,7 @@ func NewSession(creds *Credentials) *Session {
 		OrgID:    creds.OrganizationID,
 		Mid:      creds.MachineID,
 		UserType: creds.UserType,
+		IsQoder:  creds.IsQoder,
 	}
 }
 
@@ -76,6 +81,7 @@ func NewSessionWithFreshKey(creds *Credentials) (*Session, string, error) {
 		OrgID:    creds.OrganizationID,
 		Mid:      creds.MachineID,
 		UserType: creds.UserType,
+		IsQoder:  creds.IsQoder,
 	}, encryptedKey, nil
 }
 
@@ -114,6 +120,11 @@ func (s *Session) BuildHeaders(encodedBody, fullURL string) (map[string]string, 
 		return nil, err
 	}
 
+	ua := "Go-http-client/1.1"
+	if s.IsQoder || strings.Contains(fullURL, "qoder.com.cn") {
+		ua = "Bun/1.3.14"
+	}
+
 	return map[string]string{
 		"Content-Type":         "application/json",
 		"Accept":               "text/event-stream",
@@ -128,7 +139,7 @@ func (s *Session) BuildHeaders(encodedBody, fullURL string) (map[string]string, 
 		"Cosy-Machineid":       s.Mid,
 		"Cosy-User":            s.UID,
 		"Cosy-Organization-Id": s.OrgID,
-		"User-Agent":           "Go-http-client/1.1",
+		"User-Agent":           ua,
 	}, nil
 }
 
