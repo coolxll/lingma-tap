@@ -635,7 +635,11 @@ func TestIntegration_ListModels(t *testing.T) {
 
 	t.Log(">>> Available Models:")
 	for _, m := range models {
-		t.Logf("Key: %-30s | Name: %-20s | VL: %-5t | Reasoning: %-5t | Source: %s", m.Key, m.DisplayName, m.IsVL, m.IsReasoning, m.Source)
+		pf := "-"
+		if m.PriceFactor != nil {
+			pf = fmt.Sprintf("%.1fx", *m.PriceFactor)
+		}
+		t.Logf("Key: %-25s | Name: %-20s | Rate: %-6s | VL: %-5t | Reasoning: %-5t | Source: %s", m.Key, m.DisplayName, pf, m.IsVL, m.IsReasoning, m.Source)
 	}
 }
 

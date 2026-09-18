@@ -43,11 +43,13 @@ func (h *BridgeHandler) fetchModelsWithCache(ctx context.Context) ([]ModelInfo, 
 }
 
 type modelResponse struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
-	Name    string `json:"name,omitempty"`
+	ID                  string   `json:"id"`
+	Object              string   `json:"object"`
+	Created             int64    `json:"created"`
+	OwnedBy             string   `json:"owned_by"`
+	Name                string   `json:"name,omitempty"`
+	PriceFactor         *float64 `json:"price_factor,omitempty"`
+	OriginalPriceFactor *float64 `json:"original_price_factor,omitempty"`
 }
 
 // HandleModels handles GET /v1/models and GET /v1/models/{id}
@@ -79,11 +81,13 @@ func (h *BridgeHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 			if m.Key == path {
 				fName := friendlyName(m.Key, m.DisplayName)
 				resp := modelResponse{
-					ID:      m.Key,
-					Object:  "model",
-					Created: created,
-					OwnedBy: "lingma",
-					Name:    fName,
+					ID:                  m.Key,
+					Object:              "model",
+					Created:             created,
+					OwnedBy:             "lingma",
+					Name:                fName,
+					PriceFactor:         m.PriceFactor,
+					OriginalPriceFactor: m.OriginalPriceFactor,
 				}
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(resp)
@@ -99,11 +103,13 @@ func (h *BridgeHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	for _, m := range models {
 		fName := friendlyName(m.Key, m.DisplayName)
 		data = append(data, modelResponse{
-			ID:      m.Key,
-			Object:  "model",
-			Created: created,
-			OwnedBy: "lingma",
-			Name:    fName,
+			ID:                  m.Key,
+			Object:              "model",
+			Created:             created,
+			OwnedBy:             "lingma",
+			Name:                fName,
+			PriceFactor:         m.PriceFactor,
+			OriginalPriceFactor: m.OriginalPriceFactor,
 		})
 	}
 

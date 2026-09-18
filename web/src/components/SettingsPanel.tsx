@@ -27,6 +27,7 @@ interface ModelInfo {
   object: string;
   display_name?: string;  // friendly name (e.g. "Qwen3-Coder")
   owned_by: string;
+  price_factor?: number | null;
 }
 
 interface StorageStats {
@@ -175,6 +176,7 @@ export const SettingsPanel = memo(function SettingsPanel({
         object: m.object || 'model',
         display_name: m.display_name || m.DisplayName || m.key || m.id,
         owned_by: m.owned_by || 'lingma',
+        price_factor: typeof m.price_factor === 'number' ? m.price_factor : (typeof m.PriceFactor === 'number' ? m.PriceFactor : null),
       }));
       setModels(mapped);
     } catch (err) {
@@ -693,6 +695,7 @@ export const SettingsPanel = memo(function SettingsPanel({
                 <tr className="border-b border-zinc-800">
                   <th className="text-left px-4 py-2 text-zinc-400 font-medium">{t('settings.friendly_name')}</th>
                   <th className="text-left px-4 py-2 text-zinc-400 font-medium">{t('settings.model_id')}</th>
+                  <th className="text-right px-4 py-2 text-zinc-400 font-medium">{t('settings.price_factor')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -700,11 +703,20 @@ export const SettingsPanel = memo(function SettingsPanel({
                   <tr key={m.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
                     <td className="px-4 py-2 text-zinc-200">{m.display_name || m.id}</td>
                     <td className="px-4 py-2 text-zinc-500 font-mono">{m.id}</td>
+                    <td className="px-4 py-2 text-right font-mono">
+                      {typeof m.price_factor === 'number' ? (
+                        <span className="inline-block px-1.5 py-0.5 rounded text-[11px] bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+                          {m.price_factor}x
+                        </span>
+                      ) : (
+                        <span className="text-zinc-600">-</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
                 {models.length === 0 && !modelsLoading && (
                   <tr>
-                    <td colSpan={2} className="px-4 py-3 text-zinc-600 text-center">{t('settings.no_models')}</td>
+                    <td colSpan={3} className="px-4 py-3 text-zinc-600 text-center">{t('settings.no_models')}</td>
                   </tr>
                 )}
               </tbody>
@@ -799,7 +811,9 @@ export const SettingsPanel = memo(function SettingsPanel({
                         className="w-full bg-transparent border-none focus:ring-0 text-zinc-300 text-xs appearance-none cursor-pointer"
                       >
                         {models.map(m => (
-                          <option key={m.id} value={m.id} className="bg-zinc-900 text-zinc-200">{m.display_name || m.id}</option>
+                          <option key={m.id} value={m.id} className="bg-zinc-900 text-zinc-200">
+                            {m.display_name || m.id}{typeof m.price_factor === 'number' ? ` (${m.price_factor}x)` : ''}
+                          </option>
                         ))}
                       </select>
                     </td>
@@ -829,7 +843,9 @@ export const SettingsPanel = memo(function SettingsPanel({
                       className="w-full bg-transparent border-none focus:ring-0 text-zinc-200 text-xs font-bold appearance-none cursor-pointer"
                     >
                       {models.map(m => (
-                        <option key={m.id} value={m.id} className="bg-zinc-900 text-zinc-200">{m.display_name || m.id}</option>
+                        <option key={m.id} value={m.id} className="bg-zinc-900 text-zinc-200">
+                          {m.display_name || m.id}{typeof m.price_factor === 'number' ? ` (${m.price_factor}x)` : ''}
+                        </option>
                       ))}
                     </select>
                   </td>

@@ -94,6 +94,7 @@
     "models": "Lingma Model List",
     "friendly_name": "Name",
     "model_id": "Model ID",
+    "price_factor": "Rate",
     "no_models": "No models found",
     "api_endpoints": "API Endpoints",
     "refresh_models": "Refresh model list",

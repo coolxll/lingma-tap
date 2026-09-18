@@ -1063,14 +1063,16 @@ func generateSessionID(rawJSON []byte) string {
 
 // ModelInfo represents a model from the Lingma model list API.
 type ModelInfo struct {
-	Key            string `json:"key"`
-	DisplayName    string `json:"display_name"`
-	Format         string `json:"format"`
-	Source         string `json:"source"`
-	Order          int    `json:"order"`
-	IsVL           bool   `json:"is_vl"`
-	IsReasoning    bool   `json:"is_reasoning"`
-	MaxInputTokens int    `json:"max_input_tokens"`
+	Key                 string   `json:"key"`
+	DisplayName         string   `json:"display_name"`
+	Format              string   `json:"format"`
+	Source              string   `json:"source"`
+	Order               int      `json:"order"`
+	IsVL                bool     `json:"is_vl"`
+	IsReasoning         bool     `json:"is_reasoning"`
+	MaxInputTokens      int      `json:"max_input_tokens"`
+	PriceFactor         *float64 `json:"price_factor,omitempty"`
+	OriginalPriceFactor *float64 `json:"original_price_factor,omitempty"`
 }
 
 // FetchModels queries the Lingma model list API and returns models for the "chat" category.

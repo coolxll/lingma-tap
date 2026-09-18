@@ -95,6 +95,7 @@
     "models": "模型",
     "friendly_name": "友好名称",
     "model_id": "模型 ID",
+    "price_factor": "倍率",
     "no_models": "未找到可用模型",
     "api_endpoints": "API 端点",
     "refresh_models": "刷新模型列表",

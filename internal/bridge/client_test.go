@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -1593,3 +1594,52 @@ func TestLingmaClient_QoderCN(t *testing.T) {
 		t.Errorf("visionUploadURL = %q, want %q", client.visionUploadURL, wantVisionURL)
 	}
 }
+
+func TestFetchModels_PriceFactor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"chat": [
+				{
+					"key": "test_model_1",
+					"display_name": "Test Model 1",
+					"price_factor": 0.5,
+					"original_price_factor": 1.0
+				},
+				{
+					"key": "test_model_2",
+					"display_name": "Test Model 2"
+				}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	session := auth.NewSession(&auth.Credentials{
+		MachineID: "1234567890123456",
+		CosyKey:   "dummy",
+	})
+	client := NewLingmaClient(session)
+	client.baseURL = server.URL
+	client.client = server.Client()
+
+	models, err := client.FetchModels(context.Background())
+	if err != nil {
+		t.Fatalf("FetchModels failed: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("got %d models, want 2", len(models))
+	}
+
+	if models[0].PriceFactor == nil || *models[0].PriceFactor != 0.5 {
+		t.Errorf("models[0].PriceFactor = %v, want 0.5", models[0].PriceFactor)
+	}
+	if models[0].OriginalPriceFactor == nil || *models[0].OriginalPriceFactor != 1.0 {
+		t.Errorf("models[0].OriginalPriceFactor = %v, want 1.0", models[0].OriginalPriceFactor)
+	}
+	if models[1].PriceFactor != nil {
+		t.Errorf("models[1].PriceFactor = %v, want nil", models[1].PriceFactor)
+	}
+}
+

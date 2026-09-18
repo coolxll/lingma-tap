@@ -60,6 +60,7 @@ interface ModelInfo {
   display_name?: string;
   object: string;
   owned_by: string;
+  price_factor?: number | null;
 }
 
 const WS_PORT = 9091;
